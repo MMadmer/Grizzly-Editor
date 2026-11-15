@@ -1,7 +1,7 @@
 //! The chooser `Select <what>###dlg.choose` (L, most of the window's height): a ranked search
 //! over a list, rows with a picture where the list has pictures (models, library objects,
-//! textures), a preview of the highlighted item (its picture, or Play for a sound), the item
-//! picked. What comes from a list is picked, never typed: an empty list says what it lacks.
+//! textures, or what the caller draws for its own items: an item's inventory icon, [`RowIcons`]),
+//! a preview of the highlighted item (its picture, or Play for a sound), the item picked. What comes from a list is picked, never typed: an empty list says what it lacks.
 //!
 //! The list's order for a search is worked out on the CPU pool (the kit's ranking: whole-word
 //! prefixes first, then letters in order), only the rows in view are laid out, and the pictures
@@ -54,6 +54,21 @@ impl std::fmt::Debug for SceneItems {
     }
 }
 
+/// The pictures a caller has for the rows of its own items (an item's inventory icon, cut from
+/// its sheet off the UI thread): for a row, the texture, the part of it and the picture's width
+/// over its height, once it is there. Called for the rows in view only.
+#[derive(Clone)]
+pub struct RowIcons(pub Arc<RowIconFn>);
+
+/// A row's picture: the texture, the part of it, its width over its height.
+pub type RowIconFn = dyn Fn(&str) -> Option<(egui::TextureId, Rect, f32)> + Send + Sync;
+
+impl std::fmt::Debug for RowIcons {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RowIcons")
+    }
+}
+
 /// One open chooser.
 #[derive(Clone, Debug)]
 pub struct Chooser {
@@ -81,6 +96,10 @@ pub struct Chooser {
     first: Vec<String>,
     /// The search took the keys when the chooser came up.
     focused: bool,
+    /// The pictures of the caller's own rows.
+    pub icons: Option<RowIcons>,
+    /// How many rows in view the last frame drew with a picture.
+    pictured: usize,
 }
 
 impl Chooser {
@@ -103,7 +122,16 @@ impl Chooser {
             shown: 0,
             first: Vec::new(),
             focused: false,
+            icons: None,
+            pictured: 0,
         }
+    }
+
+    /// The rows carry the caller's pictures of its own items.
+    #[must_use]
+    pub fn with_icons(mut self, icons: RowIcons) -> Self {
+        self.icons = Some(icons);
+        self
     }
 
     #[must_use]
@@ -179,8 +207,11 @@ impl Chooser {
                 (Some(PicKind::Visual | PicKind::Object), _) => "model",
                 (Some(PicKind::Texture), _) => "texture",
                 (None, true) => "sound",
+                (None, false) if self.icons.is_some() => "icon",
                 (None, false) => "none",
             },
+            "icons": self.icons.is_some(),
+            "pictured": self.pictured,
         })
     }
 }
@@ -277,7 +308,7 @@ pub fn draw(
     let status = if c.current.is_empty() { Tx::EMPTY } else { tr!("Now: {name}", name = leaf(&c.current)) };
     let multi = c.multi;
     let pictures = c.pictures();
-    let previews = pictures.is_some() || c.sounds();
+    let previews = pictures.is_some() || c.sounds() || c.icons.is_some();
     let (mut select, mut none, mut cancel) = (false, false, false);
     // most of the window's height: thousands of rows want room
     let body_h = (ctx.content_rect().height() * 0.72 - 120.0).clamp(280.0, 760.0);
@@ -484,7 +515,9 @@ fn rows(
 ) -> Option<String> {
     let p = palette(ui.ctx());
     let pictures = c.pictures();
-    let row_h = row_height(pictures.is_some());
+    let icons = c.icons.clone().filter(|_| pictures.is_none());
+    let row_h = row_height(pictures.is_some() || icons.is_some());
+    let mut pictured = 0;
     let ppp = ui.ctx().pixels_per_point();
     let mut clicked = None;
     let mut scroll =
@@ -531,27 +564,23 @@ fn rows(
                     }
                 }
                 x = pic.max.x + 10.0;
-                let room = rect.max.x - x - 8.0;
-                text::paint(
-                    ui.painter(),
-                    &Font::Body.id(),
-                    pos2(x, rect.center().y - 9.0),
-                    egui::Align2::LEFT_CENTER,
-                    p.text,
-                    Tx::raw(leaf(item)),
-                    Some(room),
-                    Clip::End,
-                );
-                text::paint(
-                    ui.painter(),
-                    &Font::Small.id(),
-                    pos2(x, rect.center().y + 10.0),
-                    egui::Align2::LEFT_CENTER,
-                    p.text_muted,
-                    Tx::raw(folder(item)),
-                    Some(room),
-                    Clip::Start,
-                );
+                two_lines(ui, item, x, rect);
+            } else if let Some(icons) = &icons {
+                // an inventory icon is wider than tall: a box of 1.6 to 1, the icon fitted in it
+                let side = row_h - 6.0;
+                let pic = Rect::from_min_size(pos2(x, rect.min.y + 3.0), Vec2::new(side * 1.6, side));
+                ui.painter().rect_filled(pic, egui::CornerRadius::same(4), p.raised);
+                match (icons.0)(item) {
+                    Some((tex, uv, aspect)) => {
+                        pictured += 1;
+                        ui.painter().image(tex, fit(pic.shrink(2.0), aspect), uv, egui::Color32::WHITE);
+                    }
+                    None => {
+                        gz_ui::icons::draw_in(ui.painter(), Icon::Item, pic.shrink(side * 0.2), p.text_muted)
+                    }
+                }
+                x = pic.max.x + 10.0;
+                two_lines(ui, item, x, rect);
             } else {
                 let name_w = text::width(ui.ctx(), &Font::Body.id(), Tx::raw(leaf(item))).min(width * 0.6);
                 text::paint(
@@ -588,7 +617,41 @@ fn rows(
             }
         }
     });
+    c.pictured = pictured;
     clicked
+}
+
+/// A row's leaf name over its folder, from `x` to the row's end.
+fn two_lines(ui: &Ui, item: &str, x: f32, rect: Rect) {
+    let p = palette(ui.ctx());
+    let room = rect.max.x - x - 8.0;
+    text::paint(
+        ui.painter(),
+        &Font::Body.id(),
+        pos2(x, rect.center().y - 9.0),
+        egui::Align2::LEFT_CENTER,
+        p.text,
+        Tx::raw(leaf(item)),
+        Some(room),
+        Clip::End,
+    );
+    text::paint(
+        ui.painter(),
+        &Font::Small.id(),
+        pos2(x, rect.center().y + 10.0),
+        egui::Align2::LEFT_CENTER,
+        p.text_muted,
+        Tx::raw(folder(item)),
+        Some(room),
+        Clip::Start,
+    );
+}
+
+/// A picture `aspect` (width over height) wide, as large as it fits in `rect`, centred.
+fn fit(rect: Rect, aspect: f32) -> Rect {
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let w = rect.width().min(rect.height() * aspect);
+    Rect::from_center_size(rect.center(), Vec2::new(w, w / aspect))
 }
 
 /// The preview of the highlighted item: its picture, its name and folder, Play for a sound.
@@ -606,9 +669,19 @@ fn preview(
         return;
     };
     let side = PREVIEW_W;
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+    let icons = c.icons.clone().filter(|_| c.pictures().is_none());
+    let height = if icons.is_some() { side * 0.6 } else { side };
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(side, height), Sense::hover());
     ui.painter().rect_filled(rect, egui::CornerRadius::same(6), p.raised);
     match c.pictures() {
+        None if icons.is_some() => match icons.and_then(|i| (i.0)(&item)) {
+            Some((tex, uv, aspect)) => {
+                ui.painter().image(tex, fit(rect.shrink(8.0), aspect), uv, egui::Color32::WHITE);
+            }
+            None => {
+                gz_ui::icons::draw_in(ui.painter(), Icon::Item, rect.shrink(height * 0.3), p.text_secondary)
+            }
+        },
         Some(kind) => {
             let px = (side * ui.ctx().pixels_per_point()) as u32;
             match pics.get(editor, gpu, kind, &item, px, frame) {

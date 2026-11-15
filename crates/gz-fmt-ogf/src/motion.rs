@@ -443,6 +443,52 @@ impl MotionSet {
     pub fn find(&self, name: &str) -> Option<usize> {
         self.motions.iter().position(|m| m.name.eq_ignore_ascii_case(name))
     }
+
+    /// The cycle of this name (a definition that is no FX) and the motion it plays, as the game
+    /// finds a cycle in one motion set: by its exact name.
+    #[must_use]
+    pub fn cycle(&self, name: &str) -> Option<(&MotionDef, usize)> {
+        let def = self.defs.iter().find(|d| d.is_cycle() && d.name == name)?;
+        // the definition's `motion` is the index of its keys; a set written by hand may not say it
+        let at = Some(usize::from(def.motion))
+            .filter(|m| self.motions.get(*m).is_some_and(|x| x.name == def.name))
+            .or_else(|| self.motions.iter().position(|m| m.name == def.name))?;
+        Some((def, at))
+    }
+}
+
+/// A definition's flag: a motion played over the cycles, not a cycle.
+pub const ESM_FX: u32 = 1 << 0;
+/// A definition's flag: the motion holds its last frame instead of looping.
+pub const ESM_STOP_AT_END: u32 = 1 << 1;
+
+impl MotionDef {
+    /// Not an FX: a cycle the game plays.
+    #[must_use]
+    pub fn is_cycle(&self) -> bool {
+        self.flags & ESM_FX == 0
+    }
+
+    /// Holds its last frame instead of looping.
+    #[must_use]
+    pub fn stops_at_end(&self) -> bool {
+        self.flags & ESM_STOP_AT_END != 0
+    }
+
+    /// The speed the game plays it at: the stored speed kept in steps of 1/655.35, as the game
+    /// keeps it.
+    #[must_use]
+    pub fn played_speed(&self) -> f32 {
+        (self.speed * 655.35).floor().clamp(0.0, 65535.0) / 655.35
+    }
+}
+
+impl Motion {
+    /// Its length in seconds, as the game measures it: a key every 1/30 s.
+    #[must_use]
+    pub fn seconds(&self) -> f32 {
+        self.length as f32 / SAMPLE_FPS
+    }
 }
 
 /// An `.omf` file.

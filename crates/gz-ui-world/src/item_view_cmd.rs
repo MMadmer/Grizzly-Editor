@@ -71,9 +71,16 @@ pub(crate) struct ItemsView {
     /// base, or key:<key> (key:hud.<key>) for a key picked from a list.
     #[serde(default)]
     show: Option<String>,
-    /// The row of the HUD section a preview of the hands poses: a key of it.
+    /// The row of the HUD section the In the Hands picture shows: a key of it. A motion line
+    /// plays; any other row shows the idle, still (an aiming offset's row aimed).
     #[serde(default)]
     hud_row: Option<String>,
+    /// Moves the In the Hands picture's motion to this many seconds (wrapped at its length).
+    #[serde(default)]
+    hands_time: Option<f32>,
+    /// Plays (true) or stops (false) the In the Hands picture's motion where it is.
+    #[serde(default)]
+    hands_play: Option<bool>,
     /// Puts the Delete Item question up to be looked at; `ui.dialog action=close` takes it down.
     #[serde(default)]
     ask_delete: bool,
@@ -299,7 +306,9 @@ pub(crate) async fn items_view(ed: Arc<Editor>, a: ItemsView, origin: Origin) ->
         || a.save
         || a.discard
         || a.ask_delete
-        || a.hud_row.is_some();
+        || a.hud_row.is_some()
+        || a.hands_time.is_some()
+        || a.hands_play.is_some();
     if wants {
         open_tab(&ed, origin).await?;
     }
@@ -389,12 +398,22 @@ pub(crate) async fn items_view(ed: Arc<Editor>, a: ItemsView, origin: Origin) ->
     }
     settle(&ed).await?;
     let hud_row = a.hud_row.clone();
+    let (hands_time, hands_play) = (a.hands_time, a.hands_play);
     let ask_delete = a.ask_delete;
     let answer = on_ui(&ed, move |shell, ctx| {
         let active = shell.active() == items::TAB;
         let doc = items_doc(shell).ok_or_else(gone)?;
         if let Some(r) = hud_row {
             doc.hud_row = (!r.is_empty()).then_some(r);
+        }
+        doc.refresh_hands();
+        if let Some(view) = doc.hands.as_mut() {
+            if let Some(t) = hands_time {
+                view.set_time(t);
+            }
+            if let Some(on) = hands_play {
+                view.set_playing(on);
+            }
         }
         if ask_delete {
             if doc.sel.is_none() {
@@ -411,7 +430,7 @@ pub(crate) async fn items_view(ed: Arc<Editor>, a: ItemsView, origin: Origin) ->
                 if let Pick::Key { scope, key } = &pick {
                     let row = form_row(doc, scope, key)
                         .ok_or_else(|| CmdError::not_found(format!("the form has no row {key}")))?;
-                    if items::list_of(&row.ty).is_none() {
+                    if items::list_of(&row.ty).is_none() && row.ty != gz_items::KeyType::Section {
                         // a token's words: its own list under the row
                         gz_ui::menu::show_popup(ctx, &format!("item.key.{scope}.{key}"));
                     } else {
@@ -601,7 +620,7 @@ pub(crate) fn form_json(doc: &ItemsDoc) -> Value {
         },
         "texts": texts,
         "text_problems": text_problems,
-        "icon": { "own": icon, "shown": shown_icon, "problems": field("icon") },
+        "icon": { "own": icon, "shown": shown_icon, "drawn": doc.icon_drawn(), "problems": field("icon") },
         "groups": groups_json(doc, &doc.form.groups),
         "hud": doc.form.hud.as_ref().map(|(name, groups)| json!({ "section": name, "groups": groups_json(doc, groups), "problems": field("hud") })),
         "found": {
@@ -611,7 +630,13 @@ pub(crate) fn form_json(doc: &ItemsDoc) -> Value {
             "problems": found_problems,
         },
         "scene": { "shown": e.scene.is_some() || used, "value": scene, "problems": part("scene") },
-        "sections": e.sections.iter().map(|s| json!({ "name": s.name, "edit": s.edit, "base": s.base, "set": s.changes.set.iter().map(|(k, v)| json!({ "key": k, "value": v.ltx() })).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "sections": e.sections.iter().map(|s| json!({
+            "name": s.name, "edit": s.edit, "base": s.base,
+            "set": s.changes.set.iter().map(|(k, v)| json!({ "key": k, "value": v.ltx() })).collect::<Vec<_>>(),
+            "unset": s.changes.unset,
+            "add": s.changes.add.iter().map(|(k, m)| json!({ "key": k, "members": m })).collect::<Vec<_>>(),
+            "drop": s.changes.drop.iter().map(|(k, m)| json!({ "key": k, "members": m })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
         "other": other,
         "problems": doc.own.iter().map(|i| json!({ "code": i.code, "at": gz_luadata::path::show(&i.path), "text": i.message })).collect::<Vec<_>>(),
     })

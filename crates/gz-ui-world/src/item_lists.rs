@@ -6,12 +6,14 @@
 //! [`ItemLists`] lives as long as the open project. A frame asks [`ItemLists::want`] - a
 //! comparison of one revision - and reads [`ItemLists::view`]; when the linked game moved, one
 //! task reads the lists again. [`Pictures`] decodes an icon's picture file the first time it is
-//! shown, uploads it once and keeps it while the project is open.
+//! shown, uploads it once and keeps it while the project is open; [`IconSheets`] does the same
+//! for the textures icons are cells of - the project's own first (a file of its textures, or the
+//! picture of a texture asset that publishes the name), then the linked game's.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use egui::{ColorImage, TextureHandle, TextureId, TextureOptions};
+use egui::{ColorImage, Rect, TextureHandle, TextureId, TextureOptions, pos2};
 use gz_base::Rev;
 use gz_editor::Editor;
 use gz_game::GameLink;
@@ -333,6 +335,100 @@ impl Pictures {
     #[must_use]
     pub fn failed(&self, path: &Path, stamp: u64) -> bool {
         matches!(self.slots.lock().get(&format!("{}|{stamp}", path.display())), Some(Slot::Failed))
+    }
+}
+
+// ---- the textures icons are cells of -----------------------------------------------------------
+
+/// The largest texture read for an icon sheet.
+const SHEET_READ_LIMIT: usize = 128 << 20;
+
+/// The icon sheets of the open project (`session.services`), by texture name.
+#[derive(Default)]
+pub struct IconSheets {
+    slots: Mutex<FxHashMap<String, Slot>>,
+}
+
+/// A sheet's pixels: the project's file first, then the linked game's, then the editor's
+/// library. Blocking.
+fn read_sheet(sources: &gz_ui_previews::loader::Sources, name: &str) -> Option<ColorImage> {
+    use gz_ui_previews::loader::Found;
+    let found = sources.find_texture(name);
+    let key = format!("textures/{}.dds", gz_vfs::normalize(name).to_ascii_lowercase());
+    let game = sources.game.as_ref().filter(|g| g.exists(&key)).map(|_| Found::Game { key, loose: None });
+    let pick = match found {
+        Some(f @ Found::Project(_)) => Some(f),
+        other => game.or(other),
+    }?;
+    let bytes = sources.read(&pick).ok().filter(|b| !b.is_empty() && b.len() <= SHEET_READ_LIMIT)?;
+    let ext = match &pick {
+        Found::Project(p) | Found::Editor(p) => {
+            p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase)
+        }
+        Found::Game { .. } => Some("dds".to_owned()),
+    };
+    let img = gz_fmt_tex::load_image(&bytes, ext.as_deref()).ok()?.image;
+    Some(ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.rgba))
+}
+
+impl IconSheets {
+    #[must_use]
+    pub fn of(editor: &Editor) -> Option<Arc<Self>> {
+        let session = editor.project_opt()?;
+        Some(session.services.get_or_init(Self::default))
+    }
+
+    /// The texture of a sheet and the part of it a rectangle in its pixels is, once the sheet is
+    /// read; the first ask starts the read.
+    pub fn cell(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        sheet: &str,
+        px: [f32; 4],
+    ) -> Option<(TextureId, Rect)> {
+        let key = gz_vfs::normalize(sheet);
+        let mut slots = self.slots.lock();
+        match slots.get(&key) {
+            Some(Slot::Ready { texture, size }) => {
+                let (sw, sh) = (size[0].max(1) as f32, size[1].max(1) as f32);
+                let [x, y, w, h] = px;
+                Some((
+                    texture.id(),
+                    Rect::from_min_max(pos2(x / sw, y / sh), pos2((x + w) / sw, (y + h) / sh)),
+                ))
+            }
+            Some(_) => None,
+            None => {
+                slots.insert(key.clone(), Slot::Loading);
+                drop(slots);
+                let (ed, me, name) = (editor.clone(), self.clone(), sheet.trim().to_owned());
+                let _task = editor.exec.spawn(async move {
+                    let sources = gz_ui_previews::loader::Sources::of(&ed).await;
+                    let image = ed.exec.io(move || read_sheet(&sources, &name)).await;
+                    post_ui(&ed, move |ctx| {
+                        let slot = match image {
+                            Some(img) => {
+                                let size = [img.size[0] as u32, img.size[1] as u32];
+                                let texture = ctx.load_texture(
+                                    format!("gz-ui-world.icon_sheet.{key}"),
+                                    img,
+                                    TextureOptions::LINEAR,
+                                );
+                                Slot::Ready { texture, size }
+                            }
+                            None => Slot::Failed,
+                        };
+                        me.slots.lock().insert(key, slot);
+                    });
+                });
+                None
+            }
+        }
+    }
+
+    /// Forgets every sheet: the next ask reads it again (Reload, a texture changed).
+    pub fn clear(&self) {
+        self.slots.lock().clear();
     }
 }
 

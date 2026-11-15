@@ -7,7 +7,6 @@
 
 use egui::{Align, Align2, Color32, CornerRadius, Id, Layout, Rect, Sense, Ui, UiBuilder, Vec2, pos2};
 use gz_items::{Count, Craft, Icon as ItemIcon, KeyType, Loot, OwnedSection, Scene, SetValue, Sold};
-use gz_nq::PickerEntry;
 use gz_ui::grid::{Grid, chips, switch, text_block};
 use gz_ui::list::list;
 use gz_ui::text::{self, Clip};
@@ -23,11 +22,15 @@ use crate::local::{local_add_field, local_dirty_dot, local_value_combo, local_va
 use crate::picker::{item_picker, list_picker};
 
 const ROLE: &str = "item";
+/// The grid of In the Hands' own rows.
+const HUD_ROLE: &str = "item_hud";
+/// How far In the Hands' rows stand in from the form's.
+const HUD_INDENT: f32 = 14.0;
 const LABEL_FRAC: f32 = 0.34;
 /// A list row's icon: fitted into this many points.
 const THUMB: Vec2 = Vec2::new(30.0, 22.0);
 /// A cell of the inventory, pixels.
-const CELL: f32 = 50.0;
+pub(crate) const CELL: f32 = 50.0;
 /// The title of the form's Icon section.
 const ICON_TITLE: &str = "Icon";
 
@@ -143,13 +146,9 @@ impl ItemsDoc {
                 }
             }
             Some(IconSource::Cell { sheet, x, y, w, h }) => {
-                let c = CELL as u32;
-                let e = PickerEntry {
-                    id: String::new(),
-                    name: String::new(),
-                    extra: format!("{sheet}|{}|{}|{}|{}", x * c, y * c, w * c, h * c),
-                };
-                match self.sheets.as_ref().and_then(|s| s.portrait(&self.editor, &e)) {
+                let px = [*x as f32 * CELL, *y as f32 * CELL, *w as f32 * CELL, *h as f32 * CELL];
+                // the project's own texture first, then the game's
+                match self.icon_sheets.as_ref().and_then(|s| s.cell(&self.editor, sheet, px)) {
                     Some((tex, uv)) => {
                         let r = fit(*w as f32, *h as f32);
                         ui.painter().image(tex, r, uv, Color32::WHITE);
@@ -159,6 +158,21 @@ impl ItemsDoc {
                 }
             }
             None => glyph(ui),
+        }
+    }
+
+    /// Whether the edited item's icon stands drawn: its picture or its sheet is read (the first
+    /// ask starts the read).
+    pub(crate) fn icon_drawn(&self) -> bool {
+        match self.edit_icon() {
+            Some(IconSource::Picture { path, stamp }) => {
+                self.pictures.as_ref().and_then(|p| p.get(&self.editor, &path, stamp)).is_some()
+            }
+            Some(IconSource::Cell { sheet, x, y, w, h }) => {
+                let px = [x as f32 * CELL, y as f32 * CELL, w as f32 * CELL, h as f32 * CELL];
+                self.icon_sheets.as_ref().and_then(|s| s.cell(&self.editor, &sheet, px)).is_some()
+            }
+            None => false,
         }
     }
 
@@ -451,7 +465,8 @@ impl ItemsDoc {
         let this: &ItemsDoc = self;
         PropertyGrid::new(ROLE).label_frac(LABEL_FRAC).show(ui, |g| {
             this.identity(g, change, &mut edits);
-            let ids: Vec<&Row> = form.groups.iter().flat_map(|g| g.rows.iter()).filter(|r| text_key(r)).collect();
+            let ids: Vec<&Row> =
+                form.groups.iter().flat_map(|g| g.rows.iter()).filter(|r| text_key(r)).collect();
             this.texts_section(g, &ids, change, &looks, &mut edits);
             // the catalog's group of the icon's keys is the Icon section's own fold: two sections
             // of one title would be one
@@ -463,28 +478,76 @@ impl ItemsDoc {
                     continue;
                 }
                 let open = group.rows.iter().any(|r| !text_key(r) && (r.common || r.own.is_own()));
-                g.section(cat(&group.title), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
+                g.section(cat(&group.title), open, None, |g| {
+                    this.group_rows(g, group, change, &looks, &mut edits)
+                });
             }
             if let Some((hud, groups)) = &form.hud {
                 g.section("In the Hands", true, None, |g| {
-                    let _ = g.row("HUD Section", "The section of the first-person model, the hands and the motions: the item's hud key names it.", PropFlags::READ_ONLY, 0, |ui| {
-                        gz_ui::grid::read_only(ui, Tx::raw(hud.as_str()), Clip::End);
-                    });
-                    for group in groups {
-                        let open = group.rows.iter().any(|r| r.own.is_own());
-                        g.section(cat(&group.title), open, None, |g| this.group_rows(g, group, change, &looks, &mut edits));
-                    }
+                    g.block(|ui| this.hud_grid(ui, hud, groups, &form.other, change, &looks, &mut edits));
                 });
             }
             this.found_section(g, &mut edits);
             this.scene_section(g, &form, &mut edits);
             if !this.edit.sections.is_empty() {
-                g.section("More Sections", true, Some(Tx::raw(this.edit.sections.len().to_string())), |g| this.sections_section(g, &mut edits));
+                g.section("More Sections", true, Some(Tx::raw(this.edit.sections.len().to_string())), |g| {
+                    this.sections_section(g, &mut edits)
+                });
             }
-            g.section("Other Keys", !form.other.is_empty(), None, |g| this.other_section(g, &form.other, &mut edits));
+            let own_other = form.other.iter().any(|o| o.scope == gz_items::catalog::ITEM);
+            g.section("Other Keys", own_other, None, |g| {
+                this.other_section(g, &form.other, gz_items::catalog::ITEM, &mut edits)
+            });
         });
         self.form = form;
         self.apply(edits);
+    }
+
+    /// In the Hands' own rows, nested under its header: a grid of its own a step in, a rule down
+    /// its left edge, its value column where the form's is - the HUD Section, the catalog's HUD
+    /// groups, and the HUD keys the catalog lacks.
+    #[allow(clippy::too_many_arguments)]
+    fn hud_grid(
+        &self,
+        ui: &mut Ui,
+        hud: &str,
+        groups: &[item_model::Group],
+        other: &[OtherRow],
+        change: bool,
+        looks: &[(String, Option<IconSource>)],
+        edits: &mut Vec<Edit>,
+    ) {
+        let p = palette(ui.ctx());
+        let outer = ui.available_rect_before_wrap();
+        let width = outer.width().max(1.0);
+        let frac = gz_ui::layout::get(ui.ctx(), &format!("grid.{ROLE}"), LABEL_FRAC).clamp(0.1, 0.9);
+        let label_w = gz_ui::grid::label_width(width, frac);
+        let inner_w = (width - HUD_INDENT).max(1.0);
+        let inner_frac = ((label_w - HUD_INDENT) / inner_w).clamp(0.1, 0.9);
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-world.items.hud_grid")
+                .max_rect(Rect::from_min_max(pos2(outer.min.x + HUD_INDENT, outer.min.y), outer.max))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        PropertyGrid::new(HUD_ROLE).label_frac(inner_frac).show(&mut child, |g| {
+            let _ = g.row("HUD Section", "The section of the first-person model, the hands and the motions: the item's hud key names it.", PropFlags::READ_ONLY, 0, |ui| {
+                gz_ui::grid::read_only(ui, Tx::raw(hud), Clip::End);
+            });
+            for group in groups {
+                let open = group.rows.iter().any(|r| r.own.is_own());
+                g.section(cat(&group.title), open, None, |g| self.group_rows(g, group, change, looks, edits));
+            }
+            let hud_other = other.iter().any(|o| o.scope == gz_items::catalog::HUD);
+            g.section("Other Keys", hud_other, None, |g| self.other_section(g, other, gz_items::catalog::HUD, edits));
+        });
+        let used = child.min_rect();
+        ui.painter().vline(
+            outer.min.x + HUD_INDENT * 0.5 - 1.0,
+            outer.min.y..=used.max.y,
+            egui::Stroke::new(2.0, p.border_subtle),
+        );
+        ui.advance_cursor_after_rect(Rect::from_min_max(outer.min, pos2(outer.max.x, used.max.y)));
     }
 
     fn apply(&mut self, edits: Vec<Edit>) {
@@ -1070,6 +1133,18 @@ impl ItemsDoc {
                 )),
                 _ => None,
             };
+            // a section that is an item is picked among the items, by their icons
+            let act = act.or_else(|| {
+                (row.ty == KeyType::Section && !row.list && self.item_lists.game_item(&named).is_some()).then(
+                    || {
+                        (
+                            Icon::Item,
+                            Tx::from("Pick another item"),
+                            Action::Choose(Pick::Key { scope: row.scope.clone(), key: row.key.clone() }),
+                        )
+                    },
+                )
+            });
             if let Some((icon, tip, action)) = act {
                 looked = true;
                 if g.trailing(icon, tip) {
@@ -1407,18 +1482,27 @@ impl ItemsDoc {
                 for (key, label, help) in [
                     ("sound", "Sound", "The scene's sound."),
                     ("camera", "Camera", "The camera effect."),
-                    ("time", "Time", "How long the scene lasts, seconds."),
+                    ("time", "Time", "How long the scene lasts, milliseconds."),
                     ("helmet", "Helmet", "What a helmet does to it, as the game's scenes say it."),
                 ] {
                     let own = keys.iter().find(|(k, _)| k == key).map(|(_, v)| v.ltx());
                     if let Some((Some(typed), _)) = g.row(label, help, PropFlags::NONE, 0, |ui| {
-                        local_value_text(
+                        // the time is in the game's milliseconds (`tm = 7200`): the unit after it,
+                        // as a catalog row shows its own
+                        let unit = (key == "time").then_some("ms");
+                        let unit_w =
+                            unit.map_or(0.0, |u| text::width(ui.ctx(), &Font::Body.id(), Tx::from(u)) + 8.0);
+                        let typed = local_value_text(
                             ui,
                             &format!("item.scene.{key}"),
                             own.as_deref(),
                             Tx::EMPTY,
-                            ui.available_width(),
-                        )
+                            (ui.available_width() - unit_w).max(em(4.0)),
+                        );
+                        if let Some(u) = unit {
+                            let _ = text::label(ui, u, Font::Body, palette(ui.ctx()).text_muted, Clip::End);
+                        }
+                        typed
                     }) {
                         let value =
                             (!typed.trim().is_empty()).then(|| match gz_ui::grid::parse_number(&typed) {
@@ -1490,34 +1574,186 @@ impl ItemsDoc {
                         section_at(it, si).changes.set.push(("new_key".into(), SetValue::Text(String::new())))
                     })));
                 }
-                let kept = s.changes.unset.len() + s.changes.add.len() + s.changes.drop.len();
-                if kept > 0 {
-                    let _ = text::label(
-                        ui,
-                        tr!("It also takes away or changes {n} {n:list|lists}, as its file says.", n = kept),
-                        Font::Small,
-                        p.text_muted,
-                        Clip::End,
-                    );
+                // what a change takes away and what it does to a list, edited as rows too
+                let changes_section = !s.edit.is_empty();
+                if changes_section || !s.changes.unset.is_empty() {
+                    ui.add_space(6.0);
+                    let _ = text::label(ui, "Takes Away", Font::Small, p.text_secondary, Clip::End);
+                    self.unset_rows(ui, si, &s.changes.unset, edits);
+                }
+                let mut lists: Vec<String> = Vec::new();
+                for (k, _) in s.changes.add.iter().chain(s.changes.drop.iter()) {
+                    if !lists.contains(k) {
+                        lists.push(k.clone());
+                    }
+                }
+                if changes_section || !lists.is_empty() {
+                    ui.add_space(6.0);
+                    let _ = text::label(ui, "Changes a List", Font::Small, p.text_secondary, Clip::End);
+                    self.list_rows(ui, si, s, &lists, edits);
                 }
             });
             self.messages(g, &Place::Part { name: "sections".into(), row: Some(si) });
         }
     }
 
-    fn other_section(&self, g: &mut Grid<'_>, other: &[OtherRow], edits: &mut Vec<Edit>) {
+    /// The rows Key | Value of what a scope's section sets that the catalog lacks: the item's own
+    /// section or its HUD section's.
+    /// The keys a row of More Sections takes away: a row each, typed; the cross brings one back.
+    fn unset_rows(&self, ui: &mut Ui, si: usize, rows: &[String], edits: &mut Vec<Edit>) {
+        let columns = [Col::new("Key", em(12.0))];
+        let mut typed: Option<(usize, String)> = None;
+        let result = ItemRows::new(("item.sections.unset", si), &columns, rows.len())
+            .add_label("Take a Key Away")
+            .empty_text("It takes no key away.")
+            .show(ui, |ui, row, _| {
+                let Some(k) = rows.get(row) else { return };
+                if let (Some(t), _) = local_value_text(
+                    ui,
+                    &format!("item.sections.{si}.unset.{row}"),
+                    Some(k),
+                    Tx::EMPTY,
+                    ui.available_width(),
+                ) {
+                    typed = Some((row, t));
+                }
+            });
+        if let Some((r, t)) = typed {
+            let t = t.trim().to_owned();
+            if gz_items::model::plain_name(&t) {
+                edits.push(Edit::Item(Box::new(move |it| {
+                    if let Some(k) = section_at(it, si).changes.unset.get_mut(r) {
+                        *k = t;
+                    }
+                })));
+            }
+        }
+        if let Some(r) = result.removed {
+            edits.push(Edit::Item(Box::new(move |it| {
+                let unset = &mut section_at(it, si).changes.unset;
+                if r < unset.len() {
+                    unset.remove(r);
+                }
+            })));
+        }
+        if result.added {
+            edits.push(Edit::Item(Box::new(move |it| {
+                let unset = &mut section_at(it, si).changes.unset;
+                let mut name = "new_key".to_owned();
+                let mut n = 2;
+                while unset.contains(&name) {
+                    name = format!("new_key_{n}");
+                    n += 1;
+                }
+                unset.push(name);
+            })));
+        }
+    }
+
+    /// What a row of More Sections does to a list: Key | Adds | Takes Out, the members as a comma
+    /// list; a list without members goes when the item is saved.
+    fn list_rows(&self, ui: &mut Ui, si: usize, s: &OwnedSection, lists: &[String], edits: &mut Vec<Edit>) {
+        let columns =
+            [Col::new("Key", em(10.0)), Col::new("Adds", em(10.0)), Col::new("Takes Out", em(10.0))];
+        let members = |list: &[(String, Vec<String>)], key: &str| -> String {
+            list.iter()
+                .filter(|(k, _)| k == key)
+                .flat_map(|(_, m)| m.iter().cloned())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut typed: Option<(String, usize, String)> = None;
+        let result = ItemRows::new(("item.sections.lists", si), &columns, lists.len())
+            .add_label("Add a List Change")
+            .empty_text("It changes no list.")
+            .show(ui, |ui, row, col| {
+                let Some(key) = lists.get(row) else { return };
+                let shown = match col {
+                    0 => key.clone(),
+                    1 => members(&s.changes.add, key),
+                    _ => members(&s.changes.drop, key),
+                };
+                if let (Some(t), _) = local_value_text(
+                    ui,
+                    &format!("item.sections.{si}.list.{row}.{col}"),
+                    Some(&shown),
+                    Tx::EMPTY,
+                    ui.available_width(),
+                ) {
+                    typed = Some((key.clone(), col, t));
+                }
+            });
+        if let Some((key, col, t)) = typed {
+            edits.push(Edit::Item(Box::new(move |it| {
+                let c = &mut section_at(it, si).changes;
+                let t = t.trim().to_owned();
+                match col {
+                    0 => {
+                        if gz_items::model::plain_name(&t) {
+                            for (k, _) in c.add.iter_mut().chain(c.drop.iter_mut()) {
+                                if *k == key {
+                                    k.clone_from(&t);
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let list = if col == 1 { &mut c.add } else { &mut c.drop };
+                        let now = item_model::members_of(&t);
+                        match list.iter_mut().find(|(k, _)| *k == key) {
+                            Some(slot) => slot.1 = now,
+                            None => list.push((key.clone(), now)),
+                        }
+                    }
+                }
+            })));
+        }
+        if let Some(r) = result.removed
+            && let Some(key) = lists.get(r).cloned()
+        {
+            edits.push(Edit::Item(Box::new(move |it| {
+                let c = &mut section_at(it, si).changes;
+                c.add.retain(|(k, _)| *k != key);
+                c.drop.retain(|(k, _)| *k != key);
+            })));
+        }
+        if result.added {
+            edits.push(Edit::Item(Box::new(move |it| {
+                let c = &mut section_at(it, si).changes;
+                let mut name = "new_list".to_owned();
+                let mut n = 2;
+                while c.add.iter().chain(c.drop.iter()).any(|(k, _)| *k == name) {
+                    name = format!("new_list_{n}");
+                    n += 1;
+                }
+                c.add.push((name, Vec::new()));
+            })));
+        }
+    }
+
+    fn other_section(
+        &self,
+        g: &mut Grid<'_>,
+        other: &[OtherRow],
+        scope: &'static str,
+        edits: &mut Vec<Edit>,
+    ) {
         g.block(|ui| {
             let _ = text::label(
                 ui,
-                "What the item sets that the linked game's catalog does not know: written as it is.",
+                if scope == gz_items::catalog::HUD {
+                    "What the HUD section sets that the linked game's catalog does not know: written as it is."
+                } else {
+                    "What the item sets that the linked game's catalog does not know: written as it is."
+                },
                 Font::Small,
                 palette(ui.ctx()).text_secondary,
                 Clip::End,
             );
-            let rows: Vec<&OtherRow> = other.iter().filter(|o| o.scope == gz_items::catalog::ITEM).collect();
+            let rows: Vec<&OtherRow> = other.iter().filter(|o| o.scope == scope).collect();
             let columns = [Col::new("Key", em(12.0)), Col::new("Value", em(14.0))];
             let mut set: Option<(String, usize, String)> = None;
-            let result = ItemRows::new("item.other", &columns, rows.len())
+            let result = ItemRows::new(("item.other", scope), &columns, rows.len())
                 .add_label("Add Key")
                 .empty_text("Nothing the catalog does not know.")
                 .show(ui, |ui, row, col| {
@@ -1531,7 +1767,7 @@ impl ItemsDoc {
                     let shown = if col == 0 { o.key.clone() } else { value };
                     if let (Some(t), _) = local_value_text(
                         ui,
-                        &format!("item.other.{}.{col}", o.key),
+                        &format!("item.other.{scope}.{}.{col}", o.key),
                         Some(&shown),
                         Tx::EMPTY,
                         ui.available_width(),
@@ -1541,10 +1777,11 @@ impl ItemsDoc {
                 });
             if let Some((key, col, t)) = set {
                 edits.push(Edit::Item(Box::new(move |it| {
-                    if let Some(at) = it.changes.set.iter().position(|(k, _)| *k == key) {
-                        edit_pair(&mut it.changes.set, at, col, t);
+                    let changes = changes_of(it, scope);
+                    if let Some(at) = changes.set.iter().position(|(k, _)| *k == key) {
+                        edit_pair(&mut changes.set, at, col, t);
                     } else if col == 1 && !t.trim().is_empty() {
-                        item_model::set_own(&mut it.changes, &key, SetValue::Text(t.trim().to_owned()));
+                        item_model::set_own(changes, &key, SetValue::Text(t.trim().to_owned()));
                     }
                 })));
             }
@@ -1552,23 +1789,25 @@ impl ItemsDoc {
                 && let Some(o) = rows.get(r)
             {
                 let key = o.key.clone();
-                edits.push(Edit::Item(Box::new(move |it| item_model::reset(&mut it.changes, &key))));
+                edits.push(Edit::Item(Box::new(move |it| item_model::reset(changes_of(it, scope), &key))));
             }
             if result.added {
-                edits.push(Edit::Item(Box::new(|it| {
+                edits.push(Edit::Item(Box::new(move |it| {
+                    let changes = changes_of(it, scope);
                     let mut name = "new_key".to_owned();
                     let mut n = 2;
-                    while it.changes.set.iter().any(|(k, _)| *k == name) {
+                    while changes.set.iter().any(|(k, _)| *k == name) {
                         name = format!("new_key_{n}");
                         n += 1;
                     }
-                    it.changes.set.push((name, SetValue::Text(String::new())));
+                    changes.set.push((name, SetValue::Text(String::new())));
                 })));
             }
         });
         for (pl, tone, line) in &self.places {
-            if let Place::Key { key, .. } = pl
-                && other.iter().any(|o| o.key == *key)
+            if let Place::Key { scope: s, key } = pl
+                && s == scope
+                && other.iter().any(|o| o.scope == scope && o.key == *key)
             {
                 g.message(*tone, Tx::ui(line.as_str()));
             }
@@ -1578,10 +1817,11 @@ impl ItemsDoc {
     // ---- the preview ----------------------------------------------------------------------------
 
     /// The item as the game shows it: the icon at twice its size, the names and the description
-    /// the player reads, the weight and the cost; then its world model.
-    pub(crate) fn draw_preview(&mut self, ui: &mut Ui, cx: &mut gz_app::DocCx<'_>) {
+    /// the player reads, the weight and the cost; what the player sees in the hands; then its
+    /// world model. The column scrolls; `view_h` is how tall it shows.
+    pub(crate) fn draw_preview(&mut self, ui: &mut Ui, cx: &mut gz_app::DocCx<'_>, view_h: f32) {
         let p = palette(ui.ctx());
-        let full = ui.max_rect();
+        let full = Rect::from_min_size(ui.max_rect().min, Vec2::new(ui.available_width(), view_h));
         let resolved = |k: &str| -> Option<String> {
             self.form.groups.iter().flat_map(|g| g.rows.iter()).find(|r| r.key == k).and_then(Row::shown)
         };
@@ -1625,7 +1865,7 @@ impl ItemsDoc {
         let descr = pick(&self.texts[4], &self.hints[4]);
         if !descr.is_empty() {
             ui.add_space(4.0);
-            let _ = text::prose(ui, Tx::raw(descr));
+            let _ = text::prose(ui, Tx::raw(as_read(&descr)));
         }
         ui.add_space(6.0);
         for (key, label) in [(game_keys::WEIGHT, "Weight"), (game_keys::COST, "Cost")] {
@@ -1641,8 +1881,11 @@ impl ItemsDoc {
             }
         }
         ui.add_space(8.0);
+        // what the player sees in the hands, between the inventory and the world
+        self.draw_hands(ui, cx);
         if visual.is_empty() {
             self.model = None;
+            self.model_rect = None;
             return;
         }
         let key = first_name(&visual);
@@ -1658,17 +1901,48 @@ impl ItemsDoc {
                 (key.clone(), d)
             });
         }
+        // the world model takes most of what the column shows, never less than a usable view
         let below = ui.cursor().min.y;
-        let model_rect =
-            Rect::from_min_max(pos2(full.min.x, below), pos2(full.max.x, (below + 320.0).min(full.max.y)));
-        if model_rect.height() < 120.0 {
-            return;
-        }
+        let model_h = (view_h * 0.6).clamp(220.0, 360.0);
+        let model_rect = Rect::from_min_size(pos2(full.min.x, below), Vec2::new(full.width(), model_h));
         if let Some((_, doc)) = self.model.as_mut() {
             let mut child =
                 ui.new_child(UiBuilder::new().id_salt("gz-ui-world.items.model").max_rect(model_rect));
             doc.body(&mut child, cx);
         }
+        self.model_rect = Some(model_rect);
+        ui.advance_cursor_after_rect(model_rect);
+    }
+}
+
+/// A game text as the player reads it: its `\n` a line break, its colour marks
+/// (`%c[a,r,g,b]`, `%c[name]`) taken out - the preview draws one colour.
+fn as_read(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix("\\n") {
+            out.push('\n');
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("%c[")
+            && let Some(end) = after.find(']')
+        {
+            rest = &after[end + 1..];
+        } else {
+            let c = rest.chars().next().unwrap_or(' ');
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
+/// The changes of a scope's section of an item: its own, or its HUD's.
+fn changes_of<'a>(it: &'a mut gz_items::Item, scope: &str) -> &'a mut gz_items::Changes {
+    if scope == gz_items::catalog::HUD {
+        &mut it.hud.get_or_insert_with(gz_items::Hud::default).changes
+    } else {
+        &mut it.changes
     }
 }
 
@@ -1740,6 +2014,12 @@ mod tests {
         );
         set_scene(&mut it, Some(String::new()), Some(("time", None)));
         assert_eq!(it.scene, None);
+    }
+
+    #[test]
+    fn a_game_text_reads_as_the_player_reads_it() {
+        assert_eq!(as_read("A\\n%c[0,140,140,140]B \u{2022} %c[ui_gray_1]C"), "A\nB \u{2022} C");
+        assert_eq!(as_read("100%c"), "100%c");
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! read_omf(&[u8]) / MotionSet::read_chunks -> bone parts, motion definitions, quantised keys
 //! motion_set.to_omf()                    -> the same file back
 //! motion_set.pose(motion, t) -> Vec<BoneKey>   one motion at time t, as the engine samples it
+//! Skeleton::of(&Visual).model(&locals)   every bone in model space, the skinning of a pose
 //! export_static(&Object, &ExportOptions) -> Vec<u8>   the static exporter
 //! export_skeleton(&Object, &ExportOptions, influence) -> Export   the skeleton exporter
 //!                                           (a progressive one through the VIPM pass, `vipm`)
@@ -25,6 +26,7 @@ mod format;
 mod motion;
 mod obb;
 mod optimize;
+mod skeleton;
 mod vertex;
 mod vipm;
 mod visual;
@@ -36,11 +38,12 @@ pub use export::{
 };
 pub use format::{Desc, Header, MT, chunk, crc32};
 pub use motion::{
-    BoneKey, BoneMotion, Motion, MotionDef, MotionMark, MotionSet, PartDef, RotKeys, SAMPLE_FPS, TransKeys,
-    read_omf,
+    BoneKey, BoneMotion, ESM_FX, ESM_STOP_AT_END, Motion, MotionDef, MotionMark, MotionSet, PartDef, RotKeys,
+    SAMPLE_FPS, TransKeys, read_omf,
 };
 pub use obb::{min_box, rapid_box};
 pub use optimize::{optimize_faces, optimize_vertices};
+pub use skeleton::{Skeleton, origin_of};
 pub use vertex::{Vertex, VertexBuffer, VertexFormat};
 pub use vipm::{Swr, VipmResult, vipm_convert};
 pub use visual::{BufferRef, LodFacet, LodVertex, SlideWindow, SlideWindows, TreeDef, Visual};

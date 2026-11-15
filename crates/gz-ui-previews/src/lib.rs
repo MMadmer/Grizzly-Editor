@@ -42,6 +42,7 @@
 pub mod audio;
 mod cmd;
 pub mod gpu;
+pub mod hands;
 pub mod image_pass;
 pub mod library;
 pub mod libtools;

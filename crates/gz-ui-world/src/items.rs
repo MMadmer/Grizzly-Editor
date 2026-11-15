@@ -24,7 +24,7 @@ use gz_mod::ManifestService;
 use gz_project::Project;
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm, unsaved_prompt};
 use gz_ui::{Icon, Kind, Tone, Toolbar, Tx, tr};
-use gz_ui_level::choose::{self, Chooser, Outcome, Purpose};
+use gz_ui_level::choose::{self, Chooser, Outcome, Purpose, RowIcons};
 use gz_ui_level::lists::ListKey;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -33,7 +33,6 @@ use crate::call::{self, args, s};
 use crate::item_lists::{ItemLists, ItemListsView, Pictures};
 use crate::item_model::{self, Form, Place};
 use crate::lists::{Lists, ListsView};
-use crate::portraits::Sheets;
 
 /// The tab's id and kind.
 pub const TAB: &str = "items";
@@ -41,6 +40,8 @@ pub const TAB: &str = "items";
 pub(crate) const HOST: &str = "###doc.host";
 /// The narrowest the preview column is drawn; under it the form keeps the room.
 pub(crate) const PREVIEW_MIN: f32 = 300.0;
+/// The scroll `ui.scroll id=items.preview` moves: the preview column.
+pub(crate) const PREVIEW_SCROLL: &str = "items.preview";
 /// Where the + menu's pick makes its file.
 const FOLDER: &str = "items";
 
@@ -390,7 +391,7 @@ pub struct ItemsDoc {
     pub(crate) edit_gen: u64,
     check_gen: u64,
     checking: bool,
-    res_gen: u64,
+    pub(crate) res_gen: u64,
     pub(crate) form: Form,
     form_key: (u64, u64),
     pub(crate) status: String,
@@ -401,20 +402,31 @@ pub struct ItemsDoc {
     save_error: Option<String>,
     pub(crate) lists: ListsView,
     pub(crate) item_lists: ItemListsView,
-    pub(crate) sheets: Option<Arc<Sheets>>,
     pub(crate) pictures: Option<Arc<Pictures>>,
+    /// The textures icons are cells of.
+    pub(crate) icon_sheets: Option<Arc<crate::item_lists::IconSheets>>,
     pub(crate) actions: Vec<Action>,
     scroll_max: f32,
     pub(crate) model: Option<(String, Box<dyn Document>)>,
     pub(crate) chooser: Option<(Pick, Chooser)>,
     /// The chooser's rows of game items, by the label shown: the section.
-    chooser_rows: FxHashMap<String, String>,
+    chooser_rows: Arc<FxHashMap<String, String>>,
     /// The HUD row the author is on: what a preview of the hands will pose.
     pub(crate) hud_row: Option<String>,
     /// The icons of sections a row names, by section: worked out once.
     pub(crate) section_icons: FxHashMap<String, Option<IconSource>>,
     /// A question put up to be looked at (`items.view ask_delete=true`).
     look_delete: bool,
+    /// The In the Hands picture, once the item has had a HUD section.
+    pub(crate) hands: Option<gz_ui_previews::hands::HandsView>,
+    /// What the picture was last made for: the edit, the check, the row, the roster read.
+    pub(crate) hands_key: Option<(u64, u64, Option<String>, bool)>,
+    /// The file the picture was last made for.
+    pub(crate) hands_file: Option<String>,
+    /// Where the world model was drawn last frame: the wheel over it turns the model, not the
+    /// column.
+    pub(crate) model_rect: Option<Rect>,
+    preview_max: f32,
 }
 
 impl ItemsDoc {
@@ -452,16 +464,21 @@ impl ItemsDoc {
             save_error: None,
             lists: ListsView::default(),
             item_lists: ItemListsView::default(),
-            sheets: None,
             pictures: None,
+            icon_sheets: None,
             actions: Vec::new(),
             scroll_max: 0.0,
             model: None,
             chooser: None,
-            chooser_rows: FxHashMap::default(),
+            chooser_rows: Arc::default(),
             hud_row: None,
             section_icons: FxHashMap::default(),
             look_delete: false,
+            hands: None,
+            hands_key: None,
+            hands_file: None,
+            model_rect: None,
+            preview_max: 0.0,
         }
     }
 
@@ -550,6 +567,12 @@ impl ItemsDoc {
 
     fn select_index(&mut self, index: Option<usize>) {
         let picked = index.and_then(|i| self.roster().and_then(|r| r.entries.get(i)).map(|e| e.item.clone()));
+        // the same item read again keeps the row the author is on
+        let same = picked.as_ref().is_some_and(|p| self.sel.as_deref() == Some(p.file.as_str()));
+        let row = self.hud_row.take().filter(|_| same);
+        // and, when its file says what the form held, what it resolved to until the next check:
+        // the column does not lose its picture and its model for a frame
+        let unchanged = same && picked.as_ref() == Some(&self.edit);
         match picked {
             Some(item) => {
                 self.sel = Some(item.file.clone());
@@ -564,11 +587,13 @@ impl ItemsDoc {
         }
         self.conflicts.clear();
         self.dirty = false;
-        self.res = None;
-        self.own.clear();
-        self.places.clear();
-        self.hints = Default::default();
-        self.hud_row = None;
+        if !unchanged {
+            self.res = None;
+            self.own.clear();
+            self.places.clear();
+            self.hints = Default::default();
+        }
+        self.hud_row = row;
         self.pull();
         self.edit_gen += 1;
     }
@@ -772,6 +797,11 @@ impl ItemsDoc {
             return Err("no item is selected".into());
         }
         self.push_texts();
+        // a list change of a row of More Sections that names no member says nothing
+        for s in &mut self.edit.sections {
+            s.changes.add.retain(|(_, m)| !m.is_empty());
+            s.changes.drop.retain(|(_, m)| !m.is_empty());
+        }
         Ok(SavePlan { file: self.edit.file.clone(), before: self.base.clone(), after: self.edit.clone() })
     }
 
@@ -853,7 +883,7 @@ impl ItemsDoc {
     /// The game's items as a chooser lists them: the family as the folder, the name the player
     /// reads with the section as the leaf.
     fn game_item_rows(&mut self) -> Vec<String> {
-        self.chooser_rows.clear();
+        let mut rows = FxHashMap::default();
         let mut out = Vec::with_capacity(self.item_lists.game_items.len());
         for g in self.item_lists.game_items.iter() {
             let clean = |s: &str| s.replace(['\\', '/'], "-");
@@ -864,10 +894,33 @@ impl ItemsDoc {
             };
             let label =
                 if g.family_title.is_empty() { leaf } else { format!("{}\\{leaf}", clean(&g.family_title)) };
-            self.chooser_rows.insert(label.clone(), g.section.clone());
+            rows.insert(label.clone(), g.section.clone());
             out.push(label);
         }
+        self.chooser_rows = Arc::new(rows);
         out
+    }
+
+    /// The inventory icons of the chooser's rows of items: a row's section, its cell of the icon
+    /// sheet (worked out once per section), the sheet read off the UI thread.
+    fn row_icons(&self) -> Option<RowIcons> {
+        let sheets = self.icon_sheets.clone()?;
+        let comp = self.loaded.as_ref()?.roster.composition.clone();
+        let (editor, rows) = (self.editor.clone(), self.chooser_rows.clone());
+        let looks: Arc<Mutex<FxHashMap<String, Option<IconSource>>>> = Arc::default();
+        Some(RowIcons(Arc::new(move |label: &str| {
+            let section = rows.get(label)?;
+            let look = looks
+                .lock()
+                .entry(section.clone())
+                .or_insert_with(|| section_icon(&comp.ltx, section))
+                .clone();
+            let Some(IconSource::Cell { sheet, x, y, w, h }) = look else { return None };
+            let c = crate::item_form::CELL;
+            let px = [x as f32 * c, y as f32 * c, w as f32 * c, h as f32 * c];
+            let (tex, uv) = sheets.cell(&editor, &sheet, px)?;
+            Some((tex, uv, w as f32 / h.max(1) as f32))
+        })))
     }
 
     /// Puts a chooser of the form up.
@@ -877,6 +930,9 @@ impl ItemsDoc {
             Pick::New | Pick::Change | Pick::Base => {
                 let rows = self.game_item_rows();
                 let mut c = Chooser::new(purpose, "Item", None, "").with_items(rows);
+                if let Some(icons) = self.row_icons() {
+                    c = c.with_icons(icons);
+                }
                 c.title = match pick {
                     Pick::New => Tx::from("New Item"),
                     Pick::Change => Tx::from("Change a Game Item"),
@@ -893,10 +949,24 @@ impl ItemsDoc {
                     .flat_map(|g| g.rows.iter())
                     .find(|r| r.scope == *scope && r.key == *key);
                 let Some(row) = row else { return };
-                let Some((list, what)) = list_of(&row.ty) else { return };
                 let current = row.shown().map(|v| first_name(&v)).unwrap_or_default();
-                let mut c = Chooser::new(purpose, what, Some(list), &current);
-                c.title = tr!("Select {what}", what = crate::item_form::row_label(row));
+                let title = tr!("Select {what}", what = crate::item_form::row_label(row));
+                let section = row.ty == gz_items::KeyType::Section;
+                let mut c = if section {
+                    // a row that names an item picks it among the game's items, by their icons
+                    let rows = self.game_item_rows();
+                    let now = rows.iter().find(|l| self.chooser_rows.get(*l) == Some(&current)).cloned();
+                    let mut c =
+                        Chooser::new(purpose, "Item", None, now.as_deref().unwrap_or("")).with_items(rows);
+                    if let Some(icons) = self.row_icons() {
+                        c = c.with_icons(icons);
+                    }
+                    c
+                } else {
+                    let Some((list, what)) = list_of(&row.ty) else { return };
+                    Chooser::new(purpose, what, Some(list), &current)
+                };
+                c.title = title;
                 c
             }
         };
@@ -924,8 +994,10 @@ impl ItemsDoc {
                 }
             }
             Pick::Key { scope, key } => {
+                // a row of the item chooser is the section it names
+                let value = self.chooser_rows.get(&item).cloned().unwrap_or(item);
                 let changes = self.changes_mut(&scope);
-                item_model::set_own(changes, &key, gz_items::SetValue::Text(item));
+                item_model::set_own(changes, &key, gz_items::SetValue::Text(value));
                 self.changed();
             }
         }
@@ -1095,6 +1167,7 @@ impl ItemsDoc {
             "picker": picker,
             "status": self.status,
             "model": self.model.as_ref().map(|(key, d)| json!({ "visual": key, "viewer": d.mcp_state() })),
+            "hands": self.hands_json(),
         })
     }
 
@@ -1138,7 +1211,31 @@ impl ItemsDoc {
                     .max_rect(preview)
                     .layout(Layout::top_down(Align::Min)),
             );
-            self.draw_preview(&mut side, cx);
+            let mut scroll = ScrollArea::vertical()
+                .id_salt("gz-ui-world.items.preview_scroll")
+                .auto_shrink([false, false]);
+            // the wheel over the world model turns the model, not the column
+            let over_model =
+                self.model_rect.zip(ctx.pointer_hover_pos()).is_some_and(|(r, at)| r.contains(at));
+            if over_model {
+                scroll = scroll.scroll_source(egui::containers::scroll_area::ScrollSource {
+                    mouse_wheel: false,
+                    ..Default::default()
+                });
+            }
+            match gz_app::take_scroll(&ctx, PREVIEW_SCROLL) {
+                Some(gz_app::ScrollTo::Top) => scroll = scroll.vertical_scroll_offset(0.0),
+                Some(gz_app::ScrollTo::Bottom) => scroll = scroll.vertical_scroll_offset(self.preview_max),
+                Some(gz_app::ScrollTo::Offset(y)) => scroll = scroll.vertical_scroll_offset(y),
+                _ => {}
+            }
+            let view_h = preview.height();
+            let out = scroll.show(&mut side, |ui| self.draw_preview(ui, cx, view_h));
+            let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
+            self.preview_max = max;
+            gz_app::report_scroll(&ctx, PREVIEW_SCROLL, out.state.clamped_offset().y.min(max), max);
+        } else {
+            self.model_rect = None;
         }
         let mut left = ui.new_child(
             UiBuilder::new()
@@ -1427,6 +1524,16 @@ impl Document for ItemsDoc {
             if let Some(lists) = ItemLists::of(cx.editor) {
                 lists.force(cx.editor);
             }
+            if let Some(rigs) = gz_ui_previews::hands::Rigs::of(cx.editor) {
+                rigs.clear();
+            }
+            if let Some(h) = self.hands.as_mut() {
+                h.forget();
+            }
+            if let Some(s) = &self.icon_sheets {
+                s.clear();
+            }
+            self.hands_key = None;
         }
     }
 
@@ -1452,11 +1559,11 @@ impl Document for ItemsDoc {
             lists.want(cx.editor);
             self.item_lists = lists.view();
         }
-        if self.sheets.is_none() {
-            self.sheets = Sheets::of(cx.editor);
-        }
         if self.pictures.is_none() {
             self.pictures = Pictures::of(cx.editor);
+        }
+        if self.icon_sheets.is_none() {
+            self.icon_sheets = crate::item_lists::IconSheets::of(cx.editor);
         }
         self.recheck();
         self.refresh_form();

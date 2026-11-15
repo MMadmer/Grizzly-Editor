@@ -10,12 +10,17 @@
      from); an edit of a catalog key, of a text and an added loot row are saved as exactly that difference - the
      author's comments and order kept; Revert drops an edit; + makes a new item from a game item and a change of one;
      the Delete Item question comes up (dlg.delete_item) and goes again, and a deleted file leaves the list
-  I  the icon: a picture beside the asset is what the form shows; the module built to a folder carries the atlas, the
-     asset's shipped text names its cell, and the picture itself does not ship
+  I  the icon: a picture beside the asset is what the form shows, and it is drawn; a cell of a texture the project holds is
+     drawn too; the module built to a folder carries the atlas, the asset's shipped text names its cell, and the picture
+     itself does not ship
+  H  In the Hands: a weapon's change finds the hands and the HUD model and shows its idle with a length; a motion row
+     plays (the time moves) and stops where it is; an offset edited moves the answered transform at once; a HUD model
+     nobody has says so; the item chooser's rows carry the items' icons; a row of More Sections that takes a key away
+     and changes a list answers both
   F  the frame: ui.audit finds nothing cut to nothing or escaping at 1707x912 / 1.5 and 1280x720 / 1.0, in English and in
      Russian (every text of the editor's own translated), in the dark and the light theme; perf.stalls is empty
 
-    python tools/qa/test_items.py --project <project> [--only K,L,T,I,F] [--shots <folder>]
+    python tools/qa/test_items.py --project <project> [--only K,L,T,I,H,F] [--shots <folder>]
 """
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ import os
 import struct
 import sys
 import tempfile
+import time
 
 import qa
 from qa import check, cmd
@@ -58,6 +64,17 @@ BAD = {
     "missing picture": ("return { item = 1, edit = \"bread\", icon = \"icons/qa_nowhere.png\" }\n", "I421"),
 }
 SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
+# a new item whose HUD section names a model nobody has
+NO_HUD_MODEL = r'''return {
+  item = 1,
+  id = "qa_nohud",
+  base = "wpn_pm",
+  hud = { set = { item_visual = [[dynamics\weapons\qa_nowhere\qa_nowhere_hud]] } },
+  sections = {
+    { edit = "wpn_pm_hud", unset = { "anm_bore" }, add = { qa_list = { "a", "b" } }, drop = { qa_other = "c" } },
+  },
+}
+'''
 
 
 def path_of(rel: str) -> str:
@@ -79,6 +96,16 @@ def tga(path: str, w: int, h: int) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(head + bytes([40, 160, 220, 255]) * (w * h))
+
+
+def dds(path: str, w: int, h: int) -> None:
+    # a picture of one colour as an uncompressed 32-bit DDS: a texture an icon is a cell of
+    head = struct.pack("<4sIIIIIII44xIIIIIIII", b"DDS ", 124, 0x100F, h, w, w * 4, 0, 1,
+                       32, 0x41, 0, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+    head += struct.pack("<IIIII", 0x1000, 0, 0, 0, 0)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(head + bytes([220, 160, 40, 255]) * (w * h))
 
 
 def rows_of(form: dict) -> dict[str, dict]:
@@ -255,6 +282,19 @@ def phase_i(module: str) -> None:
     icon = ((v.get("form") or {}).get("icon") or {})
     check(icon.get("own", {}).get("file") == "icons/qa_ration.tga" and "qa_ration.tga" in str(icon.get("shown")),
           "I the form shows the picture beside the asset", qa.short(icon))
+    drawn = qa.until(lambda: ((view().get("form") or {}).get("icon") or {}).get("drawn"), 10)
+    check(drawn, "I and the picture is drawn")
+    # a cell of a texture the project holds: drawn from the project, not looked for in the game
+    dds(path_of("textures/ui/qa_icons.dds"), 100, 100)
+    cell = text_of("items/qa_ak.itemasset").replace("  set = {", '  icon = { texture = [[ui\\qa_icons]], x = 0, y = 0, w = 2, h = 1 },\n  set = {', 1)
+    qa.write(path_of("items/qa_ak.itemasset"), cell)
+    v = qa.until(lambda: (lambda a: a if ((a.get("form") or {}).get("icon") or {}).get("own", {}).get("form") == "cell" else None)(
+        view(select="items/qa_ak.itemasset")), 10) or {}
+    shown = ((v.get("form") or {}).get("icon") or {}).get("shown") or {}
+    check(shown.get("texture") == "ui\\qa_icons" and shown.get("w") == 2, "I a cell icon names the project's texture", qa.short(shown))
+    drawn = qa.until(lambda: ((view().get("form") or {}).get("icon") or {}).get("drawn"), 10)
+    check(drawn, "I and a cell of a texture the project holds is drawn")
+    qa.write(path_of("items/qa_ak.itemasset"), cell.replace('  icon = { texture = [[ui\\qa_icons]], x = 0, y = 0, w = 2, h = 1 },\n', ""))
     out = tempfile.mkdtemp(prefix="grizzly_items_")
     try:
         built = cmd("mod.build", target="folder", path=out)
@@ -269,6 +309,78 @@ def phase_i(module: str) -> None:
         check(not os.path.exists(os.path.join(root, "items", "icons", "qa_ration.tga")), "I and the picture itself does not ship")
     finally:
         qa.remove_tree(out)
+
+
+# ---- H: In the Hands --------------------------------------------------------------------------------------------
+
+
+def hands_of(**params) -> dict:
+    return view(**params).get("hands") or {}
+
+
+def phase_h(shots: str | None) -> None:
+    view(select="items/qa_ak.itemasset")
+    # the hands' model and its motion sets are read the first time: seconds, not frames
+    h = qa.until(lambda: (lambda x: x if x.get("status") in ("ready", "missing") else None)(hands_of()), 120) or {}
+    check(h.get("status") == "ready" and h.get("hands_found") and h.get("item_found"),
+          "H a weapon's change finds the hands and its HUD model", qa.short(h))
+    check(h.get("line") == "anm_idle" and h.get("motion") and (h.get("length") or 0) > 0 and not h.get("playing"),
+          "H a row that is no motion shows the idle, still, with its length", qa.short({k: h.get(k) for k in ("line", "motion", "length", "playing")}))
+    check(h.get("wide") and h.get("anchor") and (h.get("fov") or 0) > 10, "H the picture is wide, hung on the hands' bone, at the HUD's fov",
+          qa.short({k: h.get(k) for k in ("wide", "anchor", "fov")}))
+    pos = ((h.get("item_transform") or {}).get("position") or [0, 0, 0])
+    check(pos[2] > 0.05 and pos[1] < 0, "H the weapon is in front of the camera and below its eyes", qa.short(pos))
+    cmd("ui.scroll", id="items.preview", to="bottom")
+    qa.shot(shots, "items_hands_idle")
+    # a motion row plays; Stop holds it where it is
+    h = hands_of(hud_row="anm_reload")
+    t1 = h.get("time", 0)
+    check(h.get("line") == "anm_reload" and h.get("playing"), "H a motion row plays its line", qa.short({k: h.get(k) for k in ("line", "playing")}))
+    time.sleep(0.6)
+    t2 = hands_of().get("time", 0)
+    check(abs(t2 - t1) > 0.2, "H and the time moves while it plays", qa.short([t1, t2]))
+    h = hands_of(hands_play=False, hands_time=1.5)
+    t3 = h.get("time", 0)
+    time.sleep(0.5)
+    t4 = hands_of().get("time", 0)
+    check(not h.get("playing") and abs(t3 - 1.5) < 0.01 and t3 == t4, "H stopped, the time stays where it was put", qa.short([t3, t4]))
+    cmd("ui.scroll", id="items.preview", to="bottom")
+    qa.shot(shots, "items_hands_reload")
+    # an offset edited moves the picture at once, before any save
+    before = hands_of()
+    v = view(set={"hud.hands_position_16x9": [0.1, -0.05, 0.2]})
+    after = v.get("hands") or {}
+    hp = ((after.get("hands_transform") or {}).get("position") or [])
+    check(v.get("dirty") and [round(x, 4) for x in hp] == [0.1, -0.05, 0.2]
+          and (after.get("item_transform") or {}).get("position") != (before.get("item_transform") or {}).get("position"),
+          "H an offset edited moves the hands and the item at once", qa.short({"hands": hp, "item": (after.get("item_transform") or {}).get("position")}))
+    view(discard=True)
+    # a HUD model nobody has
+    qa.write(path_of("items/qa_nohud.itemasset"), NO_HUD_MODEL)
+    v = qa.until(lambda: (lambda a: a if (a.get("hands") or {}).get("status") == "missing" else None)(
+        view(select="items/qa_nohud.itemasset")), 60) or {}
+    missing = (v.get("hands") or {}).get("missing") or {}
+    check(missing.get("what") == "item_model" and "qa_nowhere" in str(missing.get("name")),
+          "H a HUD model nobody has says so in the picture's place", qa.short(v.get("hands")))
+    cmd("ui.scroll", id="items.preview", to="bottom")
+    qa.shot(shots, "items_hands_missing")
+    # a row of More Sections that takes a key away and changes a list
+    rows = ((v.get("form") or {}).get("sections") or [{}])[0]
+    check(rows.get("unset") == ["anm_bore"] and rows.get("add") and rows.get("drop"),
+          "H a row of More Sections answers what it takes away and does to lists", qa.short(rows))
+    cmd("ui.scroll", id="items", to="bottom")
+    qa.shot(shots, "items_more_sections")
+    cmd("ui.scroll", id="items", to="top")
+    os.remove(path_of("items/qa_nohud.itemasset"))
+    # the item chooser carries the items' icons
+    p = view(show="new")
+    pictured = qa.until(lambda: ((view().get("picker") or {}).get("chooser") or {}).get("pictured", 0) > 0 and view(), 20) or {}
+    chooser = (pictured.get("picker") or {}).get("chooser") or {}
+    check(((p.get("picker") or {}).get("chooser") or {}).get("icons") and chooser.get("pictured", 0) > 0,
+          "H the item chooser's rows carry the items' icons", qa.short({k: chooser.get(k) for k in ("icons", "pictured", "shown")}))
+    qa.shot(shots, "items_chooser_icons")
+    cmd("ui.dialog", action="close", id="dlg.choose")
+    view(select="items/qa_ak.itemasset")
 
 
 # ---- F: the frame -----------------------------------------------------------------------------------------------
@@ -290,6 +402,7 @@ def phase_f(shots: str | None) -> None:
                 qa.until(lambda: not cmd("ui.audit", id="items").get("loading"), 10)
                 for where in ("top", "bottom"):
                     cmd("ui.scroll", id="items", to=where)
+                    cmd("ui.scroll", id="items.preview", to=where)
                     a = cmd("ui.audit", id="items")
                     cut = a.get("truncated") or []
                     vanished = [t for t in cut if not t.get("shown") and (t.get("rect") or [0, 0, 0])[2] > 0]
@@ -326,9 +439,10 @@ def run(ctx: qa.Run) -> None:
                 if f.lower().endswith(".itemasset"):
                     os.remove(os.path.join(b, f))
         qa.run_phases(
-            {"K": phase_k, "L": phase_l, "T": lambda: phase_t(ctx.shots), "I": lambda: phase_i(module), "F": lambda: phase_f(ctx.shots)},
+            {"K": phase_k, "L": phase_l, "T": lambda: phase_t(ctx.shots), "I": lambda: phase_i(module),
+             "H": lambda: phase_h(ctx.shots), "F": lambda: phase_f(ctx.shots)},
             ctx.only,
-            {"T": "L", "I": "L", "F": "L"},
+            {"T": "L", "I": "L", "H": "L", "F": "L"},
         )
         qa.stalls()
     finally:
@@ -336,7 +450,7 @@ def run(ctx: qa.Run) -> None:
 
 
 def main() -> int:
-    return qa.suite("ITEMS", run, doc=__doc__, phases="KLTIF")
+    return qa.suite("ITEMS", run, doc=__doc__, phases="KLTIHF")
 
 
 if __name__ == "__main__":
