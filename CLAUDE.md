@@ -255,8 +255,13 @@ A change of plan is a change of its document first.
   scene that trips it and one that does not.
 - **A scene file with a typo costs nothing.** A part file (or the `.scene`) that does not parse changes nothing in
   the open scene and is left alone by a save (`scene.save` answers `skipped`); the problem has a line and a column;
-  the scene follows the file again once it parses. A group written with a `ref` and no `members` is placed as the
-  scene is read: a prefab is one line. Every problem of the scene's reader carries file, line and column.
+  the scene follows the file again once it parses. What the scene changes of that file's objects meanwhile is
+  unsaved work like any other: the scene holds the file's last good reading (`SceneFiles::held`), a save in between
+  names the file under `unwritten`, and the change goes over the file's new text when it reads again. A recovery
+  snapshot holds such a file's objects written whole, and a restored scene is saved against its files as they are
+  on the disk - a restore and a save never remove or rewrite a file that does not read. A group written with a
+  `ref` and no `members` is placed as the scene is read: a prefab is one line. Every problem of the scene's reader
+  carries file, line and column.
 - **A library object may exist in memory only** (`gz_scene::library`): a provider answers a reference that is no
   `.object` file - a model asset (a reference ending in `.meshasset`), a terrain (`@terrain\<name>`), the ground a
   terrain cuts (`@cut\<name>`) - with a `LibraryObject` made from a `gz_fmt_object::Object`, its `stamp` a hash of
@@ -267,7 +272,10 @@ A change of plan is a change of its document first.
   the level exports load what the scene names and keep it, so a model the watcher has forgotten meanwhile is
   still there for them - most of the editor reads the cache without loading (`cached`), and a job must not find it
   emptied half way. A rescan (the watcher lost count) forgets only what is another file now
-  (`Library::revalidate`), never the whole library.
+  (`Library::revalidate`), never the whole library. A fork leaves behind what the scene itself makes (`@...`,
+  `add_scene_provider`): the job's library makes its terrains from the state the job works on. And loading the
+  models for a command (`prefetch_library`) first makes again a terrain made for an earlier state of the scene:
+  whoever asks reads the scene as it is now.
 
 ## Media assets (gz-media, `docs/assets/MODEL.md`, `TEXTURE.md`, `SOUND.md`)
 
@@ -278,7 +286,11 @@ A change of plan is a change of its document first.
   the references; a test fails on a hand edit. The X-Ray SDK library (`.object`, `.thm`) stays what it is.
   What the level build would refuse is an error of the asset's own check, said first: a surface without a texture
   (`M112`), a surface's game material the game lacks (`M107`). A surface that names no material is the game's
-  `default`.
+  `default`. A word the game reads is the game's word: a sound's `type` is one or a list of the game's own sound
+  types, and a form of a key the game takes (`bump = true`, `detail = false`) the editor takes too.
+- **Nothing an asset or a model names leaves the project.** A glTF's buffers and pictures and an OBJ's library
+  and maps are files beside the document: a name with a drive or a server in it is never opened
+  (`gz_fmt_mesh::beside`). An asset's `source` that climbs out of the project is an error (`M113`).
 - **The description is text and ships; the data is binary and is baked.** The module build publishes every asset
   that ships (a texture, a sound, a dynamic model): the data baked into the game's own long-lived containers
   (`.dds` and the bump pair, `.ogg`, `.ogf` / `.omf`) under the game's place for its `name`, with the asset's

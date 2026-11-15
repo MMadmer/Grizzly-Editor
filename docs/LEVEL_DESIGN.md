@@ -46,7 +46,9 @@ those. One object is one entry of a list - one line is fine:
 - The editor follows the files: an open scene re-reads a file the moment it is written, and the change is one undo
   step. A file that does not parse **changes nothing** - the scene keeps what it had, the problem (`syntax`) has the
   file, line and column, `scene.save` leaves that file as it is and answers it under `skipped`, and the scene comes
-  back when the file is fixed. `asset.check path=<scene>.scene` (or `Grizzly-Cmd.exe check`) lists the problems of
+  back when the file is fixed. What the open scene changed of that file's objects meanwhile is not lost: the save
+  names the file under `unwritten`, and when the file reads again the change is put over it, unsaved, for the next
+  save. `asset.check path=<scene>.scene` (or `Grizzly-Cmd.exe check`) lists the problems of
   the scene and its files.
 - **A prefab is one line.** A group asset (`*.group`: `group = 1` and the scene's lists, positions relative to its
   pivot) placed as `{ name = "post_a", ref = "prefabs/guard_post.group", pos = { 120, 0, -40 }, rot = { 0, 90, 0 } }`
@@ -260,7 +262,8 @@ Write - the scene is <name>.scene and a folder of Lua files; the editor follows 
                 (scene.place kind=terrain places one; the edits go in the file)
   models        *.meshasset (a source or parts), *.texasset, *.sndasset; asset.import from=... to=...
                 brings .glb/.gltf/.obj/pictures/sounds in; file.create kind=model|texture|sound
-  A file that does not parse changes nothing: the problem has its line, scene.save answers it skipped.
+  A file that does not parse changes nothing: the problem has its line, scene.save answers it skipped
+  (and unwritten, when the scene holds changes of its objects: they go over the file once it reads).
 
 Settle:  scene.align action=drop|surface objects=... [offset=<m>], then scene.save (only changed lines).
 Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S213 terrain_bare)

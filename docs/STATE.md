@@ -80,7 +80,13 @@ What the suites hold, beyond what their names say:
   (glTF with data-URI buffers and `.glb`, sparse accessors, skins and clips through the OGF and OMF export, OBJ
   n-gons, hostile files as errors), `gz-media` (the three kinds' keys, references, checks, the bake twice the same
   bytes, the migration chains), `gz-scene`'s `sense` and `audit` tests (every action, cap and code, with a scene
-  that trips each and one that does not).
+  that trips each and one that does not). What one full read of the work found is fixed and held by tests: a
+  change made while a part file does not read goes over the file when it reads again, and a recovery snapshot
+  holds that file's objects (`gz-scene`'s service tests; the suite's phase B drives the first through the editor);
+  a job's library makes its terrains from the state the job works on (the fork's test); a model ships its
+  `surfaces` in the order of the baked model's children, as the game reads them; a sound's `type` is the game's
+  own words; a model's document opens no file by a drive or a server, and a source outside the project is `M113`;
+  the audit reads a terrain as the module's own and names one that wears a ground that is not there (`S213`).
 - **The game reads a module's terrain and media** (`test_play_game --scene l01_escape_terrain`, `--with-game`): a
   yard cut into Escape's slope - a terrain placed and its edits written in `terrain.lua`, a blockout on a texture
   asset - built into the piece with `overlay.cut` and `overlay.aiedit`; the game's log says `* [cuts] l01_escape:
@@ -161,7 +167,13 @@ What the suites hold, beyond what their names say:
   compared on DX11, DX12 and Vulkan (the game's loader is shared, the frames were not compared); a terrain that
   turns (`rot`) and a cut whose region is turned, in the game; grass on the new ground; the window's side of the
   media assets (drops from Explorer, the Place panel's model assets) beyond what `test_tour` and
-  `test_asset_icons` reach.
+  `test_asset_icons` reach. What the full read of the work did not cover: `gz-scene`'s `edit.rs` and `props.rs`,
+  the renderer's side of the picture camera, the content browser's companions through copy, move, rename and
+  delete, a skin's bone count against the engine's limit, the whole of `gz-luadata` against the game's reader.
+  A restored recovery snapshot saved over a scene whose file does not read: the snapshot and the save's plan are
+  tested, the restore's own step of reading the files on the disk is driven by no suite. One run of the suites
+  side by side had a drop onto a terrain land nothing and a chooser list empty; neither came back in four more
+  runs, and a drop now works itself out again when the library moved under it.
 - What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
   read from the readers' code and the game's document, not from a run of the game. `mod.package` was seen
   refusing a manifest through the check on one wrong tag; the other errors take the same path.
