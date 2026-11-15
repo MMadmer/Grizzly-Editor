@@ -19,7 +19,7 @@ use gz_project::FileTree;
 use gz_task::{Executors, JobCtx};
 use rustc_hash::FxHashSet;
 
-use crate::walk::{BuildFile, BuildWalk};
+use crate::walk::{BuildFile, BuildWalk, FileFrom};
 
 const ERROR_ACCESS_DENIED: i32 = 5;
 const ERROR_SHARING_VIOLATION: i32 = 32;
@@ -158,10 +158,17 @@ pub fn count_stale(dir: &Path, rel_dir: &str, will: &FxHashSet<String>, names: &
     n
 }
 
-/// Whether `folder` holds this very file: same size, same write time.
-fn same_file_there(f: &BuildFile, folder: &Path) -> bool {
+/// Whether `folder` holds this very file: same size, same write time - or, for bytes made for
+/// the build (a small text), the same bytes.
+#[must_use]
+pub fn same_file_there(f: &BuildFile, folder: &Path) -> bool {
+    let there = f.rel.to_fs(folder);
+    if let FileFrom::Bytes(bytes) = &f.from {
+        return fs::symlink_metadata(&there).is_ok_and(|md| md.is_file() && md.len() == f.size)
+            && fs::read(&there).is_ok_and(|b| *b == **bytes);
+    }
     let Some(modified) = f.modified else { return false };
-    fs::symlink_metadata(f.rel.to_fs(folder))
+    fs::symlink_metadata(there)
         .is_ok_and(|md| md.is_file() && md.len() == f.size && md.modified().ok() == Some(modified))
 }
 
@@ -220,8 +227,13 @@ pub fn copy_files(
         if reuse.get(i).copied().unwrap_or(false) && fs::hard_link(out.to_fs(reuse_from), &to).is_ok() {
             return Copied::Done;
         }
-        match fs::copy(f.rel.to_fs(root), &to) {
-            Ok(_) => Copied::Done,
+        let written = match (&f.from, f.source(root)) {
+            (FileFrom::Bytes(bytes), _) => fs::write(&to, bytes),
+            (_, Some(from)) => fs::copy(from, &to).map(|_| ()),
+            (_, None) => Ok(()),
+        };
+        match written {
+            Ok(()) => Copied::Done,
             Err(e) => {
                 stop.store(true, Ordering::Relaxed);
                 Copied::Failed(format!(

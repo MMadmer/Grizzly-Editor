@@ -55,6 +55,66 @@ pub fn engine_abilities(exe: &[u8]) -> Vec<String> {
 /// the terminator.
 pub const LONG_PATH_LIMIT: usize = 519;
 
+/// The engine's words the editor asks for, as Dead Air Refined's `ProductVersion.h` writes them.
+pub mod words {
+    /// Started on another fs config, it writes nothing into its own folder and takes the archives
+    /// from that config's `$arch_dir$`.
+    pub const IN_PLACE: &str = "fsltx-in-place";
+    /// Long-path aware: its paths take [`super::LONG_PATH_LIMIT`] characters.
+    pub const LONG_PATHS: &str = "long-paths";
+    /// It loads a module's pieces of a level beside the level (`levels\<level>\pieces`).
+    pub const LEVEL_PIECES: &str = "level-pieces";
+    /// It cuts a level's static geometry by a module's `levels\<level>\overlay.cut`.
+    pub const LEVEL_CUTS: &str = "level-cuts";
+    /// It moves and closes a level's AI nodes by a module's `levels\<level>\overlay.aiedit`.
+    pub const AI_EDITS: &str = "ai-edits";
+    /// It reads a module's media descriptions (`*.texasset`, `*.sndasset`, `*.meshasset` under
+    /// `gamedata\textures`, `sounds`, `meshes`) over the data beside them.
+    pub const ASSET_DESCRIPTIONS: &str = "asset-descriptions";
+    /// Every word the editor knows, in the order above.
+    pub const ALL: [&str; 6] = [IN_PLACE, LONG_PATHS, LEVEL_PIECES, LEVEL_CUTS, AI_EDITS, ASSET_DESCRIPTIONS];
+}
+
+/// What of a game folder is its program: the engines a folder is looked into for (the linked
+/// game's own first) and the libraries that state the engine's words.
+#[derive(Clone, Copy, Debug)]
+pub struct GamePrograms {
+    pub engines: &'static [&'static str],
+    /// The libraries beside the engine that implement its words, each stating them in its own
+    /// version resource: a word counts only when the engine and every one of them state it.
+    pub stating: &'static [&'static str],
+}
+
+/// Dead Air Refined's.
+pub const LINKED_GAME: GamePrograms = GamePrograms {
+    engines: &["xrEngine.exe", "Xr3DA.exe"],
+    stating: &["xrEngine.dll", "xrCore.dll", "xrGame.dll"],
+};
+
+/// The words of a program's version resource; one that cannot be read says nothing. Blocking.
+#[must_use]
+pub fn words_of(program: &std::path::Path) -> Vec<String> {
+    std::fs::read(program).map(|b| engine_abilities(&b)).unwrap_or_default()
+}
+
+/// Whether the game in `game` states `word`: its engine and every library that implements its
+/// words say it (a library of an older build beside a newer engine does not). Reads the version
+/// resources. Blocking.
+#[must_use]
+pub fn game_states(game: &std::path::Path, programs: &GamePrograms, word: &str) -> bool {
+    let says = |p: &std::path::Path| words_of(p).iter().any(|w| w == word);
+    programs.engines.iter().map(|e| game.join(e)).find(|p| p.is_file()).is_some_and(|exe| says(&exe))
+        && programs.stating.iter().all(|l| says(&game.join(l)))
+}
+
+/// The version of the game in `game`: its engine's file version, `None` without an engine or a
+/// version resource. Blocking.
+#[must_use]
+pub fn game_version(game: &std::path::Path, programs: &GamePrograms) -> Option<String> {
+    let exe = programs.engines.iter().map(|e| game.join(e)).find(|p| p.is_file())?;
+    std::fs::read(exe).ok().and_then(|b| exe_version(&b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +136,38 @@ mod tests {
         assert_eq!(engine_abilities(&exe), ["fsltx-in-place", "long-paths"]);
         // program-files: in memory
         assert!(engine_abilities(b"MZ an engine that says nothing").is_empty());
+    }
+
+    #[test]
+    fn a_word_holds_when_the_engine_and_every_library_state_it() {
+        let dir = std::env::temp_dir().join(format!("gz-game-words-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // no test writes a file named like a program: harmless names stand for the game's
+        const P: GamePrograms = GamePrograms { engines: &["engine.bin"], stating: &["core.lib"] };
+        let saying = |words: &str| {
+            let mut b = utf16("EngineAbilities\0");
+            b.extend([0, 0]);
+            b.extend(utf16(&format!("{words}\0")));
+            b
+        };
+        let mut engine = b"xx".to_vec();
+        engine.extend_from_slice(&SIGNATURE);
+        engine.extend_from_slice(&STRUCT_VERSION.to_le_bytes());
+        engine.extend_from_slice(&((1u32 << 16) | 7).to_le_bytes());
+        engine.extend_from_slice(&(3u32 << 16).to_le_bytes());
+        engine.extend(saying("level-pieces asset-descriptions level-cuts"));
+        std::fs::write(dir.join("engine.bin"), &engine).unwrap();
+        std::fs::write(dir.join("core.lib"), saying("asset-descriptions level-pieces")).unwrap();
+        assert!(game_states(&dir, &P, words::ASSET_DESCRIPTIONS));
+        assert!(game_states(&dir, &P, words::LEVEL_PIECES));
+        // the library does not say it: a mixed installation cannot
+        assert!(!game_states(&dir, &P, words::LEVEL_CUTS));
+        assert!(!game_states(&dir, &P, words::AI_EDITS));
+        assert_eq!(game_version(&dir, &P).as_deref(), Some("1.7.3"));
+        assert!(!game_states(&dir.join("none"), &P, words::ASSET_DESCRIPTIONS));
+        assert_eq!(words::ALL.len(), 6);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -37,7 +37,10 @@
 //!   time), its Task Center row ([`Releases::status`]) and its answers; [`run_package`] is what
 //!   Publish Release calls inside its own job; [`packaged_files`] - what an earlier packaging
 //!   of the version left, the data of the window's "replace?" question.
-//! - [`install`] - fills `gz_mod::ManifestArgs` (`tags` of `mod.set`).
+//! - [`media`] - the media assets in the module build ([`media::MediaBuild`]): baked and
+//!   published under the game's names, their sources never shipped where they lie.
+//! - [`install`] - fills `gz_mod::ManifestArgs` (`tags` of `mod.set`) and `gz_build`'s media
+//!   publisher.
 //! - [`register`] - `mod.package`, `mod.thumbnail`, `release.key`; [`key_state`] is the key half
 //!   the Mod Browser area answers with.
 
@@ -52,6 +55,7 @@ pub mod format;
 pub mod game_version;
 pub mod keyfile;
 mod keys;
+pub mod media;
 mod package;
 pub mod signed;
 pub mod zip;
@@ -61,7 +65,9 @@ pub use format::Asset;
 pub use keys::{AuthorKeys, KeyState};
 pub use package::{PackageRequest, PackageResult, Releases, packaged_files, run_package};
 
-/// What this area plugs into the others once the editor exists: the `tags` of `mod.set`.
+/// What this area plugs into the others once the editor exists: the `tags` of `mod.set`, the
+/// module build's media publisher.
 pub fn install(editor: &gz_editor::Editor) {
     browser::install_manifest_args(editor);
+    gz_build::BuildChecks::of(editor).set_media(std::sync::Arc::new(media::MediaBuild));
 }

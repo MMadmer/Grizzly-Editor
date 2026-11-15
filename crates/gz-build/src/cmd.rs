@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::check::{BuildChecks, MediaPlan};
 use crate::job::{BuildKind, BuildRequest, BuildResult, Builds};
 use crate::walk::{BuildWalk, WalkScope};
 
@@ -54,18 +55,34 @@ async fn mod_info(ed: Arc<Editor>, p: InfoParams, _origin: Origin) -> Reply {
     let mut answer = manifest_answer(&ed, &project, &service).await?;
     let snap = service.snapshot();
     let rules = snap.manifest().map(|m| m.exclude.clone()).unwrap_or_default();
+    // what the media assets publish, without a bake: the paths are known, the sizes are not
+    let plan = match (BuildChecks::of(&ed).media(), ed.project()) {
+        (Some(media), Ok(session)) => media.plan(ed.clone(), session).await,
+        _ => MediaPlan::default(),
+    };
     let tree = project.tree.snapshot();
     let exec = ed.exec.clone();
-    let walk = ed.exec.io(move || BuildWalk::scan(&tree, &rules, WalkScope::Module, &exec)).await;
+    let sources = plan.sources.clone();
+    let walk =
+        ed.exec.io(move || BuildWalk::scan_with(&tree, &rules, WalkScope::Module, &exec, &sources)).await;
+    let published: rustc_hash::FxHashSet<String> = plan.published.iter().map(|r| r.to_lowercase()).collect();
+    let own: Vec<&str> = walk
+        .files
+        .iter()
+        .filter(|f| !published.contains(&f.rel.to_backslash().to_lowercase()))
+        .map(|f| f.rel.as_str())
+        .collect();
     let mut build = json!({
-        "ships": walk.files.len(),
-        "bytes": walk.files.iter().map(|f| f.size).sum::<u64>(),
+        "ships": own.len() + plan.published.len(),
+        "media": plan.published.len(),
+        "bytes": walk.files.iter().filter(|f| !published.contains(&f.rel.to_backslash().to_lowercase())).map(|f| f.size).sum::<u64>(),
         "left_out": walk.left_out_texts(),
     });
     if p.files
         && let Value::Object(map) = &mut build
     {
-        let files: Vec<&str> = walk.files.iter().map(|f| f.rel.as_str()).collect();
+        let mut files: Vec<String> = own.iter().map(|f| (*f).to_owned()).collect();
+        files.extend(plan.published.iter().map(|r| r.replace('\\', "/")));
         map.insert("files".into(), json!(files));
     }
     if let Value::Object(map) = &mut answer {
@@ -152,6 +169,7 @@ pub fn build_answer(r: &BuildResult) -> Reply {
     // something that does not exist is not a clean build
     Ok(json!({
         "files": r.files,
+        "media": r.media,
         "path": r.path.replace('\\', "/"),
         "baked": r.bake_note,
         "warnings": r.warnings,

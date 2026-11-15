@@ -34,6 +34,7 @@ gz-export-level.workspace = true
 gz-world.workspace = true
 gz-mod.workspace = true
 gz-lc.workspace = true
+gz-media.workspace = true
 gz-lc-light.workspace = true
 gz-lc-gpu.workspace = true
 glam.workspace = true

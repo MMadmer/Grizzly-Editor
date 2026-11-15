@@ -4,8 +4,9 @@
 //! core), stopped by the job's Stop.
 //!
 //! The compile reads the editor's own data (`shaders_xrlc.xr`, the textures and their `.thm`, as
-//! the editor's `fsgame.ltx` names them) and the level folder's build files, and writes the level
-//! beside them. Its phases are the job's stage, its log lines go to the Output Log, its report -
+//! the editor's `fsgame.ltx` names them) - a texture the open project's texture asset publishes
+//! read from that asset first ([`asset_textures`]) - and the level folder's build files, and
+//! writes the level beside them. Its phases are the job's stage, its log lines go to the Output Log, its report -
 //! seconds per phase, the files, the warnings, the invalid faces - is the job's result.
 
 use std::path::PathBuf;
@@ -16,8 +17,23 @@ use parking_lot::Mutex;
 
 use gz_base::{Finding, Severity};
 use gz_editor::{Editor, JobCtx, JobError, json};
-use gz_lc::{Input, Log, Options, Sources};
+use gz_lc::{AssetTextures, Input, Log, Options, Sources};
 use gz_lc_light::{Ctl, Lighter, Report as Progress};
+use gz_media::Index;
+use gz_project::asset_kind::MediaKind;
+
+/// The textures the project's texture assets publish, by the name a surface gives: the
+/// description and the picture of the asset (`docs/ASSETS.md` section 6), what the compiler
+/// asks before the textures folder. Reads the asset when it is asked for. An excluded asset
+/// publishes nothing.
+#[must_use]
+pub fn asset_textures(root: PathBuf, index: Arc<Index>) -> AssetTextures {
+    AssetTextures(Arc::new(move |name: &str| {
+        let e = index.by_name(MediaKind::Texture, name)?;
+        let t = gz_media::resolve::texture(&root, e.path.as_str(), &e.name).ok()?;
+        Some((t.params, t.image))
+    }))
+}
 
 /// What a compile runs, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +115,13 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
     let lighter: Arc<dyn Lighter> = Arc::from(chosen.lighter);
     let on = lighter.name();
     let threads = editor.exec.cpu_pool().current_num_threads();
-    let sources = Sources::of_root(&editor.paths.root);
+    let mut sources = Sources::of_root(&editor.paths.root);
+    if editor.project_opt().is_some()
+        && let Ok(media) = gz_media::Media::of(editor).await
+    {
+        let index = media.fresh_index().await;
+        sources = sources.with_assets(asset_textures(media.root().to_path_buf(), index));
+    }
     editor.log.info(format!(
         "Compiling {} on {threads} threads, the light baked on {on}; data from {}.",
         req.level,
@@ -340,8 +362,62 @@ fn capital(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// An uncompressed 32-bit TGA, top-left first.
+    pub(crate) fn tga(w: u16, h: u16, bgra: [u8; 4]) -> Vec<u8> {
+        let mut out = vec![0u8, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        out.extend_from_slice(&w.to_le_bytes());
+        out.extend_from_slice(&h.to_le_bytes());
+        out.extend_from_slice(&[32, 0x28]);
+        for _ in 0..u32::from(w) * u32::from(h) {
+            out.extend_from_slice(&bgra);
+        }
+        out
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_surface_that_names_a_texture_asset_is_built_from_the_asset() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let put = |rel: &str, bytes: &[u8]| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        };
+        put("art\\wall.tga", &tga(4, 4, [30, 60, 120, 255]));
+        put("art\\wall.texasset", b"return { tex = 1, format = \"dxt5\" }\n");
+        put("wip\\old.tga", &tga(2, 2, [0, 0, 0, 255]));
+        put("wip\\old.texasset", b"return { tex = 1, name = \"od\\\\old\" }\n");
+        put("mod.ltx", b"[module]\nid = od\n[exclude]\nwip\n");
+        let assets = asset_textures(root.to_path_buf(), Arc::new(gz_media::scan(root)));
+        let (params, image) = (assets.0)("OD\\Wall").unwrap();
+        assert_eq!((image.width, image.height), (4, 4));
+        assert_eq!(params.fmt, gz_fmt_tex::TextureFormat::DXT5);
+        // excluded: no texture of the build
+        assert!((assets.0)("od\\old").is_none());
+        assert!((assets.0)("od\\none").is_none());
+
+        // the compiler's textures: the asset first, the folder (empty here) for the rest
+        let empty = root.join("no_textures");
+        let sources = Sources { game_data: empty.clone(), textures: empty, assets: None }.with_assets(assets);
+        let raw = gz_fmt_level::BuildTexture {
+            name: "od\\wall".into(),
+            width: 64,
+            height: 64,
+            has_alpha: 0,
+            reserve: 0,
+        };
+        let built = sources
+            .textures(std::slice::from_ref(&raw), gz_lc_light::TextureUse::Level { radiosity: false })
+            .unwrap();
+        assert!(built[0].has_surface && built[0].has_alpha);
+        assert_eq!((built[0].width, built[0].height), (4, 4));
+        let other = gz_fmt_level::BuildTexture { name: "od\\none".into(), ..raw };
+        assert!(sources.textures(&[other], gz_lc_light::TextureUse::Level { radiosity: false }).is_err());
+    }
 
     #[test]
     fn a_mark_is_read_once_into_a_level_and_dropped() {

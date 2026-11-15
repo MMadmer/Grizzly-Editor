@@ -58,31 +58,18 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use gz_game::version::words_of;
 use gz_project::DeleteContext;
 
 use crate::play_root::{self, MARKER, RootState};
 
-/// What of a game folder is its program: the engines a root is looked into for (the linked
-/// game's own first) and the libraries that state the engine's words.
-#[derive(Clone, Copy, Debug)]
-pub struct GamePrograms {
-    pub engines: &'static [&'static str],
-    /// The libraries beside the engine that implement its words, each stating them in its own
-    /// version resource: a word counts only when the engine and every one of them state it.
-    pub stating: &'static [&'static str],
-}
-
-/// Dead Air Refined's.
-pub const LINKED_GAME: GamePrograms = GamePrograms {
-    engines: &["xrEngine.exe", "Xr3DA.exe"],
-    stating: &["xrEngine.dll", "xrCore.dll", "xrGame.dll"],
-};
+pub use gz_game::version::{GamePrograms, LINKED_GAME, game_states};
 
 /// The engine's word for "started on another fs config, I write nothing into my folder and take
 /// the archives from that config's `$arch_dir$`".
-pub const IN_PLACE: &str = "fsltx-in-place";
+pub const IN_PLACE: &str = gz_game::version::words::IN_PLACE;
 /// The engine's word for "long-path aware, my paths take [`gz_game::version::LONG_PATH_LIMIT`]".
-pub const LONG_PATHS: &str = "long-paths";
+pub const LONG_PATHS: &str = gz_game::version::words::LONG_PATHS;
 
 /// What an engine says it can, from the version resources of the engine and of the libraries that
 /// implement its words: nothing is started to find out.
@@ -95,23 +82,8 @@ pub struct Ability {
     pub mixed: Vec<String>,
 }
 
-/// The words of a program's version resource; one that cannot be read says nothing.
-fn words_of(program: &Path) -> Vec<String> {
-    fs::read(program).map(|b| gz_game::version::engine_abilities(&b)).unwrap_or_default()
-}
-
 /// The engine's word for "I load pieces of a level beside the level".
-pub const PIECES: &str = "level-pieces";
-
-/// Whether the game in `game` states `word`: its engine and every library that implements its
-/// words say it (a library of an older build beside a newer engine does not). Reads the
-/// version resources. Blocking.
-#[must_use]
-pub fn game_states(game: &Path, programs: &GamePrograms, word: &str) -> bool {
-    let says = |p: &Path| words_of(p).iter().any(|w| w == word);
-    programs.engines.iter().map(|e| game.join(e)).find(|p| p.is_file()).is_some_and(|exe| says(&exe))
-        && programs.stating.iter().all(|l| says(&game.join(l)))
-}
+pub const PIECES: &str = gz_game::version::words::LEVEL_PIECES;
 
 /// [`Ability`] of the engine at `engine`, whose libraries that implement its words
 /// (`programs.stating`) lie in `game`: a word counts only when all of them state it, so a library of
@@ -966,6 +938,47 @@ pub fn stage_level(root: &Path, level: &str, level_dir: &Path, spawn: &Path) -> 
     Ok(m)
 }
 
+/// What the project's media assets publish (`docs/ASSETS.md` section 6: a texture, a sound, a
+/// dynamic model, baked and with their descriptions) staged into the root's gamedata where the
+/// module build would put them, so a level a Play stages without that build has its textures in
+/// the game. A file there - it may be a link to the game's own - is unlinked first, never
+/// written through; a baked file is a hard link to the project's cache where the volume allows.
+/// Only into a root Play made (its marker). Answers what was staged and the assets that could not
+/// be baked, a sentence each. Blocking.
+pub fn stage_media(root: &Path, project: &Path) -> Result<(Mirrored, Vec<String>), String> {
+    if !play_root::read_marker(root).is_some_and(|(_, entries)| entries.iter().any(|e| e == "gamedata")) {
+        return Err(format!("{} is not a Play root: its {MARKER} does not list gamedata.", root.display()));
+    }
+    let index = gz_media::scan(project);
+    let mut m = Mirrored::default();
+    let mut sink = |rel: &str, payload: gz_media::Payload| -> Result<(), String> {
+        let rel = rel.strip_prefix("gamedata\\").ok_or_else(|| format!("{rel} is not under gamedata"))?;
+        let to = root.join("gamedata").join(rel);
+        if let Some(dir) = to.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("{} could not be made: {e}", dir.display()))?;
+        }
+        clear_readonly(&to);
+        let _ = fs::remove_file(&to);
+        match payload {
+            gz_media::Payload::File(from) => {
+                if fs::hard_link(&from, &to).is_ok() {
+                    m.linked += 1;
+                } else {
+                    fs::copy(&from, &to).map_err(|e| format!("{rel} could not be staged: {e}"))?;
+                    m.copied += 1;
+                }
+            }
+            gz_media::Payload::Bytes(bytes) => {
+                fs::write(&to, bytes).map_err(|e| format!("{rel} could not be staged: {e}"))?;
+                m.copied += 1;
+            }
+        }
+        Ok(())
+    };
+    let done = gz_media::publish(project, &index, &mut sink);
+    Ok((m, done.problems))
+}
+
 /// The module a level's own pieces are staged as in a Play root.
 pub const PLAY_PIECES_MODULE: &str = "grizzly_play_level";
 
@@ -1088,6 +1101,36 @@ mod tests {
         fs::write(game.join("appdata").join("user.ltx"), b"vid_mode 800x600").unwrap();
         fs::write(game.join("appdata").join("savedgames").join("s.scop"), b"save").unwrap();
         game
+    }
+
+    #[test]
+    fn the_projects_media_are_staged_and_the_games_own_file_is_never_written_through() {
+        let base = tempfile::tempdir().unwrap();
+        let game = game(base.path());
+        let theirs = game.join("gamedata").join("textures").join("od");
+        fs::create_dir_all(&theirs).unwrap();
+        fs::write(theirs.join("wall.dds"), b"the game's own").unwrap();
+        let cx = DeleteContext::default();
+        let root = base.path().join("play");
+        prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap();
+        let project = base.path().join("project");
+        fs::create_dir_all(project.join("art")).unwrap();
+        fs::write(project.join("mod.ltx"), b"[module]\nid = od\n").unwrap();
+        fs::write(project.join("art").join("wall.tga"), crate::compile::tests::tga(4, 4, [1, 2, 3, 255]))
+            .unwrap();
+        fs::write(project.join("art").join("wall.texasset"), b"return { tex = 1 }\n").unwrap();
+        let (m, problems) = stage_media(&root, &project).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(m.linked + m.copied, 2);
+        let staged = root.join("gamedata").join("textures").join("od");
+        assert!(fs::read(staged.join("wall.dds")).unwrap().starts_with(b"DDS "));
+        assert_eq!(fs::read(staged.join("wall.texasset")).unwrap(), b"return { tex = 1 }\n");
+        assert_eq!(fs::read(theirs.join("wall.dds")).unwrap(), b"the game's own");
+        // the next Play mirrors the game again: its own file is back
+        prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap();
+        assert_eq!(fs::read(staged.join("wall.dds")).unwrap(), b"the game's own");
+        // only into a Play root
+        assert!(stage_media(&project, &project).is_err());
     }
 
     fn input<'a>(game: &'a Path, root: &'a Path, cx: &'a DeleteContext) -> PlayInput<'a> {

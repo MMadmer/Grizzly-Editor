@@ -13,7 +13,7 @@ use gz_base::{Finding, Problem, Severity};
 use gz_editor::{Editor, ProjectSession};
 use parking_lot::RwLock;
 
-use crate::walk::BuildWalk;
+use crate::walk::{BuildFile, BuildWalk, Sources};
 
 /// One area's check of the module before it is built.
 pub trait BuildCheck: Send + Sync {
@@ -41,11 +41,44 @@ pub trait BuildCheck: Send + Sync {
 pub type BakeHook =
     Arc<dyn Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, Vec<Finding>> + Send + Sync>;
 
+/// What the media assets make a build ship, without baking anything: what `mod.info` and the
+/// checks read.
+#[derive(Clone, Debug, Default)]
+pub struct MediaPlan {
+    /// The project files that never ship as they are: what the assets are made of.
+    pub sources: Sources,
+    /// The paths the build publishes, relative to the module's root (backslashes).
+    pub published: Vec<String>,
+}
+
+/// What the media assets publish into a build.
+#[derive(Clone, Debug, Default)]
+pub struct Publication {
+    pub sources: Sources,
+    /// The files, relative to the module's root, with where each comes from.
+    pub files: Vec<BuildFile>,
+    /// What stops the build: an asset that could not be baked, a sentence each naming it.
+    pub errors: Vec<String>,
+    /// What the build says beside its result.
+    pub warnings: Vec<String>,
+}
+
+/// The media assets' half of a build (`docs/ASSETS.md` section 6): the area that knows them
+/// registers it, the build asks it before it lists the files.
+pub trait MediaPublisher: Send + Sync {
+    /// What the build would publish, read from the assets' files alone.
+    fn plan(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> BoxFuture<'static, MediaPlan>;
+
+    /// Bakes what ships (cached in the project's `temp\media`) and answers the files.
+    fn publish(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> BoxFuture<'static, Publication>;
+}
+
 /// The checks of every area. Lives in `editor.services`.
 #[derive(Default)]
 pub struct BuildChecks {
     checks: RwLock<Vec<Arc<dyn BuildCheck>>>,
     bake: RwLock<Option<BakeHook>>,
+    media: RwLock<Option<Arc<dyn MediaPublisher>>>,
 }
 
 impl BuildChecks {
@@ -77,6 +110,15 @@ impl BuildChecks {
     #[must_use]
     pub fn bake(&self) -> Option<BakeHook> {
         self.bake.read().clone()
+    }
+
+    pub fn set_media(&self, media: Arc<dyn MediaPublisher>) {
+        *self.media.write() = Some(media);
+    }
+
+    #[must_use]
+    pub fn media(&self) -> Option<Arc<dyn MediaPublisher>> {
+        self.media.read().clone()
     }
 }
 

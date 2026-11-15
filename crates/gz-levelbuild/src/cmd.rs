@@ -618,6 +618,16 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
                     .await
                     .map_err(|e| CmdError::new("refused", e))?;
             }
+            // what the project's media assets publish, where the module build would put it
+            let (r3, project) = (root.root.clone(), session.root.clone());
+            let (_, unbaked) = ed
+                .exec
+                .io(move || crate::play::stage_media(&r3, &project))
+                .await
+                .map_err(|e| CmdError::new("refused", e))?;
+            for why in unbaked {
+                ed.log.warn(format!("Play: a media asset could not be published: {why}"));
+            }
             let params = format!("{PLAY_PARAMS} {}", place.params);
             if p.dry_run {
                 let mut v = dry_answer(&root, params.trim_end());

@@ -74,8 +74,14 @@ const ALLOWED: &[&str] = &[
     "behasset",
     "npcasset",
     "pdaasset",
+    "texasset",
+    "sndasset",
+    "meshasset",
     "xspawn",
     "xcform",
+    "cut",
+    "aiedit",
+    "aimap",
     "dds",
     "thm",
     "ogg",
@@ -574,6 +580,21 @@ mod tests {
         assert!(path_allowed("gamedata/configs/mod.ltx").is_ok());
         assert!(path_allowed("README").is_ok());
         assert!(path_allowed("Textures/A.DDS").is_ok());
+        // the media descriptions and the level's cuts, AI edits and AI map, as the game's list has them
+        for p in [
+            "gamedata/textures/od/wall.texasset",
+            "gamedata/sounds/od/hum.SndAsset",
+            "gamedata/meshes/od/crate.meshasset",
+            "levels/l01_escape/overlay.cut",
+            "levels/l01_escape/overlay.aiedit",
+            "levels/l01_escape/overlay.aimap",
+        ] {
+            assert!(path_allowed(p).is_ok(), "{p}");
+        }
+        assert_eq!(
+            path_allowed("models/wall.glb").unwrap_err(),
+            ".glb files are not allowed in a Mod Browser module"
+        );
         // program-files: in memory
         let refused = path_allowed("bin/evil.dll").unwrap_err();
         // program-files: in memory

@@ -227,24 +227,75 @@ impl HashCache {
     }
 }
 
-/// The library objects the scene's objects are made from, as one number over their files'
-/// contents. Blocking for an object the library has not read yet: off the UI thread.
+/// The library objects the scene's objects are made from, as one number over their contents,
+/// and the project's texture assets their surfaces name. An object read from a file has the
+/// file's bytes as its stamp, one made in memory (a model asset) the bytes of its asset and of
+/// everything its source is made of - and the library makes it again when one of those changes
+/// (the media area's watcher), so the stamp follows. The textures: [`library_stamp_with`] over
+/// the media assets of the project whose `rawdata\objects` is the library's first root (the
+/// scene's library is made so), read now. Blocking for an object the library has not read yet:
+/// off the UI thread.
 #[must_use]
 pub fn library_stamp(scene: &SceneState, lib: &gz_scene::library::Library) -> u64 {
-    let mut refs: Vec<&str> = scene
-        .objects
-        .values()
-        .filter_map(|o| match &o.data {
-            ObjData::SceneObject(d) => Some(d.reference.as_str()),
-            _ => None,
-        })
-        .collect();
+    let project = project_of(lib);
+    let index = project.as_deref().map(gz_media::scan);
+    library_stamp_with(scene, lib, index.as_ref().zip(project.as_deref()))
+}
+
+/// The project a scene's library belongs to: the folder two above its first root,
+/// `<project>\rawdata\objects`.
+fn project_of(lib: &gz_scene::library::Library) -> Option<std::path::PathBuf> {
+    let first = lib.roots().first()?;
+    let named = |p: &std::path::Path, n: &str| p.file_name().is_some_and(|f| f.eq_ignore_ascii_case(n));
+    let rawdata = first.parent()?;
+    (named(first, "objects") && named(rawdata, "rawdata"))
+        .then(|| rawdata.parent().map(std::path::Path::to_path_buf))?
+}
+
+/// [`library_stamp`] with the project's media assets given (`media`: the index and the
+/// project's folder): every texture a surface of the scene's objects names that a texture asset
+/// publishes adds its asset's text and picture, so a texture asset that changed makes the steps
+/// that compile and light with it stale. A scene that names no texture asset keeps the number
+/// it had before there were any.
+#[must_use]
+pub fn library_stamp_with(
+    scene: &SceneState,
+    lib: &gz_scene::library::Library,
+    media: Option<(&gz_media::Index, &std::path::Path)>,
+) -> u64 {
+    let mut refs: Vec<&str> = Vec::new();
+    let mut textures: Vec<String> = Vec::new();
+    for o in scene.objects.values() {
+        if let ObjData::SceneObject(d) = &o.data {
+            refs.push(d.reference.as_str());
+            textures.extend(d.surfaces.iter().map(|s| s.texture.to_lowercase()));
+        }
+    }
     refs.sort_unstable();
     refs.dedup();
     let mut h = Stable::new();
     for r in refs {
         h.str(r);
-        h.word(lib.load(r).map_or(0, |o| o.stamp));
+        match lib.load(r) {
+            Ok(o) => {
+                h.word(o.stamp);
+                textures.extend(o.object.surfaces.iter().map(|s| s.texture.to_lowercase()));
+            }
+            Err(_) => h.word(0),
+        }
+    }
+    if let Some((index, root)) = media {
+        textures.sort_unstable();
+        textures.dedup();
+        for t in textures.iter().filter(|t| !t.is_empty()) {
+            let Some(e) = index.by_name(gz_project::asset_kind::MediaKind::Texture, t) else { continue };
+            h.str("texture asset");
+            h.str(t);
+            for f in std::iter::once(&e.path).chain(&e.source).chain(&e.uses) {
+                h.str(f.as_str());
+                h.bytes(&std::fs::read(f.to_fs(root)).unwrap_or_default());
+            }
+        }
     }
     h.finish()
 }
@@ -411,6 +462,82 @@ pub fn changes(step: Step, was: &Objects, now: &Objects) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A project with a model asset of `parts` whose surface wears the texture asset `od\wall`,
+    /// and a scene that places it; the scene's library made as the scene service makes it.
+    #[allow(clippy::unwrap_used)]
+    fn project() -> (tempfile::TempDir, SceneState, gz_scene::library::Library) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let put = |rel: &str, bytes: &[u8]| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        };
+        put("mod.ltx", b"[module]\nid = od\n");
+        put("models\\crate.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        put("models\\crate.meshasset", b"return { mesh = 1, source = \"crate.obj\" }\n");
+        put(
+            "models\\wall.meshasset",
+            b"return {\n  mesh = 1,\n  parts = { { shape = \"box\", surface = \"brick\" } },\n  surfaces = { { name = \"brick\", texture = \"od\\\\wall\" } },\n}\n",
+        );
+        put("art\\wall.tga", &crate::compile::tests::tga(4, 4, [1, 2, 3, 255]));
+        put("art\\wall.texasset", b"return { tex = 1 }\n");
+        put("art\\other.tga", &crate::compile::tests::tga(4, 4, [1, 2, 3, 255]));
+        put("art\\other.texasset", b"return { tex = 1 }\n");
+        let lib = gz_scene::library::Library::new(vec![root.join("rawdata").join("objects")]);
+        lib.add_provider(gz_media::provider(root.clone()));
+        let mut scene = SceneState::default();
+        for (name, r) in [("crate_1", "models/crate.meshasset"), ("wall_1", "models/wall.meshasset")] {
+            let data = gz_scene::objects::SceneObjectData { reference: r.into(), ..Default::default() };
+            scene.insert(Object::new(ObjClass::SceneObject, name, ObjData::SceneObject(data)));
+        }
+        (dir, scene, lib)
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn the_stamp_follows_a_model_assets_source() {
+        let (dir, scene, lib) = project();
+        let first = library_stamp(&scene, &lib);
+        assert_eq!(library_stamp(&scene, &lib), first, "nothing changed");
+        std::fs::write(dir.path().join("models\\crate.obj"), b"v 0 0 0\nv 2 0 0\nv 0 1 0\nf 1 2 3\n")
+            .unwrap();
+        // what the media area's watcher does when the source changes
+        lib.forget("models/crate.meshasset");
+        let moved = library_stamp(&scene, &lib);
+        assert_ne!(moved, first);
+        // and the asset's own text
+        std::fs::write(
+            dir.path().join("models\\crate.meshasset"),
+            b"return { mesh = 1, source = \"crate.obj\", scale = 2 }\n",
+        )
+        .unwrap();
+        lib.forget("models/crate.meshasset");
+        assert_ne!(library_stamp(&scene, &lib), moved);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_texture_asset_a_surface_wears_makes_the_stamp_move_and_another_does_not() {
+        let (dir, scene, lib) = project();
+        let first = library_stamp(&scene, &lib);
+        // a texture no surface wears changes: nothing the steps read changed
+        std::fs::write(dir.path().join("art\\other.tga"), crate::compile::tests::tga(4, 4, [9, 9, 9, 255]))
+            .unwrap();
+        assert_eq!(library_stamp(&scene, &lib), first);
+        // the picture of the worn one
+        std::fs::write(dir.path().join("art\\wall.tga"), crate::compile::tests::tga(4, 4, [9, 9, 9, 255]))
+            .unwrap();
+        let picture = library_stamp(&scene, &lib);
+        assert_ne!(picture, first);
+        // its text
+        std::fs::write(dir.path().join("art\\wall.texasset"), b"return { tex = 1, mips = false }\n").unwrap();
+        assert_ne!(library_stamp(&scene, &lib), picture);
+        // a library that belongs to no project reads no texture asset: the number it always had
+        let bare = gz_scene::library::Library::new(Vec::new());
+        assert_eq!(library_stamp(&scene, &bare), library_stamp_with(&scene, &bare, None));
+    }
 
     #[test]
     fn the_hash_is_the_same_on_every_run() {

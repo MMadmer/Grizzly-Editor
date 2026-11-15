@@ -8,7 +8,9 @@
 //! - [`check`] - [`BuildCheck`]: what an area that knows quests, characters, the PDA or the
 //!   screens registers in [`BuildChecks`] (`editor.services`); the build runs them in parallel
 //!   after the manifest's own check, and an `Error` stops it. [`BuildChecks::set_bake`] is the
-//!   scene's bake that runs first.
+//!   scene's bake that runs first; [`BuildChecks::set_media`] the media assets' publisher
+//!   ([`MediaPublisher`]): what they are made of never ships where it lies, what they bake is
+//!   added to the walk ([`BuildWalk::publish`]).
 //! - [`target`] - where a build goes and the refusals made before a folder of it is created:
 //!   inside the game's gamedata, a link, a target that is / holds / sits in the project.
 //! - [`install`] - the clean build written beside the last one in `<target>\modules\.new\<id>`
@@ -28,7 +30,7 @@ pub mod job;
 pub mod target;
 pub mod walk;
 
-pub use check::{BakeHook, BuildCheck, BuildChecks, problem_line};
+pub use check::{BakeHook, BuildCheck, BuildChecks, MediaPlan, MediaPublisher, Publication, problem_line};
 pub use cmd::{BuildTarget, WindowBuilds, build_answer, register};
 pub use job::{BuildKind, BuildRequest, BuildResult, BuildStatus, Builds, CleanQuestion, run_build};
-pub use walk::{BuildFile, BuildWalk, LeftOut, LeftOutReason, WalkScope};
+pub use walk::{BuildFile, BuildWalk, FileFrom, LeftOut, LeftOutReason, Sources, WalkScope, source_key};
