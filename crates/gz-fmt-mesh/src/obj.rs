@@ -3,8 +3,8 @@
 //! OBJ is right-handed with +Y up, like glTF, and takes the same change into the game's space:
 //! Z negated, every face's winding reversed, so an outline seen from above keeps its shape and
 //! turn. Its v runs up, the game's down: v becomes `1 - v`. A polygon of more than three corners
-//! is a fan from its first corner, which is exact for every convex polygon and for any polygon
-//! whose first corner sees all the others.
+//! is cut into ears along its outline, so a concave face is filled where it is; one without area
+//! or that crosses itself is a fan from its first corner.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -196,10 +196,11 @@ pub(crate) fn from_text(text: &str, dir: &Path, default_name: &str) -> Result<Me
                     ));
                 }
                 let soup = soups.last_mut().ok_or_else(|| "no mesh to add to".to_owned())?;
-                // a fan from the first corner, each triangle turned the game's way
-                for i in 1..corners.len() - 1 {
+                // ears cut off the outline, each triangle turned the game's way
+                let outline: Vec<Vec3> = corners.iter().map(|c| c.pos).collect();
+                for [a, b, c] in ears(&outline) {
                     soup.tris.push(Tri {
-                        c: [corners[0].clone(), corners[i + 1].clone(), corners[i].clone()],
+                        c: [corners[a].clone(), corners[c].clone(), corners[b].clone()],
                         surface,
                         group,
                     });
@@ -254,4 +255,135 @@ fn picture_of(path: &Path, pictures: &mut Vec<SourcePicture>) -> usize {
         data: PictureData::File(path.to_owned()),
     });
     pictures.len() - 1
+}
+
+/// A polygon's triangles as indices of its corners, in the polygon's own winding: ears cut off
+/// its outline as seen along its normal, so a concave face is filled where it is and nowhere
+/// else. A polygon without area, or one that crosses itself, is a fan from its first corner.
+fn ears(points: &[Vec3]) -> Vec<[usize; 3]> {
+    let n = points.len();
+    let fan = || (1..n.saturating_sub(1)).map(|i| [0, i, i + 1]).collect::<Vec<_>>();
+    if n <= 3 {
+        return fan();
+    }
+    // Newell's normal, then the plane it is longest on
+    let mut normal = [0.0f64; 3];
+    for i in 0..n {
+        let (a, b) = (points[i], points[(i + 1) % n]);
+        let (a, b) = (
+            [f64::from(a.x), f64::from(a.y), f64::from(a.z)],
+            [f64::from(b.x), f64::from(b.y), f64::from(b.z)],
+        );
+        normal[0] += (a[1] - b[1]) * (a[2] + b[2]);
+        normal[1] += (a[2] - b[2]) * (a[0] + b[0]);
+        normal[2] += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    let longest = (0..3).max_by(|i, j| normal[*i].abs().total_cmp(&normal[*j].abs())).unwrap_or(1);
+    if normal[longest].abs() < 1e-12 {
+        return fan();
+    }
+    let (u, v) = match longest {
+        0 => (1, 2),
+        1 => (2, 0),
+        _ => (0, 1),
+    };
+    let flat: Vec<[f64; 2]> = points
+        .iter()
+        .map(|p| {
+            let p = [f64::from(p.x), f64::from(p.y), f64::from(p.z)];
+            [p[u], p[v]]
+        })
+        .collect();
+    let cross =
+        |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    let sign = normal[longest].signum();
+    // a point strictly inside a triangle wound the polygon's way
+    let inside = |q: [f64; 2], a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        cross(a, b, q) * sign > 1e-12 && cross(b, c, q) * sign > 1e-12 && cross(c, a, q) * sign > 1e-12
+    };
+    let mut left: Vec<usize> = (0..n).collect();
+    let mut out = Vec::with_capacity(n - 2);
+    while left.len() > 3 {
+        let m = left.len();
+        let ear = (0..m).find(|&k| {
+            let (i0, i1, i2) = (left[(k + m - 1) % m], left[k], left[(k + 1) % m]);
+            cross(flat[i0], flat[i1], flat[i2]) * sign > 1e-12
+                && !left
+                    .iter()
+                    .any(|&j| j != i0 && j != i1 && j != i2 && inside(flat[j], flat[i0], flat[i1], flat[i2]))
+        });
+        let Some(k) = ear else {
+            // corners on one line are no ears: drop one and go on; nothing to drop means the
+            // outline crosses itself
+            let line = (0..m).find(|&k| {
+                cross(flat[left[(k + m - 1) % m]], flat[left[k]], flat[left[(k + 1) % m]]).abs() <= 1e-12
+            });
+            match line {
+                Some(k) => {
+                    left.remove(k);
+                    continue;
+                }
+                None => return fan(),
+            }
+        };
+        out.push([left[(k + m - 1) % m], left[k], left[(k + 1) % m]]);
+        left.remove(k);
+    }
+    if left.len() == 3 {
+        out.push([left[0], left[1], left[2]]);
+    }
+    out
+}
+
+#[cfg(test)]
+mod ear_tests {
+    use super::*;
+
+    fn area(points: &[Vec3], tris: &[[usize; 3]]) -> f32 {
+        tris.iter()
+            .map(|t| (points[t[1]] - points[t[0]]).cross(points[t[2]] - points[t[0]]).length() * 0.5)
+            .sum()
+    }
+
+    #[test]
+    fn a_concave_polygon_is_filled_where_it_is() {
+        // a U seen from above: a 3 x 3 square with a notch of 1 x 2 cut into its far side
+        let u: Vec<Vec3> = [(0, 0), (3, 0), (3, 3), (2, 3), (2, 1), (1, 1), (1, 3), (0, 3)]
+            .iter()
+            .map(|(x, z)| Vec3::new(*x as f32, 0.0, *z as f32))
+            .collect();
+        let tris = ears(&u);
+        assert_eq!(tris.len(), u.len() - 2);
+        assert!((area(&u, &tris) - 7.0).abs() < 1e-4, "{}", area(&u, &tris));
+        // no triangle lies in the notch: its middle (1.5, 2) is in none
+        let notch = Vec3::new(1.5, 0.0, 2.0);
+        for t in &tris {
+            let (a, b, c) = (u[t[0]], u[t[1]], u[t[2]]);
+            let s = |p: Vec3, q: Vec3| (q.x - p.x) * (notch.z - p.z) - (q.z - p.z) * (notch.x - p.x);
+            let (d0, d1, d2) = (s(a, b), s(b, c), s(c, a));
+            assert!(!(d0 > 0.0 && d1 > 0.0 && d2 > 0.0) && !(d0 < 0.0 && d1 < 0.0 && d2 < 0.0), "{t:?}");
+        }
+        // every triangle keeps the polygon's winding
+        let n0 = (u[1] - u[0]).cross(u[2] - u[0]);
+        assert!(tris.iter().all(|t| (u[t[1]] - u[t[0]]).cross(u[t[2]] - u[t[0]]).dot(n0) > 0.0));
+        // the same outline the other way round, and standing upright
+        let back: Vec<Vec3> = u.iter().rev().copied().collect();
+        assert!((area(&back, &ears(&back)) - 7.0).abs() < 1e-4);
+        let wall: Vec<Vec3> = u.iter().map(|p| Vec3::new(p.x, p.z, 5.0)).collect();
+        assert!((area(&wall, &ears(&wall)) - 7.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_convex_polygon_a_triangle_and_a_flat_line_are_still_triangles() {
+        let quad = [Vec3::ZERO, Vec3::X, Vec3::new(1.0, 0.0, 1.0), Vec3::Z];
+        assert!((area(&quad, &ears(&quad)) - 1.0).abs() < 1e-5);
+        let tri = [Vec3::ZERO, Vec3::X, Vec3::Z];
+        assert_eq!(ears(&tri), vec![[0, 1, 2]]);
+        // four corners on one line: a fan of nothing worth, and no panic
+        let line = [Vec3::ZERO, Vec3::X, Vec3::X * 2.0, Vec3::X * 3.0];
+        assert_eq!(ears(&line).len(), 2);
+        // a point on an edge of a square: still the square's area
+        let five = [Vec3::ZERO, Vec3::new(0.5, 0.0, 0.0), Vec3::X, Vec3::new(1.0, 0.0, 1.0), Vec3::Z];
+        assert!((area(&five, &ears(&five)) - 1.0).abs() < 1e-5);
+    }
 }
