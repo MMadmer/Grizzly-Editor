@@ -6,7 +6,7 @@ use crate::library::Library;
 use crate::math::{Aabb, EPS_L, EPS_S, Mat4, Vec3, clip_triangle_xz, normal_align, rotation_matrix};
 use crate::model::{ObjId, SceneState};
 use crate::objects;
-use crate::pick::{ScenePick, box_triangles, ray_scene_objects};
+use crate::pick::{RayFilter, RayKinds, ScenePick, box_triangles, ray_scene};
 
 pub const DROP_REACH: f32 = 1000.0;
 
@@ -18,7 +18,7 @@ pub struct Landing {
     pub rotation: Option<Vec3>,
 }
 
-/// Every object of `batch` settled on the scene objects under it - the
+/// Every object of `batch` settled on the scene objects and terrains under it - the
 /// whole box swept down (`line == false`, every triangle in the column clipped to the
 /// footprint, the tallest point wins) or one ray from the pivot (`line == true`).
 #[must_use]
@@ -31,8 +31,11 @@ pub fn drop_to_ground(
     line: bool,
 ) -> Vec<Landing> {
     let local = |r: &str| lib.cached(r).map(|o| o.bounds);
+    // what a thing can stand on: objects and terrains (the ground a terrain cuts is read as
+    // its cut model, so nothing lands on ground that is no longer there)
     let candidates: Vec<(ObjId, Aabb)> = state
         .of_class(ObjClass::SceneObject)
+        .chain(state.of_class(ObjClass::Terrain))
         .filter(|o| o.flags.visible && !batch.contains(&o.id))
         .filter_map(|o| objects::world_box(state, o, &local).map(|b| (o.id, b)))
         .collect();
@@ -59,9 +62,8 @@ pub fn drop_to_ground(
         let mut normal = Vec3::Y;
         if line {
             let start = obj.position() + Vec3::new(0.0, EPS_L, 0.0);
-            if let Some(hit) =
-                ray_scene_objects(pick, state, lib, start, Vec3::NEG_Y, DROP_REACH, Some(&floor))
-            {
+            let filter = RayFilter { kinds: RayKinds::Meshes, only: Some(&floor), except: &[] };
+            if let Some(hit) = ray_scene(pick, state, lib, start, Vec3::NEG_Y, DROP_REACH, &filter) {
                 drop = obj.position().y - hit.point.y;
                 if let Some(n) = hit.normal.filter(|n| n.is_finite()) {
                     normal = n;

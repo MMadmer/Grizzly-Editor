@@ -698,6 +698,38 @@ mod tests {
         assert!(found[0].text.starts_with("Yard's border stands 3.00 m off the ground"), "{}", found[0].text);
     }
 
+    /// A thing dropped over a terrain lands on the terrain - with the ground under it cut away
+    /// and without.
+    #[test]
+    fn a_thing_dropped_over_a_terrain_lands_on_it() {
+        for cut in [false, true] {
+            let mut state = scene(cut);
+            // a square of one metre, five metres up over the middle of the yard
+            let mut thing = Object::new(
+                ObjClass::SceneObject,
+                "thing",
+                ObjData::SceneObject(SceneObjectData::library("ground\\flat")),
+            );
+            thing.xform.position = Vec3::new(0.0, 5.0, 0.0);
+            thing.xform.scale = Vec3::splat(0.01);
+            thing.marks.authored = true;
+            let id = state.insert(thing);
+            let terrains = Arc::new(Terrains::default());
+            let lib = library(&state, &terrains);
+            let pick = ScenePick::build(&state, &lib);
+            for line in [false, true] {
+                let landed = crate::landing::drop_to_ground(&state, &lib, &pick, &[id], false, line);
+                assert_eq!(landed.len(), 1, "cut {cut}, line {line}");
+                // the yard is flattened to 2 m at its middle
+                assert!(
+                    (landed[0].position.y - 2.0).abs() < 0.02,
+                    "cut {cut}, line {line}: {:?}",
+                    landed[0].position
+                );
+            }
+        }
+    }
+
     fn scene(cut: bool) -> SceneState {
         let mut s = SceneState::default();
         s.insert(Object::new(
