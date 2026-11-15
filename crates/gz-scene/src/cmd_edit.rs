@@ -265,13 +265,22 @@ async fn drop_ids(
     offset: f32,
     o: Origin,
 ) -> Result<Vec<ObjId>, CmdError> {
-    let snap = svc.store.snapshot();
-    svc.prefetch_library(ed, &snap).await;
-    let (snap, pick) = svc.pick().await;
-    let lib = svc.library.clone();
+    // the models are read without loading: when one was forgotten while the drop was worked out
+    // (the library's revision moved), it is worked out again over what is loaded then
     let ids = ids.to_vec();
-    let s = snap.clone();
-    let landings = ed.exec.cpu(move || drop_to_ground(&s, &lib, &pick, &ids, align, line)).await;
+    let mut landings = Vec::new();
+    for _ in 0..3 {
+        let snap = svc.store.snapshot();
+        svc.prefetch_library(ed, &snap).await;
+        let (snap, pick) = svc.pick().await;
+        let lib = svc.library.clone();
+        let rev = lib.rev();
+        let (s, batch, l2) = (snap.clone(), ids.clone(), lib.clone());
+        landings = ed.exec.cpu(move || drop_to_ground(&s, &l2, &pick, &batch, align, line)).await;
+        if lib.rev() == rev {
+            break;
+        }
+    }
     if landings.is_empty() {
         return Ok(Vec::new());
     }

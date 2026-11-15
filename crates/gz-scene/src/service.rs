@@ -232,7 +232,7 @@ impl SceneService {
     /// Loads every library object the scene names, on the IO pool: its scene objects' and its
     /// detail objects'.
     pub async fn prefetch_library(&self, editor: &Editor, state: &SceneState) {
-        prefetch_into(editor, self.library.clone(), state).await;
+        prefetch_into(editor, self.library.clone(), state, Some(self.terrains.clone())).await;
     }
 
     /// The library a long job reads: every model the scene names loaded, in a library of the
@@ -248,14 +248,21 @@ impl SceneService {
             Arc::downgrade(&own),
         ));
         // what was forgotten between the load and the fork is read into the job's own
-        prefetch_into(editor, own.clone(), state).await;
+        prefetch_into(editor, own.clone(), state, None).await;
         own
     }
 }
 
 /// Loads into `lib` every model `state` names - the scene objects', the detail objects', the
-/// terrains' and the cut ground's - on the IO pool.
-async fn prefetch_into(editor: &Editor, lib: Arc<Library>, state: &SceneState) {
+/// terrains' and the cut ground's - on the IO pool. With `settle` (the open scene's library) a
+/// terrain or a cut model made for an earlier state of the scene is made again first: whoever
+/// asks reads the scene as it is now, not as it was until the terrains' own follow-up caught up.
+async fn prefetch_into(
+    editor: &Editor,
+    lib: Arc<Library>,
+    state: &SceneState,
+    settle: Option<Arc<crate::objects::terrain::Terrains>>,
+) {
     let mut refs: Vec<SmolStr> = state
         .objects
         .values()
@@ -280,6 +287,9 @@ async fn prefetch_into(editor: &Editor, lib: Arc<Library>, state: &SceneState) {
                 lib.prefetch(&refs);
                 // the terrains' meshes and the cut ground, once their ground is loaded
                 if let Some(s) = state {
+                    if let Some(made) = &settle {
+                        made.refresh(&s, &lib);
+                    }
                     lib.prefetch(&crate::objects::terrain::references(&s, &lib));
                 }
             })

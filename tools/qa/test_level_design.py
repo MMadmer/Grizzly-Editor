@@ -732,8 +732,13 @@ def phase_g() -> None:
     probe = cmd("scene.place", kind="object", ref=BARREL, name="qa_on_terrain", position=[x, FLAT + 3, z])
     dropped = cmd("scene.align", action="drop", objects=["qa_on_terrain"])
     landed = (dropped.get("objects") or [{}])[0]
-    check(probe.get("ok") and dropped.get("landed") == 1 and near((landed.get("position") or [0, 0])[1], FLAT, 0.02),
-          "G scene.align drop lands an object on the terrain (%.2f m)" % FLAT, short(dropped))
+    if not check(probe.get("ok") and dropped.get("landed") == 1 and near((landed.get("position") or [0, 0])[1], FLAT, 0.02),
+                 "G scene.align drop lands an object on the terrain (%.2f m)" % FLAT, short(dropped)):
+        # what was under it, as the editor answers now
+        print("  under it: " + short(cmd("scene.query", action="ray", **{"from": [x, FLAT + 2.9, z], "direction": [0, -1, 0], "all": True}), 900))
+        print("  the object: " + short(cmd("scene.get", objects=["qa_on_terrain"], keys=["authored"]), 600))
+        print("  the terrain: " + short(cmd("scene.audit", objects=[TERRAIN_NAME]), 600))
+        print("  again: " + short(cmd("scene.align", action="drop", objects=["qa_on_terrain"]), 600))
     cmd("scene.delete", objects=["qa_on_terrain"])
     audit = cmd("scene.audit", objects=[TERRAIN_NAME])
     check(audit.get("ok") and not [p for p in audit.get("problems") or [] if p.get("code") == "S211"],
