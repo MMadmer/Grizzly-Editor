@@ -306,22 +306,28 @@ fn pack_visual(layers: &[&LmLayer]) -> Option<Packed> {
     (used_w <= SIDE && used_h <= SIDE).then_some((used_w as u32, used_h as u32, spots, texels))
 }
 
-/// A page's skyline: its columns' heights as runs `(x, y, w)` from left to right.
+/// A page's skyline: its columns' heights as runs `(x, y, w)` from left to right, and the page's
+/// side.
 #[derive(Clone, Debug)]
-struct Skyline(Vec<(u32, u32, u32)>);
+struct Skyline(Vec<(u32, u32, u32)>, u32);
 
 impl Default for Skyline {
     fn default() -> Self {
-        Self(vec![(0, 0, LMAP_SIZE)])
+        Self::of(LMAP_SIZE)
     }
 }
 
 impl Skyline {
+    /// The skyline of an empty page of `side` texels.
+    fn of(side: u32) -> Self {
+        Self(vec![(0, 0, side)], side)
+    }
+
     /// The lowest place a `w` x `h` rectangle fits, the leftmost of equal ones.
     fn find(&self, w: u32, h: u32) -> Option<(u32, u32)> {
         let mut best: Option<(u32, u32)> = None;
         for (i, &(x, _, _)) in self.0.iter().enumerate() {
-            if x + w > LMAP_SIZE {
+            if x + w > self.1 {
                 break;
             }
             let mut y = 0;
@@ -331,7 +337,7 @@ impl Skyline {
                 }
                 y = y.max(sy);
             }
-            if y + h <= LMAP_SIZE && best.is_none_or(|(by, bx)| (y, x) < (by, bx)) {
+            if y + h <= self.1 && best.is_none_or(|(by, bx)| (y, x) < (by, bx)) {
                 best = Some((y, x));
             }
         }
@@ -411,16 +417,23 @@ pub fn pack_lightmaps(
     lightmaps: &mut Vec<Lightmap>,
     ctl: &Ctl<'_>,
 ) -> Result<(Vec<LightmapPage>, PackReport)> {
-    pack_grouped(defls, visuals, None, mesh, lightmaps, ctl).map(|(pages, report, _)| (pages, report))
+    pack_grouped(defls, visuals, None, u32::MAX, mesh, lightmaps, ctl)
+        .map(|(pages, report, _)| (pages, report))
 }
 
 /// [`pack_lightmaps`] with the visuals in groups (`groups[i]` the group of visual `i`; `None`: one
 /// group): a page holds the charts of one group, and every group's pages are numbered from 1 in
 /// the order they are opened (one group: the pages' order). Answers the group of every page too.
+///
+/// A group from `small_from` on is a piece of a level, whose pages are its own: when everything
+/// it holds fits one page of a smaller side (a power of two from [`SMALLEST_PAGE`]), that is its
+/// page - a cell of a few walls does not carry a whole page for them. The level's own group, and
+/// any group that needs more than one page, has whole pages.
 pub fn pack_grouped(
     defls: &mut Deflectors,
     visuals: &[Vec<DeflId>],
     groups: Option<&[u32]>,
+    small_from: u32,
     mesh: &mut Mesh,
     lightmaps: &mut Vec<Lightmap>,
     ctl: &Ctl<'_>,
@@ -481,6 +494,8 @@ pub fn pack_grouped(
         }
     }
     blocks.sort_by_key(|b| (std::cmp::Reverse(u64::from(b.w) * u64::from(b.h)), b.visual));
+    let sides = small_sides(&blocks, small_from);
+    let side_of = |group: u32| sides.iter().find(|(g, _)| *g == group).map_or(LMAP_SIZE, |(_, s)| *s);
 
     ctl.stage("the visuals into pages");
     // per page: its group, its skyline, its number in the group
@@ -500,7 +515,7 @@ pub fn pack_grouped(
         let (page, (x, y)) = match found {
             Some(f) => f,
             None => {
-                let s = Skyline::default();
+                let s = Skyline::of(side_of(b.group));
                 let at = s.find(b.w, b.h).ok_or_else(|| {
                     LcError::Invalid(format!("A lightmap of {} x {} texels does not fit a page.", b.w, b.h))
                 })?;
@@ -519,13 +534,14 @@ pub fn pack_grouped(
     }
     ctl.check()?;
 
+    let page_side = |p: usize| skylines.get(p).map_or(LMAP_SIZE, |s| s.1.1);
     // the faces' coordinates in their pages, one chart after another
     ctl.stage("capturing the charts");
     let first = lightmaps.len();
     for (p, list) in placed.iter().enumerate() {
         for &(d, s) in list {
             if let Some(defl) = defls.get(d) {
-                capture_faces(defl, mesh, (first + p) as u32, s);
+                capture_faces(defl, mesh, (first + p) as u32, s, page_side(p));
             }
         }
     }
@@ -537,11 +553,12 @@ pub fn pack_grouped(
         .par_iter()
         .enumerate()
         .map(|(p, list)| {
+            let side = page_side(p);
             let mut lmap = Lightmap::default();
-            lmap.lm.create(LMAP_SIZE, LMAP_SIZE);
+            lmap.lm.create(side, side);
             for &(d, s) in list {
                 if let Some(defl) = defls_ref.get(d) {
-                    lmap.blit_chart(defl, s);
+                    lmap.blit_chart(defl, s, side);
                 }
             }
             let number = numbers.get(p).copied().unwrap_or(p as u32) as usize;
@@ -551,8 +568,8 @@ pub fn pack_grouped(
         .collect();
     ctl.check()?;
     report.pages = pages.len();
-    report.fill =
-        if pages.is_empty() { 0.0 } else { texels as f64 / (pages.len() as f64 * (SIDE * SIDE) as f64) };
+    let room: f64 = (0..pages.len()).map(|p| f64::from(page_side(p)) * f64::from(page_side(p))).sum();
+    report.fill = if pages.is_empty() { 0.0 } else { texels as f64 / room };
     let mut out = Vec::with_capacity(pages.len());
     for (l, p) in pages {
         lightmaps.push(l);
@@ -563,14 +580,14 @@ pub fn pack_grouped(
 }
 
 /// The chart's faces get their page and their coordinates in it (a channel each).
-fn capture_faces(d: &Deflector, mesh: &mut Mesh, page: u32, s: Spot) {
+fn capture_faces(d: &Deflector, mesh: &mut Mesh, page: u32, s: Spot, side: u32) {
     let tris = d.remap_uv_into(
         s.x + BORDER,
         s.y + BORDER,
         s.w.saturating_sub(2 * BORDER),
         s.h.saturating_sub(2 * BORDER),
-        LMAP_SIZE,
-        LMAP_SIZE,
+        side,
+        side,
         s.rotated,
     );
     for t in &tris {
@@ -583,15 +600,52 @@ fn capture_faces(d: &Deflector, mesh: &mut Mesh, page: u32, s: Spot) {
 
 impl Lightmap {
     /// The chart's texels copied in where it lies, turned a quarter when it is.
-    fn blit_chart(&mut self, d: &Deflector, s: Spot) {
+    fn blit_chart(&mut self, d: &Deflector, s: Spot, side: u32) {
         let l = &d.layer;
         let (real_w, real_h) = (l.width + 2 * BORDER, l.height + 2 * BORDER);
         if s.rotated {
-            blit_r(&mut self.lm, LMAP_SIZE, LMAP_SIZE, l, real_w, real_h, s.x, s.y, 254 - BORDER);
+            blit_r(&mut self.lm, side, side, l, real_w, real_h, s.x, s.y, 254 - BORDER);
         } else {
-            blit(&mut self.lm, LMAP_SIZE, LMAP_SIZE, l, real_w, real_h, s.x, s.y, 254 - BORDER);
+            blit(&mut self.lm, side, side, l, real_w, real_h, s.x, s.y, 254 - BORDER);
         }
     }
+}
+
+/// The smallest side a piece's page has.
+pub const SMALLEST_PAGE: u32 = 64;
+
+/// For every group from `small_from` on whose blocks all fit ONE page smaller than a whole one:
+/// the group and that page's side, the smallest power of two that holds them placed in the
+/// blocks' order by the skyline - the very placement the packing then makes.
+fn small_sides(blocks: &[Block], small_from: u32) -> Vec<(u32, u32)> {
+    let mut groups: Vec<u32> = blocks.iter().map(|b| b.group).filter(|g| *g >= small_from).collect();
+    groups.sort_unstable();
+    groups.dedup();
+    let mut out = Vec::new();
+    for g in groups {
+        let mine = || blocks.iter().filter(|b| b.group == g);
+        let area: u64 = mine().map(|b| u64::from(b.w) * u64::from(b.h)).sum();
+        let longest = mine().map(|b| b.w.max(b.h)).max().unwrap_or(0);
+        let mut side = SMALLEST_PAGE;
+        while side < LMAP_SIZE {
+            if side >= longest && u64::from(side) * u64::from(side) >= area {
+                let mut s = Skyline::of(side);
+                let all = mine().all(|b| match s.find(b.w, b.h) {
+                    Some((x, y)) => {
+                        s.add(x, y, b.w, b.h);
+                        true
+                    }
+                    None => false,
+                });
+                if all {
+                    out.push((g, side));
+                    break;
+                }
+            }
+            side *= 2;
+        }
+    }
+    out
 }
 
 /// Every deflector on the list packed as a visual of its own, in the list's order: what a build
@@ -667,6 +721,33 @@ mod tests {
         let s = Shape::of(&lit(80, 2), false);
         r.put(&s, 70, 0);
         assert!(!r.fits(&s, 0, 0) && !r.fits(&s, 149, 1) && r.fits(&s, 152, 0) && r.fits(&s, 0, 4));
+    }
+
+    /// A piece's page is the smallest power of two that holds everything of the piece in one page;
+    /// the level's own group and a group that needs more than a page keep whole pages.
+    #[test]
+    fn a_small_group_gets_the_smallest_page_that_holds_it() {
+        let block = |group: u32, w: u32, h: u32| Block { visual: 0, group, w, h, charts: Vec::new() };
+        let blocks = [
+            block(0, 30, 30),
+            block(1, 30, 30),
+            block(1, 30, 30),
+            block(2, 300, 200),
+            block(2, 200, 200),
+            block(3, 600, 600),
+            block(3, 600, 600),
+            block(3, 600, 600),
+            block(4, 65, 10),
+        ];
+        // the level's own group is no piece
+        assert_eq!(small_sides(&blocks, 1), [(1, 64), (2, 512), (4, 128)]);
+        assert_eq!(small_sides(&blocks, 0).first(), Some(&(0, 64)));
+        assert!(small_sides(&blocks, u32::MAX).is_empty());
+        // a page of a side holds nothing wider or taller than itself
+        let s = Skyline::of(64);
+        assert_eq!(s.find(64, 64), Some((0, 0)));
+        assert_eq!(s.find(65, 1), None);
+        assert_eq!(s.find(1, 65), None);
     }
 
     #[test]

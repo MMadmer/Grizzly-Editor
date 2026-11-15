@@ -252,17 +252,20 @@ impl LcGlobalData {
     /// [`Self::pack_lightmaps`] with every visual in a group (`groups[i]` the group of visual `i`):
     /// the visuals of one group share pages that hold no other group's, and every group's pages
     /// are numbered from 1 (`lmap#1`), as each lies in a folder of its own. Answers each page's
-    /// group beside the pages.
+    /// group beside the pages. A group from `small_from` on is a piece: it gets the smallest page
+    /// that holds it when one page does.
     pub fn pack_lightmaps_grouped(
         &mut self,
         visuals: &[Vec<DeflId>],
         groups: &[u32],
+        small_from: u32,
         ctl: &Ctl<'_>,
     ) -> Result<(Vec<(u32, LightmapPage)>, PackReport)> {
         let (pages, report, of_page) = crate::lightmap::pack_grouped(
             &mut self.deflectors,
             visuals,
             Some(groups),
+            small_from,
             &mut self.mesh,
             &mut self.lightmaps,
             ctl,

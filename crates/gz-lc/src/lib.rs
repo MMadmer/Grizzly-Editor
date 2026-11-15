@@ -540,8 +540,10 @@ pub fn compile_project(
             (pages.into_iter().map(|p| (None, p)).collect(), packed)
         }
         Layout::Piece => {
-            let (pages, packed) = g.pack_lightmaps(&charts, ctl)?;
-            (pages.into_iter().map(|p| (Some(PIECE_NAME.to_owned()), p)).collect(), packed)
+            // a piece's pages are its own: the smallest that holds it
+            let groups = vec![0u32; charts.len()];
+            let (pages, packed) = g.pack_lightmaps_grouped(&charts, &groups, 0, ctl)?;
+            (pages.into_iter().map(|(_, p)| (Some(PIECE_NAME.to_owned()), p)).collect(), packed)
         }
         Layout::Cells(_) => {
             let mut cells: Vec<[i32; 2]> = places
@@ -560,7 +562,8 @@ pub fn compile_project(
                     _ => 0,
                 })
                 .collect();
-            let (pages, packed) = g.pack_lightmaps_grouped(&charts, &groups, ctl)?;
+            // the base keeps whole pages, a cell the smallest that holds it
+            let (pages, packed) = g.pack_lightmaps_grouped(&charts, &groups, 1, ctl)?;
             let folder =
                 |grp: u32| grp.checked_sub(1).and_then(|k| cells.get(k as usize)).map(|c| cell_name(*c));
             (pages.into_iter().map(|(grp, p)| (folder(grp), p)).collect(), packed)
