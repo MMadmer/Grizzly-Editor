@@ -79,7 +79,8 @@ pub(crate) async fn inputs(editor: &Arc<Editor>, ctx: &JobCtx) -> Result<Inputs,
         return Err(JobError::new("No scene is open."));
     }
     ctx.stage("Loading the library objects");
-    svc.prefetch_library(editor, &snap).await;
+    // a library of the build's own: every step reads the models as they were loaded here
+    let lib = svc.library_for(editor, &snap).await;
     ctx.check()?;
     ctx.stage("Reading the engine libraries");
     let read = |rel: &'static str| {
@@ -90,7 +91,7 @@ pub(crate) async fn inputs(editor: &Arc<Editor>, ctx: &JobCtx) -> Result<Inputs,
     let engine =
         Arc::new(editor.exec.cpu(move || Engine::read(sh.as_deref(), xr.as_deref(), gm.as_deref())).await);
     let settings = gz_scene::game::settings(editor).await;
-    Ok(Inputs { snap, lib: svc.library.clone(), engine, settings })
+    Ok(Inputs { snap, lib, engine, settings })
 }
 
 pub(crate) fn sync_settings(s: &Option<Arc<gz_scene::game::GameSettings>>) -> Option<&(dyn Settings + Sync)> {

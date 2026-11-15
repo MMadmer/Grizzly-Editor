@@ -225,37 +225,53 @@ impl SceneService {
     /// Loads every library object the scene names, on the IO pool: its scene objects' and its
     /// detail objects'.
     pub async fn prefetch_library(&self, editor: &Editor, state: &SceneState) {
-        let mut refs: Vec<SmolStr> = state
-            .objects
-            .values()
-            .filter_map(|o| match &o.data {
-                ObjData::SceneObject(d) if !d.visual_mode() => Some(d.reference.clone()),
-                _ => None,
-            })
-            .collect();
-        if let Some(d) = state.bulk.details.as_ref() {
-            refs.extend(d.model.indices.objects.iter().map(|o| o.reference.clone()));
-        }
-        let terrains = state.count(crate::class::ObjClass::Terrain) > 0;
-        if refs.is_empty() && !terrains {
-            return;
-        }
-        let lib = self.library.clone();
-        let exec = editor.exec.clone();
-        let state = terrains.then(|| state.clone());
-        editor
-            .exec
-            .io(move || {
-                exec.io_pool().install(|| {
-                    lib.prefetch(&refs);
-                    // the terrains' meshes and the cut ground, once their ground is loaded
-                    if let Some(s) = state {
-                        lib.prefetch(&crate::objects::terrain::references(&s, &lib));
-                    }
-                })
-            })
-            .await;
+        prefetch_into(editor, self.library.clone(), state).await;
     }
+
+    /// The library a long job reads: every model the scene names loaded, in a library of the
+    /// job's own ([`Library::fork`]), so a file the watcher reports while the job runs takes no
+    /// model from under it.
+    pub async fn library_for(&self, editor: &Editor, state: &SceneState) -> Arc<Library> {
+        self.prefetch_library(editor, state).await;
+        let own = Arc::new(self.library.fork());
+        // what was forgotten between the load and the fork is read into the job's own
+        prefetch_into(editor, own.clone(), state).await;
+        own
+    }
+}
+
+/// Loads into `lib` every model `state` names - the scene objects', the detail objects', the
+/// terrains' and the cut ground's - on the IO pool.
+async fn prefetch_into(editor: &Editor, lib: Arc<Library>, state: &SceneState) {
+    let mut refs: Vec<SmolStr> = state
+        .objects
+        .values()
+        .filter_map(|o| match &o.data {
+            ObjData::SceneObject(d) if !d.visual_mode() => Some(d.reference.clone()),
+            _ => None,
+        })
+        .collect();
+    if let Some(d) = state.bulk.details.as_ref() {
+        refs.extend(d.model.indices.objects.iter().map(|o| o.reference.clone()));
+    }
+    let terrains = state.count(crate::class::ObjClass::Terrain) > 0;
+    if refs.is_empty() && !terrains {
+        return;
+    }
+    let exec = editor.exec.clone();
+    let state = terrains.then(|| state.clone());
+    editor
+        .exec
+        .io(move || {
+            exec.io_pool().install(|| {
+                lib.prefetch(&refs);
+                // the terrains' meshes and the cut ground, once their ground is loaded
+                if let Some(s) = state {
+                    lib.prefetch(&crate::objects::terrain::references(&s, &lib));
+                }
+            })
+        })
+        .await;
 }
 
 /// The project's library folder as the watcher names it.
@@ -288,7 +304,10 @@ fn follow_library(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
         while let Some(change) = rx.recv().await {
             let Some(lib) = lib.upgrade() else { break };
             if change.kind == gz_project::ChangeKind::Rescan {
-                lib.clear();
+                // nobody says what changed: only what is another file now is read again, so a
+                // job reading the cache keeps every model that is still there
+                let l = lib.clone();
+                exec.io(move || l.revalidate()).await;
             } else if let Some(r) = library_reference(&change.path) {
                 lib.forget(&r);
             }

@@ -133,9 +133,24 @@ pub fn normalize(name: &str) -> String {
     n.strip_suffix(".object").map_or(n.clone(), str::to_owned)
 }
 
+#[derive(Clone)]
 enum Slot {
     Loaded(Arc<LibraryObject>),
     Failed(String),
+}
+
+/// A file as it was when it was read: what tells a file that changed from one that did not
+/// without reading it again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Disk {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl Disk {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        Self { len: meta.len(), modified: meta.modified().ok() }
+    }
 }
 
 /// What stands between a reference and its stamp in a [`Library::mesh_key`]: a character no
@@ -196,6 +211,8 @@ pub struct Library {
     roots: Vec<PathBuf>,
     providers: parking_lot::RwLock<Vec<Provider>>,
     cache: Mutex<FxHashMap<String, Slot>>,
+    /// The file of each object read from one, as it was then.
+    disk: Mutex<FxHashMap<String, Disk>>,
     listing: Mutex<Option<Arc<Vec<String>>>>,
     rev: RevCounter,
 }
@@ -208,9 +225,69 @@ impl Library {
             roots,
             providers: parking_lot::RwLock::new(Vec::new()),
             cache: Mutex::new(FxHashMap::default()),
+            disk: Mutex::new(FxHashMap::default()),
             listing: Mutex::new(None),
             rev: RevCounter::new(),
         }
+    }
+
+    /// A library of its own over the same roots and providers, holding what this one has read.
+    /// What a long job reads (a level build): an object forgotten here afterwards - its file
+    /// changed, the watcher lost count and everything is checked again - stays readable there,
+    /// so nothing takes a model from under the job half way.
+    #[must_use]
+    pub fn fork(&self) -> Self {
+        Self {
+            roots: self.roots.clone(),
+            providers: parking_lot::RwLock::new(self.providers.read().clone()),
+            cache: Mutex::new(self.cache.lock().clone()),
+            disk: Mutex::new(self.disk.lock().clone()),
+            listing: Mutex::new(self.listing.lock().clone()),
+            rev: RevCounter::new(),
+        }
+    }
+
+    /// What "something under the roots changed and nobody says what" means: an object whose
+    /// file is gone, is another file now or is no longer the one its reference names is
+    /// forgotten, and so is every load that failed; what did not change stays, so a reader of
+    /// the cache keeps every model that is still there. Objects a provider made are their
+    /// owners'. Answers how many were dropped. Blocking.
+    pub fn revalidate(&self) -> usize {
+        let held: Vec<(String, PathBuf, Option<Disk>)> = {
+            let cache = self.cache.lock();
+            let disk = self.disk.lock();
+            cache
+                .iter()
+                .filter_map(|(k, s)| match s {
+                    Slot::Loaded(o) if !o.file.as_os_str().is_empty() => {
+                        Some((k.clone(), o.file.clone(), disk.get(k).copied()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let stale: Vec<String> = held
+            .into_iter()
+            .filter(|(k, file, was)| {
+                self.file_of(k).as_deref() != Some(file.as_path())
+                    || std::fs::metadata(file).ok().map(|m| Disk::of(&m)) != *was
+            })
+            .map(|(k, _, _)| k)
+            .collect();
+        let mut cache = self.cache.lock();
+        let before = cache.len();
+        for k in &stale {
+            cache.remove(k);
+            self.disk.lock().remove(k);
+        }
+        cache.retain(|_, s| !matches!(s, Slot::Failed(_)));
+        let dropped = before - cache.len();
+        drop(cache);
+        *self.listing.lock() = None;
+        if dropped > 0 {
+            self.rev.bump();
+        }
+        dropped
     }
 
     /// Adds a provider, asked after the ones added before it and before the roots.
@@ -222,8 +299,10 @@ impl Library {
     /// again: its file or its provider's answer changed. Moves [`Self::rev`] when something
     /// was dropped; answers whether it was.
     pub fn forget(&self, reference: &str) -> bool {
-        let gone = self.cache.lock().remove(&normalize(reference)).is_some();
+        let key = normalize(reference);
+        let gone = self.cache.lock().remove(&key).is_some();
         if gone {
+            self.disk.lock().remove(&key);
             self.rev.bump();
         }
         gone
@@ -345,7 +424,16 @@ impl Library {
             return Ok(o);
         }
         let file = self.file_of(key).ok_or_else(|| format!("Can't find file '{key}.object'"))?;
-        let bytes = std::fs::read(&file).map_err(|e| format!("Can't read '{}': {e}", file.display()))?;
+        let cannot = |e: std::io::Error| format!("Can't read '{}': {e}", file.display());
+        // one open for the file's state and its bytes
+        let mut opened = std::fs::File::open(&file).map_err(cannot)?;
+        let disk = opened.metadata().ok().map(|m| Disk::of(&m));
+        let mut bytes = Vec::with_capacity(disk.map_or(0, |d| usize::try_from(d.len).unwrap_or(0)));
+        std::io::Read::read_to_end(&mut opened, &mut bytes).map_err(cannot)?;
+        drop(opened);
+        if let Some(d) = disk {
+            self.disk.lock().insert(key.to_owned(), d);
+        }
         let object = EditObject::read(&bytes).map_err(|e| format!("Can't load '{}': {e}", file.display()))?;
         let mut made = LibraryObject::from_object(key, file, object);
         // FNV-1a over the file: stable, and cheap beside reading the model
@@ -370,6 +458,7 @@ impl Library {
     /// Forgets what was read: the files changed.
     pub fn clear(&self) {
         self.cache.lock().clear();
+        self.disk.lock().clear();
         *self.listing.lock() = None;
         self.rev.bump();
     }
@@ -425,6 +514,71 @@ mod tests {
     fn names_are_normalized() {
         assert_eq!(normalize("Props/Box_1.object"), "props\\box_1");
         assert_eq!(normalize("props\\box_1"), "props\\box_1");
+    }
+
+    /// A folder of the test's own with library objects `names` in it.
+    fn root_with(tag: &str, names: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gz-library-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in names {
+            std::fs::write(dir.join(format!("{n}.object")), EditObject::default().write()).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_fork_keeps_what_the_library_forgets() {
+        let dir = root_with("fork", &["a", "b"]);
+        let lib = Library::new(vec![dir.clone()]);
+        lib.load("a").expect("a");
+        lib.load("b").expect("b");
+        let own = lib.fork();
+        lib.clear();
+        assert!(lib.cached("a").is_none());
+        assert!(own.cached("a").is_some() && own.cached("b").is_some(), "the fork holds what was read");
+        // the fork reads on its own, and nothing it reads reaches the library it came from
+        std::fs::write(dir.join("c.object"), EditObject::default().write()).unwrap();
+        own.load("c").expect("c");
+        assert!(lib.cached("c").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rescan_drops_only_what_changed() {
+        let dir = root_with("rescan", &["a", "b", "c"]);
+        let lib = Library::new(vec![dir.clone()]);
+        for n in ["a", "b", "c"] {
+            lib.load(n).expect(n);
+        }
+        assert!(lib.load("d").is_err());
+        // nothing changed: every object stays, the failure is asked again
+        assert_eq!(lib.revalidate(), 1);
+        assert!(["a", "b", "c"].iter().all(|n| lib.cached(n).is_some()));
+        assert_eq!(lib.revalidate(), 0, "nothing left to ask again");
+        let rev = lib.rev();
+        // b is another file now, c is gone
+        std::fs::write(dir.join("b.object"), b"another file").unwrap();
+        std::fs::remove_file(dir.join("c.object")).unwrap();
+        assert_eq!(lib.revalidate(), 2);
+        assert_ne!(lib.rev(), rev);
+        assert!(lib.cached("a").is_some() && lib.cached("b").is_none() && lib.cached("c").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rescan_drops_an_object_another_root_now_answers() {
+        let low = root_with("rescan-low", &["a"]);
+        let high = root_with("rescan-high", &[]);
+        let lib = Library::new(vec![high.clone(), low.clone()]);
+        lib.load("a").expect("a");
+        assert_eq!(lib.revalidate(), 0);
+        // the project gets an object of the same name: the library's own is no longer the one
+        std::fs::write(high.join("a.object"), EditObject::default().write()).unwrap();
+        assert_eq!(lib.revalidate(), 1);
+        assert_eq!(lib.load("a").expect("a").file, high.join("a.object"));
+        let _ = std::fs::remove_dir_all(&low);
+        let _ = std::fs::remove_dir_all(&high);
     }
 
     #[test]

@@ -109,8 +109,7 @@ fn log_lines(editor: &Editor, found: &[Finding]) {
 
 /// The library objects the scene's objects name, loaded on the IO pool.
 async fn library(editor: &Arc<Editor>, svc: &Arc<SceneService>, scene: &SceneState) -> Arc<Library> {
-    svc.prefetch_library(editor, scene).await;
-    svc.library.clone()
+    svc.library_for(editor, scene).await
 }
 
 fn lookup(lib: Arc<Library>) -> impl Fn(&str) -> Option<Arc<LibraryObject>> + Sync {
