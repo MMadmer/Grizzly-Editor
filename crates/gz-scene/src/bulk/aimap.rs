@@ -39,6 +39,14 @@ const OPPOSITE: [usize; 4] = [2, 3, 0, 1];
 /// How many queued nodes are worked out ahead at once.
 const BATCH: usize = 2048;
 
+/// An open side of a node: the node, the side, where it starts and where it leads.
+type Side = (usize, usize, Vec3, Vec3);
+
+/// Whether a side that leads to `p` is one the flood takes: inside the brush's circle, when there is one.
+fn reaches(within: Option<(Vec3, f32)>, p: Vec3) -> bool {
+    within.is_none_or(|(c, r)| dist_sqr(p, c).sqrt() <= r)
+}
+
 /// The layer's flags, as the AI map's chunk stores them.
 pub mod flags {
     pub const HIDE_NODES: u32 = 1 << 1;
@@ -541,9 +549,34 @@ impl AiWork {
         self.nodes.get(i).is_some_and(|n| n.flags & nf::SELECTED != 0)
     }
 
+    /// The sides of the nodes `k..end` that are open now, with where each starts and leads.
+    fn open_sides(
+        &self,
+        k: usize,
+        end: usize,
+        selected_only: bool,
+        within: Option<(Vec3, f32)>,
+    ) -> Vec<Side> {
+        (k..end)
+            .filter(|&i| !selected_only || self.selected(i))
+            .flat_map(|i| (0..4).map(move |s| (i, s)))
+            .filter(|&(i, s)| self.nodes.get(i).is_some_and(|n| n.links[s].is_none()))
+            .filter_map(|(i, s)| {
+                let to = self.side_pos(i, s);
+                let from = self.nodes.get(i)?.pos;
+                reaches(within, to).then_some((i, s, from, to))
+            })
+            .collect()
+    }
+
     /// The queue of the node build: from node `0`, every node tries the sides it has no link on;
     /// `within` limits the sides (the brush's circle), `selected_only` the nodes (and selects
     /// the neighbours each one reaches). `progress(done, total)` answers `false` to stop.
+    ///
+    /// What a side leads to is worked out ahead on the pool, a batch of nodes at a time; the
+    /// nodes then take their places in order, on one thread, which is what gives every node its
+    /// number. While a batch takes its places the next one is worked out: its nodes are there
+    /// already, and nothing placed now changes a side of theirs or what it leads to.
     fn flood(
         &mut self,
         g: &Gen<'_>,
@@ -556,64 +589,68 @@ impl AiWork {
         let mut k = 0usize;
         let mut stopped = false;
         let mut scratch = Scratch::default();
-        let reach = |p: Vec3| within.is_none_or(|(c, r)| dist_sqr(p, c).sqrt() <= r);
-        while k < self.nodes.len() {
-            let end = (k + BATCH).min(self.nodes.len());
-            // worked out ahead: the sides of the batch's nodes that are open now
-            let jobs: Vec<(usize, usize, Vec3, Vec3)> = (k..end)
-                .filter(|&i| !selected_only || self.selected(i))
-                .flat_map(|i| (0..4).map(move |s| (i, s)))
-                .filter(|&(i, s)| self.nodes.get(i).is_some_and(|n| n.links[s].is_none()))
-                .filter_map(|(i, s)| {
-                    let to = self.side_pos(i, s);
-                    let from = self.nodes.get(i)?.pos;
-                    reach(to).then_some((i, s, from, to))
-                })
-                .collect();
-            let specs: Vec<Option<AiMapNode>> = jobs
-                .par_iter()
+        let ahead_of = |jobs: &[Side]| -> Vec<Option<AiMapNode>> {
+            jobs.par_iter()
                 .with_min_len(8)
                 .map_init(Scratch::default, |s, &(_, _, from, to)| g.spec(s, from, to, bic))
-                .collect();
+                .collect()
+        };
+        // the batch worked out while the one before it took its places
+        let mut ready: Option<(usize, Vec<Side>, Vec<Option<AiMapNode>>)> = None;
+        while k < self.nodes.len() {
+            let (end, jobs, specs) = ready.take().unwrap_or_else(|| {
+                let end = (k + BATCH).min(self.nodes.len());
+                let jobs = self.open_sides(k, end, selected_only, within);
+                let specs = ahead_of(&jobs);
+                (end, jobs, specs)
+            });
             let mut ahead: Vec<Option<usize>> = vec![None; (end - k) * 4];
             for (j, &(i, s, _, _)) in jobs.iter().enumerate() {
                 if let Some(slot) = ahead.get_mut((i - k) * 4 + s) {
                     *slot = Some(j);
                 }
             }
-            for i in k..end {
-                if selected_only && !self.selected(i) {
-                    continue;
-                }
-                for s in 0..4 {
-                    if self.nodes.get(i).is_none_or(|n| n.links[s].is_some()) {
+            let end_next = (end + BATCH).min(self.nodes.len());
+            let jobs_next = self.open_sides(end, end_next, selected_only, within);
+            let place = || {
+                for i in k..end {
+                    if selected_only && !self.selected(i) {
                         continue;
                     }
-                    let to = self.side_pos(i, s);
-                    if !reach(to) {
-                        continue;
-                    }
-                    let spec = match ahead.get((i - k) * 4 + s).copied().flatten() {
-                        Some(j) => specs.get(j).copied().flatten(),
-                        // a node selected by one of this batch: worked out now
-                        None => {
-                            let from = self.nodes.get(i).map_or(Vec3::ZERO, |n| n.pos);
-                            g.spec(&mut scratch, from, to, bic)
+                    for s in 0..4 {
+                        if self.nodes.get(i).is_none_or(|n| n.links[s].is_some()) {
+                            continue;
                         }
-                    };
-                    let link = spec.and_then(|n| self.place(n));
-                    if let Some(n) = self.nodes.get_mut(i) {
-                        n.links[s] = link;
-                    }
-                }
-                if selected_only {
-                    let links = self.nodes.get(i).map(|n| n.links).unwrap_or_default();
-                    for l in links.into_iter().flatten() {
-                        if let Some(n) = self.nodes.get_mut(l as usize) {
-                            n.flags |= nf::SELECTED;
+                        let to = self.side_pos(i, s);
+                        if !reaches(within, to) {
+                            continue;
+                        }
+                        let spec = match ahead.get((i - k) * 4 + s).copied().flatten() {
+                            Some(j) => specs.get(j).copied().flatten(),
+                            // a node selected after its batch was worked out: worked out now
+                            None => {
+                                let from = self.nodes.get(i).map_or(Vec3::ZERO, |n| n.pos);
+                                g.spec(&mut scratch, from, to, bic)
+                            }
+                        };
+                        let link = spec.and_then(|n| self.place(n));
+                        if let Some(n) = self.nodes.get_mut(i) {
+                            n.links[s] = link;
                         }
                     }
+                    if selected_only {
+                        let links = self.nodes.get(i).map(|n| n.links).unwrap_or_default();
+                        for l in links.into_iter().flatten() {
+                            if let Some(n) = self.nodes.get_mut(l as usize) {
+                                n.flags |= nf::SELECTED;
+                            }
+                        }
+                    }
                 }
+            };
+            let ((), specs_next) = rayon::join(place, || ahead_of(&jobs_next));
+            if end_next > end {
+                ready = Some((end_next, jobs_next, specs_next));
             }
             k = end;
             if !progress(k, self.nodes.len()) {

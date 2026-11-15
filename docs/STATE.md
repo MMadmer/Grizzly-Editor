@@ -30,8 +30,17 @@ What the suites hold, beyond what their names say:
   again builds nothing; the status survives a restart; a moved object makes stale exactly the steps that read it;
   Stop ends the build within seconds inside the compiler and keeps what ended (`gz-lc`'s tests stop a compile in
   every phase, and inside the lightmaps and the static models' light); an error ends the build naming the step and
-  the steps not run; what the spawn would refuse is refused before any step runs; the compiler's output matches its
-  records byte for byte (`tools/qa/golden/compile`).
+  the steps not run; what the spawn would refuse is refused before any step runs; the compiler's output on the
+  CPU matches its records byte for byte (`tools/qa/golden/compile`: two levels at draft, one with lightmaps), and
+  the same level lit on the graphics card has the CPU's structure hash, collision and `level.geomx`.
+- **The same level from a faster build**: the AI map generated over Cordon's ground has the nodes of the editor
+  before the speed-up, byte for byte (2 480 021 nodes; `level.ai` without its guid); `gz-scene`'s tests pin a
+  generated map on one thread and on eight; `gz-lc`'s and `gz-fmt-ogf`'s tests hold the weld, the count of
+  junctions and long edges, the mend of the tangent basis, the strips, the progressive meshes' ratings and the
+  vertex order to what the code they replaced gave, a compile to the same bytes on one thread and on eight, and
+  its structure to not following the light; `gz-lc`'s test runs the old tracer and the 4-wide one side by side
+  over a level, and `gz-lc-gpu`'s hold the card's lighter to the CPU's and its self-check to refusing a card that
+  answers otherwise.
 - **A level the linked game has** (`test_level_commands` G): every compile step not needed, Build Level builds the
   spawn layer, a compile step asked for by name runs and its files are the warning `level.clean` removes; Play
   plays the module - the root's `modules\<id>` with Play's Player Start, the new game's options a file of the root's
@@ -39,6 +48,11 @@ What the suites hold, beyond what their names say:
 - **The game runs what the editor builds** (`test_play_game`, `--with-game`): a new game on the built level, and
   (`--scene l01_escape`) a new game on the game's own level with the module mounted from Play's root and the
   player at Play's Player Start; the installed game is listed before and after and is equal.
+- **The game attaches what the editor builds in pieces** (`test_play_game --scene l01_escape_piece`,
+  `--scene mp_close_combat_cells`): an object of the module's own placed on Cordon, its piece built (lit under the
+  level's shadows, the level's files untouched), shipped by Play with the module, found by the game and attached
+  to the sector the game finds for it; a level of the project's own built in 45 streaming cells, staged by Play
+  as its module, every cell found and attached, none refused, the level loaded, no assert in the game's log.
 - **The updater** (`gz-update`'s end-to-end test with an HTTP server of its own, `test_update` against the mock): the
   check reads only the archive's end and its manifest; only the delta's ranges are asked for; a cut download resumes
   at its byte, also inside a record, also after a restart; a held file rolls the installation back exactly; the
@@ -95,6 +109,14 @@ What the suites hold, beyond what their names say:
   into the viewport or onto a layer of a screen: the suites land drops through `viewport.gesture` and the kit's
   zones (`simulate_drop`), never through the system's drag.
 - The editor's update against GitHub: by rule it only ever meets the mock.
+- The card's lighter on any card but this machine's (an NVIDIA RTX 3070 Laptop, on Vulkan): an AMD or Intel
+  adapter, DX12 alone, a software adapter. What holds there is the design - a check against the CPU on a sample of
+  every scene, and the CPU taking over on a difference, a lost device or a limit - and `gz-lc-gpu`'s tests of that
+  path with a lighter made to fail.
+- Pieces in the game beyond a load: a piece streamed out and in many times in one long session, a corrupt or cut
+  piece met by the running game (the loader refuses it with a line of the log; no run fed it one), frames compared
+  on the DX12 and Vulkan renderers (compared on DX11; the three share one loader), implicit-light textures of a
+  piece in a subfolder.
 - The sound preview's playback in the chooser.
 - What the manifest's reference says a key of `[world]`, `[start_kit]` or `[screens]` does in the game: it is
   read from the readers' code and the game's document, not from a run of the game. `mod.package` was seen
@@ -268,6 +290,52 @@ What the suites hold, beyond what their names say:
   in the level's folder would ship in Play's copy and replace the game's own (an AI map its cross table does not
   know stopped the game, seen live): Play refuses while there are any, naming them and `level.clean`.
 - Play's gamedata is a mirror of the game's: hard links where the volume allows, copies otherwise.
+- The compile's order is structure first: the geometry is read, welded, cut into subdivisions and merged into
+  visuals by material before any light is computed (a visual is closed at a quarter of a lightmap page of chart
+  texels), so no light value decides what is merged, and a lightmap page that came out darker never changes a
+  mesh. The pages are packed in two levels - a visual's charts into one rectangle, the rectangles into pages by a
+  skyline - from the charts' sizes alone. A lightmap that came out flat is resampled smaller in place; it is not
+  lit again.
+- The baker is the one place light is computed (`bake.rs`): 32-byte samples in, colours out. The CPU's lighter
+  walks a 4-wide tree with the same hits and the same bytes as the tracer it replaced; the card's is a compute
+  shader over a tree of its own with 8-bit planes, fed in batches sorted along a curve, on any DX12 or Vulkan
+  adapter - no ray tracing hardware and no experimental feature of the graphics runtime is needed, so every card
+  the editor draws on lights. It is checked on 512 samples of every scene against the CPU and gives way to it on
+  a difference, a lost device or a limit. `auto` is the default everywhere; a build that asks `gpu` on a machine
+  without a card is refused before anything is built.
+- What was looked at and not built: lightmaps on the second page alone (the engine's forward pass reads the
+  first), adaptive sky sampling (the target was met without it), sectors and portals inside a piece, streaming
+  of collision, the AI map, details or occluders, a new lightmap format. Each would be a change of the game's
+  contract or of how the light looks, for seconds.
+- A piece is the picture only. On a level the linked game has, the `piece` step compiles the module's own static
+  objects with every other static object of the scene as an occluder (`build.prj`'s chunk of occluders), so they
+  are lit under the level's shadows and the level's own files are never written; the game finds the sector of a
+  piece's root by its place. On a level of the project's own, Streaming Cells cut by the visual's box: one larger
+  than a cell on x or z stays the level's, the rest goes to the cell its centre lies in; a LOD larger than a cell
+  stays with its references, a smaller one is dropped and its references go by their own boxes. A cell's pages
+  are the smallest powers of two that hold it (from 64); the level's own stay 1024.
+- The compiler's moves of its files into place take a few tries, under a second in all: a scanner that reads
+  what the compile has just written holds it for a moment, and the system refuses the move meanwhile.
+- `build.report` is written beside `build.state` by every build and never ships; `level.inspect` reads a folder
+  whether a project is open or not and writes nothing.
+- What the build costs, measured on one machine (an i7-11800H with an RTX 3070 Laptop, release programs, one
+  run at a time; `bench_level.py`, `lc_bench`), before this architecture and with it:
+
+  | What | Before | Now |
+  |---|---|---|
+  | Cordon at the level's own quality, the whole build through the editor | stopped at 600 s, 1254 of 2575 static models lit, the lightmaps not begun | 116 s |
+  | the same, the compiler alone | - | 114 s: 111 million samples lit on the card in about 80 s |
+  | Cordon at Draft, the compiler | 38.3 s | 20 s |
+  | The monolith's control room (l12u) at its own quality | 43.0 s | 10.1 s on the card, 17.8 s on the CPU |
+  | The AI map over Cordon, 2.48 million nodes | 12.4 s | 7.5 s, the same nodes |
+  | The CPU's tracer on Cordon, samples a second | 43 000 | 137 000; the card 950 000 |
+  | The module's piece of Cordon for one placed object | - | 14 s |
+
+  What stayed under twice as fast, and why: the AI map's generation is ten million tests of the ground and of a
+  step, a few microseconds each, and the nodes keep the order the saves know them by - what is left is the count
+  itself; the tessellation phase's sky at the vertices (4 s at Cordon's own quality) is traced on the CPU; the
+  collision's simplification (3 s there) contracts one edge at a time by its error. Each is a few seconds of a
+  build that is no longer minutes.
 
 ### Graphs
 

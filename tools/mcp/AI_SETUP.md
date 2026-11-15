@@ -51,6 +51,11 @@ How the commands behave (`docs/COMMANDS.md` is the contract):
   `code: running` with the job - follow it with `job.get` / `job.wait`, do not send the command again.
 - UI lengths are points; pictures are pixels with their scale.
 - Only the active tab is drawn: open the tab you want to look at (`ui.tab`), then `grizzly_look`.
+- A built level is read, not parsed: `level.inspect part=summary|files|visuals|sectors|portals|lights|lightmaps|
+  collision|ai_map|graph|pieces` answers what a build made (the open level, `level=<name>` or `folder=<path>`,
+  paged, filtered by a box, a sector or a shader), and `build.report` beside the level's `build.state` is the
+  last build as Lua data - each step and phase with its seconds, the lighter, the warnings. To change a level,
+  change the scene and build again (`level.build`; `light=cpu` gives the same bytes on every machine).
 
 ## Safety
 

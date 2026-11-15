@@ -30,6 +30,7 @@ ways in), `docs/ASSETS.md` (text assets and projects), `docs/UPDATES.md` (the ed
 | Render threads | the device is made on a thread of its own; the viewport's renderer, the offscreen passes (thumbnails, previews) and every readback run on theirs | a slow GPU frame of the viewport delays no input and no command; a render thread never waits for the GPU, and every submission passes the window's gate (`gz_app::gpu_gate`, a `gz_task::Gate`), which the window closes while it configures a surface - the graphics runtime refuses a configuration a submission crosses. The runtime serialises everything a queue is asked behind one lock, and the window's frame takes it too: a pool thread that takes it (an asset going to the GPU) holds `gz_win::drawing_priority()` meanwhile, or a busy machine would make the UI thread wait for a thread it took the processor from |
 | Async runtime (tokio, multi-thread) | store actors, the control endpoint, network, timers, job orchestration | no blocking call inside; file work goes to the IO pool |
 | CPU pool (rayon) | data-parallel work: validation, hashing, meshes, culling, layout, compression, the level compiler | pure functions over snapshots |
+| The baker's device | the level compiler's light on the graphics card (`gz-lc-gpu`): a compute shader fed from the CPU pool in batches of about a tenth of a second | an instance and a device of its own, made for a build and dropped with it: it shares nothing with the window's device, so it passes no gate; whatever it fails at is lit on the CPU pool and the build goes on |
 | IO pool (bounded) | blocking file operations | sized to overlap latency: a start costs touches, not bytes |
 | Watcher | file change notifications of the open project | one per project; debounced; the editor's own writes filtered out |
 | Heartbeat | wakes every 10 ms and notes how late it was | tells a UI thread that waited from a machine with no processor to give (section 6) |
@@ -141,14 +142,15 @@ timeout answers `code: running` with its job, never a guess.
 ## 8. The workspace
 
 `Cargo.toml` at the repository root, crates under `crates/`. A lower layer never depends on a higher one; layers
-0-3 depend on neither egui nor wgpu.
+0-3 depend on neither egui nor the window's graphics. One crate below the presentation holds a graphics runtime,
+`gz-lc-gpu`, and only to compute: it draws nothing and knows no window.
 
 | Layer | Crates |
 |---|---|
 | 0 Base | `gz-base` (ids, revisions, paths, cp1251, `Origin`, `Problem`), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win`, `gz-corpus` (support of the corpus tests), `gz-ico` (the editor's icon as a resource) |
 | 1 Formats | `gz-ltx` (the lossless line model of LTX text), `gz-luadata` (Lua data: the reader that refuses code, the lossless document), `gz-chunk` (chunk streams, LZO), `gz-fmt-object`, `gz-fmt-ogf`, `gz-fmt-tex` (DDS, TGA, THM), `gz-fmt-level` (collision, AI map, details), `gz-fmt-spawn` (`all.spawn`, game graph, patrols), `gz-entities` (server entity schema, packets, named properties), `gz-fmt-xr` (`shaders.xr`, `gamemtl.xr`, `lanims.xr`, `particles.xr`), `gz-fmt-xml`, `gz-fmt-sound` |
 | 2 Game link | `gz-vfs`, `gz-lua` (host for the game's pure-Lua readers) |
-| 3 Domain | `gz-editor` (the editor's handle, services, the command registry, `help`, `job.*`, the frame clock, the write guard), `gz-project` (the project file, machine state, the watcher, file operations, the library), `gz-asset` (the kinds, checks, references), `gz-game` (the linked game: configs, strings, modes, lookups), `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release`, `gz-github`, `gz-publish`, `gz-catalog`, `gz-update`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-lc-light` and `gz-lc` (the level compiler), `gz-levelbuild` (the level's build pipeline, Play) |
+| 3 Domain | `gz-editor` (the editor's handle, services, the command registry, `help`, `job.*`, the frame clock, the write guard), `gz-project` (the project file, machine state, the watcher, file operations, the library), `gz-asset` (the kinds, checks, references), `gz-game` (the linked game: configs, strings, modes, lookups), `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release`, `gz-github`, `gz-publish`, `gz-catalog`, `gz-update`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-lc-light` (the baker: samples in, colours out, the CPU's lighter and its tracer), `gz-lc-gpu` (the card's lighter, the choice of a build's lighter) and `gz-lc` (the level compiler), `gz-levelbuild` (the level's build pipeline, `level.inspect`, `build.report`, Play) |
 | 4 Presentation | `gz-mcp` (the control endpoint), `gz-ui` (the kit, icons), `gz-render`, `gz-app` (the window, the shell, actions), and a crate per surface: `gz-ui-app` (Start page, Preferences, updates), `gz-ui-content`, `gz-ui-graph`, `gz-ui-level`, `gz-ui-viewport`, `gz-ui-mod`, `gz-ui-pda`, `gz-ui-previews`, `gz-ui-release`, `gz-ui-world` |
 | Programs | `grizzly` (`Grizzly.exe`, a window program, and `Grizzly-Cmd.exe`, its twin for a shell), `gz-mcp-bridge` (`grizzly-mcp.exe`) |
 
@@ -172,7 +174,8 @@ last one. The game knows modules and nothing of this editor.
 | The level layers of a module: `.xspawn`, `spawn\custom_data\*.ltx`, `overlay_visuals.ltx`, `overlay.xcform`, the cut, exported `.ogf`, the AI map | game `MODDING.md` "World rules", `XMS_ARCHITECTURE.md` | golden files in `gz-export-level/tests`; `test_level_commands.py`; `test_world.py` |
 | What Play builds on a new level: the collision, the game graph, the cross table, the spawn | engine formats | the game loads the level (`test_play_game.py`: a new game, the player, the level's geometry and collision); unit tests hold what the game's loader relies on |
 | Play on a level the linked game has: the module in the root's `modules\<id>` (the module build's own pass), its Player Start (`op = start`, Play's copy only), the new game's modes (`[character_creation] new_game_<mode>_mode` of the root's `configs\axr_options.ltx`), `-start server(all/single/alife/new)` | game `MODDING.md` "World rules", `XMS_ARCHITECTURE.md` 7.2-7.4, `xms_game.cpp` `SyncModesFromNewGameOptions`, `xms_core.cpp` (`$fs_root$\modules`) | `test_level_commands.py` (the root's module, its start and the command line, `dry_run`); `test_play_game.py` (`--with-game`: the new game on the stock level, the installed game unchanged) |
-| A compiled level (`level`, `level.geom`, `level.cform`, the lightmaps, `level.details`) | engine formats | `test_level_compile.py` against its own records (`tools/qa/golden/compile`); the game loads it (`test_play_game.py`) |
+| A compiled level (`level`, `level.geom`, `level.cform`, the lightmaps, `level.details`) | engine formats | `test_level_compile.py`: the CPU's build against its own records (`tools/qa/golden/compile`), the card's build against the CPU's structure hash, collision and `level.geomx`; the game loads it (`test_play_game.py`) |
+| A piece of a level (`levels\<level>\pieces\<name>`: `piece.ltx`, `piece`, `piece.geom`, `piece.geomx`, its lightmap pages) | game `XMS_ARCHITECTURE.md` 8.3; the game states `level-pieces` among its abilities | `gz-lc`'s `tests_pieces.rs` and `gz-fmt-level`'s reader (`piece_problems`); `test_play_game.py --scene l01_escape_piece` (a module's piece of a level of the game: found, attached to the sector the game finds, none refused) and `--scene mp_close_combat_cells` (a level's own cells, staged by Play as a module) |
 | The installed module (`modules\<id>`, `.new\<id>`, hard links, tooling left out) | this repository's rules, game `xms_core.cpp` | `test_build_job.py`, `test_build_contents.py` |
 | Flat export `gamedata_<id>` | - | `test_build_contents.py` |
 | `<id>.update.ltx`, `<id>-<version>.files`, the packages | game `MOD_UPDATES.md` - **frozen** | the index read back from the finished archive and each record's range checked (`gz-release`); `test_mod_publish.py` against the mock |
@@ -195,7 +198,20 @@ level the linked game has, the build's `piece` step compiles the static objects 
 rest of the scene as occluders, into the module's `levels\<level>\pieces\main` (its scratch under `temp`), their
 collision into `overlay.xcform`; a level of the module's own with Streaming Cells (`build.cell_size`) keeps its
 sectors, portals, lights and its visuals larger than a cell, and every cell's visuals become a piece of their own in
-`levels\<level>\pieces\cell_<x>_<z>`. `level.inspect part=pieces` reads them.
+`levels\<level>\pieces\cell_<x>_<z>`. `level.inspect part=pieces` reads them. A piece is the picture alone:
+collision, the AI map, the graph and the spawn are the level's or the overlays they were, so a piece changes no
+save and no other module's delta. Play of a level built in cells stages them as a module of its own in the root
+(`modules\grizzly_play_level`, every mode): the game reads pieces from modules.
+
+**One baker lights everything** (`gz-lc-light`'s `bake.rs`). A phase that needs light - lightmaps, static models,
+terrain, vertices, details - makes samples (a point, a normal, flags) and takes colours back; who lights them is
+the build's `Lighter`: the CPU's, which is the reference, or the card's (`gz-lc-gpu`), which is held to the
+reference on a sample of every scene and replaced by it on any failure. `light=auto|gpu|cpu` picks.
+**Structure is never the light's**: visuals are merged before the light, the lightmap pages are packed from the
+charts' sizes alone, and `structure` - a hash over everything but the lightmaps' pixels and the vertex colours -
+is the same for one scene on any machine, lighter and number of threads. `level.ai`, the game graph, the spawn,
+sectors, portals and collision are the same bytes, so a rebuilt level is the level the saves and the other
+modules know.
 
 ## 10. Proof
 

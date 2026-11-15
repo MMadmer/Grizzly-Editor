@@ -83,6 +83,8 @@ One concept has one name in every command.
 | a position, a rotation, a scale | `position`, `rotation`, `scale` | `[x,y,z]` metres / degrees / factor |
 | a toggle | `on` | bool |
 | unsaved work in the way | `save` (save it first), `discard` (lose it) | bool; `discard` is `destroy` |
+| where a level's light is baked | `light` | `auto` (left out), `gpu`, `cpu` |
+| which part of a thing a read answers | `part` | one word of a fixed list (`level.inspect part=pieces`) |
 | a job | `job` | its id |
 | waiting for a job the command starts | `wait` | bool, default true |
 | an open document | `doc` | the tab's id: `level`, `quest:<path>`, `characters`, ... |
@@ -169,7 +171,7 @@ applies; `{"batch": [ ... ]}` runs several in order and answers `results`. One a
 | `release` | GitHub releases and the Mod Browser: publish, list, edit, delete, the catalog |
 | `screens`, `world`, `characters`, `pda` | what those tabs do beyond editing their files (imports, presets, previews) |
 | `scene` | the open level: objects, selection, transforms, properties, tools, undo |
-| `level` | building and running: build, status, problems, compile, play, export |
+| `level` | building and running: build, status, problems, compile, play, export; what a build made (`level.inspect`) |
 | `graph` | an open quest or behaviour graph: edit operations, layout, find |
 | `doc` | any open document: list, save, undo, redo, reload, close |
 | `viewport` | the camera, the view modes, gestures |
