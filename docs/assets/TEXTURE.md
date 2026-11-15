@@ -43,8 +43,8 @@ return {
 | `material` | `"oren_nayar"` `"blinn"` `"phong"` `"metal"` | "blinn" | How the game lights the surface: each model blends towards the next one by `weight` (Oren-Nayar, Blinn, Phong, metal, back to Oren-Nayar). |
 | `weight` | number, 0 to 1 | 0 | How far `material` is blended towards the next model. |
 | `normal_map` | string (a game name) | none | A bump map's own normal map, by its game name. |
-| `bump` | the bump map (below) | none | The texture has a bump map: the game draws the surface's relief with it. |
-| `detail` | the detail texture (below) | none | A finer texture laid over this one close up. |
+| `bump` | the bump map (below), `true` for one under the texture's name with `_bump`, `false` for none | none | The texture has a bump map: the game draws the surface's relief with it. |
+| `detail` | the detail texture (below), or `false` for none | none | A finer texture laid over this one close up. |
 | `extra_flags` | integer, 0 to 4294967295 | 0 | Flag bits of a texture description no key names, kept as they are. |
 
 ## `bump`

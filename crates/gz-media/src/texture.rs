@@ -148,8 +148,12 @@ impl TextureAsset {
                     depth: read::number(cx, b, BUMP, "depth"),
                     parallax: read::boolean(cx, b, "parallax"),
                 }));
+            } else if let Some(on) = b.as_bool() {
+                // the game's short forms: true is a bump map under the texture's own name with
+                // `_bump`, false none
+                t.bump = on.then(Bump::default);
             } else {
-                cx.bad("bump", "'bump' takes a table: { source = ..., depth = ... }");
+                cx.bad("bump", "'bump' takes a table ({ source = ..., depth = ... }), true or false");
             }
         }
         if let Some(d) = v.get("detail") {
@@ -159,8 +163,9 @@ impl TextureAsset {
                     scale: read::number(cx, d, DETAIL, "scale"),
                     on: read::word(cx, d, DETAIL, "on"),
                 }));
-            } else {
-                cx.bad("detail", "'detail' takes a table: { texture = ..., scale = ... }");
+            } else if d.as_bool() != Some(false) {
+                // false says "none" outright, as the game reads it
+                cx.bad("detail", "'detail' takes a table ({ texture = ..., scale = ... }) or false");
             }
         }
         (t, cx.issues)

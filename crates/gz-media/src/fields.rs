@@ -470,13 +470,15 @@ pub const TEXTURE: &[Field] = &[
     f("normal_map", Ty::GameName, "none", "A bump map's own normal map, by its game name."),
     f(
         "bump",
-        Ty::Table("the bump map (below)"),
+        Ty::Table(
+            "the bump map (below), `true` for one under the texture's name with `_bump`, `false` for none",
+        ),
         "none",
         "The texture has a bump map: the game draws the surface's relief with it.",
     ),
     f(
         "detail",
-        Ty::Table("the detail texture (below)"),
+        Ty::Table("the detail texture (below), or `false` for none"),
         "none",
         "A finer texture laid over this one close up.",
     ),

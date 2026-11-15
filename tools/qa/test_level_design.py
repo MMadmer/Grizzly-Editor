@@ -299,12 +299,25 @@ def phase_b() -> None:
           short(part) + " | " + short(folder))
     cmd("scene.set", objects=["qa_line_a"], position=[x, y + 1, z])
     saved = cmd("scene.save")
-    check(saved.get("ok") and "objects.lua" in (saved.get("skipped") or []) and read(scene_file("objects.lua")) == broken,
-          "B scene.save answers objects.lua skipped and leaves the broken file as it is", short(saved))
+    check(saved.get("ok") and "objects.lua" in (saved.get("skipped") or []) and saved.get("unwritten") == ["objects.lua"]
+          and read(scene_file("objects.lua")) == broken,
+          "B scene.save answers objects.lua skipped, its change unwritten, and leaves the broken file as it is",
+          short(saved))
     write(scene_file("objects.lua"), good)
     back = qa.until(lambda: not [p for p in problems_of("objects.lua") if p.get("code") == "syntax"], 15, 0.2)
-    check(back and names() == everyone and near(get("qa_line_a").get("position", [0, 0, 0])[1], y, 0.001),
-          "B the file fixed is followed again: no problem, every object, the line as the file says")
+    # what the scene changed while the file did not read is unsaved work: it is kept over the fixed file
+    kept = qa.until(lambda: back and near(get("qa_line_a").get("position", [0, 0, 0])[1], y + 1, 0.001), 10, 0.2)
+    check(back and kept and names() == everyone,
+          "B the file fixed is followed again: no problem, every object, the change made meanwhile kept")
+    again = cmd("scene.save")
+    now = read(scene_file("objects.lua"))
+    differ = [i for i, (a, b) in enumerate(zip(good.splitlines(), now.splitlines())) if a != b]
+    check(again.get("ok") and not again.get("skipped") and len(good.splitlines()) == len(now.splitlines())
+          and len(differ) == 1 and "qa_line_a" in now.splitlines()[differ[0]],
+          "B and the next save writes it into the fixed file: that one line", short(again) + " %s" % differ[:5])
+    # back where the line says, for the phases that follow
+    cmd("scene.set", objects=["qa_line_a"], position=[x, y, z])
+    cmd("scene.save")
 
     # a prefab is one line of groups.lua
     write(os.path.join(CTX.project, "prefabs", "qa_post.group"),

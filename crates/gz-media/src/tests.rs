@@ -263,6 +263,15 @@ fn a_texture_written_with_words_starts_where_its_use_does() {
     let v = gz_luadata::parse("return { tex = 1, bump = { source = \"h.png\" } }").unwrap();
     let p = TextureAsset::from_value(&v).0.to_params("walls\\brick", (4, 4), false);
     assert_eq!((p.bump_mode, p.bump_name.as_str()), (BumpMode::USE, "walls\\brick_bump"));
+    // the short forms the game reads are read here the same: true a bump under the texture's
+    // name, false none; a detail said false is none
+    let said = |text: &str| TextureAsset::from_value(&gz_luadata::parse(text).unwrap());
+    let (yes, issues) = said("return { tex = 1, bump = true }");
+    assert!(issues.is_empty() && yes.bump == Some(crate::texture::Bump::default()), "{issues:?}");
+    let (no, issues) = said("return { tex = 1, bump = false, detail = false }");
+    assert!(issues.is_empty() && no.bump.is_none() && no.detail.is_none(), "{issues:?}");
+    assert_eq!(codes(&said("return { tex = 1, detail = true }").1), ["M109"]);
+    assert_eq!(codes(&said("return { tex = 1, bump = 3 }").1), ["M109"]);
 }
 
 #[test]
