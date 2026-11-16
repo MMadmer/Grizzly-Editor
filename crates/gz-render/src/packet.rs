@@ -609,7 +609,7 @@ pub fn build_packet_with(
     // helpers, the grid and the labels
     let mut helpers = HelperGeometry::default();
     if view.shows(ViewFlags::GRID) {
-        grid_lines(&view.grid, &mut helpers.lines);
+        grid_lines(&view.grid, view.camera.position, &mut helpers.lines);
     }
     let mut labels = Vec::new();
     let mut label_points = Vec::new();
@@ -1032,8 +1032,11 @@ mod tests {
         // nearest first
         assert!(p.lights.windows(2).all(|w| w[0].pos_range[2] <= w[1].pos_range[2]));
         assert_eq!(p.frame.mode[0], 3);
-        // 402 grid lines and the helper line
-        assert_eq!(p.helpers.lines.len(), (201 * 2 * 2) as usize);
+        // the grid around the camera; the helper line is drawn over everything
+        let mut grid = Vec::new();
+        crate::helpers::grid_lines(&v.grid, v.camera.position, &mut grid);
+        assert!(!grid.is_empty());
+        assert_eq!(p.helpers.lines.len(), grid.len());
         assert_eq!(p.helpers.lines_overlay.len(), 2);
         // without an environment the game-lighting view is lit the studio way
         list.environment = None;

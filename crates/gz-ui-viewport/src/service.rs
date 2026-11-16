@@ -309,7 +309,6 @@ pub struct Prefs {
     pub tools_sens_rot: f32,
     pub tools_sens_scale: f32,
     pub grid_size: f32,
-    pub grid_count: u32,
     pub snap_grid: f32,
     pub snap_angle: f32,
     pub snap_scale: f32,
@@ -338,7 +337,6 @@ impl Default for Prefs {
             tools_sens_rot: 0.3,
             tools_sens_scale: 0.3,
             grid_size: 1.0,
-            grid_count: 100,
             snap_grid: 0.1,
             snap_angle: 15.0,
             snap_scale: 0.25,
@@ -384,7 +382,6 @@ impl Prefs {
             tools_sens_rot: f("tools_sens_rot", d.tools_sens_rot),
             tools_sens_scale: f("tools_sens_scale", d.tools_sens_scale),
             grid_size: f("grid_cell_size", d.grid_size),
-            grid_count: s.pref("grid_cell_count").map_or(d.grid_count, |v| v as u32),
             snap_grid: f("snap_grid_step", d.snap_grid),
             snap_angle: f("snap_angle_step", d.snap_angle),
             snap_scale: f("snap_scale_step", d.snap_scale),
@@ -1331,7 +1328,6 @@ impl Viewport {
                 if show.grid && shot.is_none() {
                     view.flags |= ViewFlags::GRID;
                 }
-                view.grid.cells = st.prefs.grid_count.max(1);
                 view.grid.cell_size = st.prefs.grid_size.max(0.01);
                 [view.grid.color, view.grid.thick_color, view.wire_color] = st.scene_lines;
                 if preview {

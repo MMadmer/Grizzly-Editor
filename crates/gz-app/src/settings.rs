@@ -45,7 +45,7 @@ const fn def(key: &'static str, ty: PrefType, default: f64, lo: f64, hi: f64) ->
 
 /// Every preference of the window itself and of the level editor, by its settings key. An area
 /// adds its own with [`EditorSettings::add_defs`] (a group of Preferences, `ShellBuilder::pref_group`).
-pub const PREFS: [PrefDef; 34] = [
+pub const PREFS: [PrefDef; 33] = [
     def("active_idle_fps", PrefType::U32, 120.0, 30.0, 240.0),
     def("vsync", PrefType::Bool, 1.0, 0.0, 1.0),
     def("floating_panels", PrefType::Bool, 0.0, 0.0, 1.0),
@@ -70,7 +70,6 @@ pub const PREFS: [PrefDef; 34] = [
     def("snap_scale_step", PrefType::Float, 0.25, 0.01, 1000.0),
     def("snap_moveto", PrefType::Float, 0.5, 0.01, 1000.0),
     def("grid_cell_size", PrefType::Float, 1.0, 0.1, 10.0),
-    def("grid_cell_count", PrefType::U32, 100.0, 10.0, 1000.0),
     def("scene_undo_level", PrefType::U32, 125.0, 0.0, 125.0),
     def("scene_recent_count", PrefType::U32, 10.0, 0.0, 25.0),
     def("scene_clear_color", PrefType::Color, 0x0055_5555 as f64, 0.0, 0.0),
@@ -597,7 +596,7 @@ mod tests {
         assert_eq!(pref_json(fov, 60.0), serde_json::json!(60));
         let Some(c) = pref_def("fog_color") else { return };
         assert_eq!(pref_json(c, f64::from(0x0055_5555u32)), serde_json::json!("0x00555555"));
-        assert_eq!(PREFS.len(), 34);
+        assert_eq!(PREFS.len(), 33);
         assert_eq!(parse_interface_scale("auto"), Some(None));
         assert_eq!(parse_interface_scale("125%"), Some(Some(1.25)));
         assert_eq!(parse_interface_scale("1.5"), Some(Some(1.5)));

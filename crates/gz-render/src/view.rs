@@ -50,7 +50,6 @@ bitflags::bitflags! {
 /// every `subdiv` cells.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grid {
-    pub cells: u32,
     pub cell_size: f32,
     pub subdiv: u32,
     pub color: Color,
@@ -58,10 +57,9 @@ pub struct Grid {
 }
 
 impl Default for Grid {
-    /// The preferences' defaults: 100 cells of 1 m, a thick line every 10.
+    /// The preferences' default: cells of 1 m, a thick line every 10.
     fn default() -> Self {
         Self {
-            cells: 100,
             cell_size: 1.0,
             subdiv: 10,
             color: Color::from_argb(0xff90_9090),

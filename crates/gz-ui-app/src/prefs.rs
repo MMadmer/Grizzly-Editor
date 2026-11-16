@@ -226,13 +226,12 @@ pub const PREFS: &[Pref] = &[
         "How quickly distant things fade into the fog.",
         "",
     ),
-    pref("Viewport\\Grid\\Cell Size", "grid_cell_size", PrefKind::Float, "The side of a grid cell.", "m"),
     pref(
-        "Viewport\\Grid\\Cell Count",
-        "grid_cell_count",
-        PrefKind::Whole,
-        "How many cells the grid has along each side.",
-        "",
+        "Viewport\\Grid\\Cell Size",
+        "grid_cell_size",
+        PrefKind::Float,
+        "The side of a grid cell near the ground. The grid has no edge: it lies around the camera, its cells ten times larger at each step of height, and fades out with the distance.",
+        "m",
     ),
     pref(
         "Tools\\Gizmo\\Move Sensitivity",

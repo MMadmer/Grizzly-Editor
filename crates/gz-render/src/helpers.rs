@@ -34,28 +34,57 @@ pub(crate) struct HelperGeometry {
     pub tris_overlay: Vec<LineVertex>,
 }
 
-/// The thin lines first, then the thick ones, each set along x then along z.
-pub(crate) fn grid_lines(grid: &Grid, out: &mut Vec<LineVertex>) {
-    let n = grid.cells.min(10_000) as i64;
-    let step = grid.cell_size.max(1e-3);
-    let sub = i64::from(grid.subdiv.max(1));
-    let extent = n as f32 * step;
-    out.reserve(((2 * n + 1) * 4) as usize);
-    for thick in [false, true] {
-        for i in -n..=n {
-            if (i % sub == 0) == thick {
-                let c = if thick { grid.thick_color } else { grid.color };
-                let x = i as f32 * step;
-                out.push(LineVertex::new(Vec3::new(x, 0.0, -extent), c));
-                out.push(LineVertex::new(Vec3::new(x, 0.0, extent), c));
-            }
+/// The grid of the ground plane (y = 0) around the camera, as far as the camera sees it: a cell
+/// of `cell_size` while the camera is low and `subdiv` times coarser at each step of height, the
+/// thick lines every `subdiv` cells, every line fading out with its distance from the camera - the
+/// grid has no edge to run into. Its lines stay on their world places as the camera moves.
+pub(crate) fn grid_lines(grid: &Grid, eye: Vec3, out: &mut Vec<LineVertex>) {
+    let sub = grid.subdiv.max(2);
+    let height = eye.y.abs().max(1.0);
+    // the finest step that keeps about forty lines across the camera's height
+    let mut step = grid.cell_size.max(1e-3);
+    for _ in 0..12 {
+        if step * 40.0 >= height {
+            break;
         }
+        step *= sub as f32;
+    }
+    let coarse = step * sub as f32;
+    let reach = (height * 12.0).max(coarse * 3.0).min(200_000.0);
+    // centred on a coarse line under the camera, so the pattern does not swim
+    let (cx, cz) = ((eye.x / coarse).round() * coarse, (eye.z / coarse).round() * coarse);
+    let n = (reach / step).ceil() as i64;
+    // the fine lines give way as the camera rises toward the next step
+    let fine =
+        1.0 - ((height / (step * 40.0)) * sub as f32 - 1.0).clamp(0.0, sub as f32 - 1.0) / (sub as f32 - 1.0);
+    let fade = |x: f32, z: f32, base: Color, weight: f32| {
+        let d = ((x - eye.x).powi(2) + (z - eye.z).powi(2)).sqrt();
+        let a = (1.0 - d / reach).clamp(0.0, 1.0);
+        base.with_alpha((f32::from(base.0[3]) * a * a * weight).round() as u8)
+    };
+    const PIECES: usize = 8;
+    for along_x in [false, true] {
         for i in -n..=n {
-            if (i % sub == 0) == thick {
-                let c = if thick { grid.thick_color } else { grid.color };
-                let z = i as f32 * step;
-                out.push(LineVertex::new(Vec3::new(-extent, 0.0, z), c));
-                out.push(LineVertex::new(Vec3::new(extent, 0.0, z), c));
+            let thick = i.rem_euclid(i64::from(sub)) == 0;
+            let (base, weight) = if thick { (grid.thick_color, 1.0) } else { (grid.color, fine) };
+            if weight <= 0.0 {
+                continue;
+            }
+            // the line's offset from the camera and the half of it within reach
+            let at = if along_x { cz } else { cx } + i as f32 * step;
+            let off = at - if along_x { eye.z } else { eye.x };
+            let half = (reach * reach - off * off).max(0.0).sqrt();
+            if half <= 0.0 {
+                continue;
+            }
+            let mid = if along_x { eye.x } else { eye.z };
+            for k in 0..PIECES {
+                let t0 = mid - half + 2.0 * half * k as f32 / PIECES as f32;
+                let t1 = mid - half + 2.0 * half * (k + 1) as f32 / PIECES as f32;
+                for t in [t0, t1] {
+                    let (x, z) = if along_x { (t, at) } else { (at, t) };
+                    out.push(LineVertex::new(Vec3::new(x, 0.0, z), fade(x, z, base, weight)));
+                }
             }
         }
     }
@@ -284,18 +313,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_grid_is_the_engines() {
-        let mut out = Vec::new();
-        let g = Grid { cells: 20, cell_size: 0.5, subdiv: 10, ..Grid::default() };
-        grid_lines(&g, &mut out);
-        // 41 lines each way, two vertices a line
-        assert_eq!(out.len(), 41 * 2 * 2);
-        // thin first: the first line is at i = -19
-        assert_eq!(out[0].position, [-9.5, 0.0, -10.0]);
-        assert_eq!(out[0].color, g.color.0);
-        let thick: Vec<_> = out.iter().filter(|v| v.color == g.thick_color.0).collect();
-        // i = -20, -10, 0, 10, 20 each way
-        assert_eq!(thick.len(), 5 * 2 * 2);
+    fn the_grid_follows_the_camera_and_has_no_edge() {
+        let g = Grid { cell_size: 1.0, subdiv: 10, ..Grid::default() };
+        let lines = |eye: Vec3| {
+            let mut out = Vec::new();
+            grid_lines(&g, eye, &mut out);
+            out
+        };
+        // low: metre cells around the camera, wherever it stands, faded to nothing at the reach
+        let here = lines(Vec3::new(5000.0, 2.0, -3000.0));
+        assert!(!here.is_empty());
+        assert!(
+            here.iter()
+                .all(|v| (v.position[0] - 5000.0).abs() <= 40.0 && (v.position[2] + 3000.0).abs() <= 40.0)
+        );
+        assert!(here.iter().any(|v| v.position[0].fract() != 0.0 || v.position[2].fract() != 0.0));
+        assert!(here.iter().all(|v| v.position[1] == 0.0));
+        let mut far = here
+            .iter()
+            .filter(|v| ((v.position[0] - 5000.0).powi(2) + (v.position[2] + 3000.0).powi(2)).sqrt() > 29.0);
+        assert!(far.clone().count() > 0 && far.all(|v| v.color[3] < 8), "a line fades out at its end");
+        // high: the cells grow with the height and the grid reaches as far as the camera sees
+        let high = lines(Vec3::new(0.0, 900.0, 0.0));
+        let xs: Vec<f32> = high.iter().map(|v| v.position[0]).collect();
+        assert!(xs.iter().any(|x| *x > 9000.0), "it reaches past ten times the height");
+        let thin_lines = high.len() / 2;
+        assert!(thin_lines < 30_000, "{thin_lines} segments");
     }
 
     #[test]

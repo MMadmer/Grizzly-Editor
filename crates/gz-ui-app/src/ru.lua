@@ -192,9 +192,7 @@ return {
   { "Density", "Плотность" },
   { "How quickly distant things fade into the fog.", "Как быстро далёкие предметы растворяются в тумане." },
   { "Cell Size", "Размер ячейки" },
-  { "The side of a grid cell.", "Сторона ячейки сетки." },
-  { "Cell Count", "Число ячеек" },
-  { "How many cells the grid has along each side.", "Сколько ячеек у сетки по каждой стороне." },
+  { "The side of a grid cell near the ground. The grid has no edge: it lies around the camera, its cells ten times larger at each step of height, and fades out with the distance.", "Сторона ячейки сетки у земли. У сетки нет края: она лежит вокруг камеры, с высотой её ячейки укрупняются в десять раз за ступень, а вдали она плавно исчезает." },
   -- Tools
   { "Gizmo", "Манипулятор" },
   { "How far an object moves for a mouse movement.", "Насколько смещается объект при движении мыши." },
