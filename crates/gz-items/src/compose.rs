@@ -141,6 +141,12 @@ pub enum Origin {
 /// The line a document's path stands at (1-based; 0 without one).
 pub struct Lines(Option<LuaDoc>);
 
+impl std::fmt::Debug for Lines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Lines(..)" } else { "Lines(none)" })
+    }
+}
+
 impl Lines {
     #[must_use]
     pub fn of(text: Option<&str>) -> Self {
@@ -565,8 +571,19 @@ fn ready(b: &Builder, p: &ItemPlan) -> Ready {
             format!("an unknown base [{m}] of its hud"),
         ));
     }
+    // a row may start from what the item itself makes before it: its own section, its hud, an
+    // earlier row
+    let mut made: Vec<String> = Vec::new();
+    if !p.edit {
+        made.push(p.section.clone());
+        if p.hud {
+            made.push(format!("{}_hud", p.section));
+        }
+    }
     for s in p.sections.iter().filter(|s| s.make) {
-        if let Some(m) = missing(&s.parents) {
+        let unknown = s.parents.iter().find(|x| !b.has(x) && !made.contains(x)).cloned();
+        made.push(s.name.clone());
+        if let Some(m) = unknown {
             let mut at = s.at.clone();
             at.push(Seg::key("base"));
             return Ready::Wait(Issue::error(
@@ -676,15 +693,15 @@ fn apply_plan(b: &mut Builder, item: &Item, p: &ItemPlan, lines: &Lines, a: &mut
     add_recipes(b, source, p, lines.at(&[Seg::key("craft")]));
 }
 
-/// Lays the module over `game` in the game's order. `items` in path order, `texts` their files'
-/// texts (for the lines values are written at), `malformed` the items whose own shape the game
+/// Lays the module over `game` in the game's order. `items` in path order, `lines` their files'
+/// own (the lines values are written at), `malformed` the items whose own shape the game
 /// refuses (the reader's errors), `plan` the icon atlas.
 #[must_use]
 pub fn compose(
     game: &Ltx,
     cfg: &ModuleConfigs,
     items: &[Item],
-    texts: &[Option<String>],
+    lines: &[std::sync::Arc<Lines>],
     malformed: &[bool],
     module: &str,
     plan: &Plan,
@@ -709,7 +726,6 @@ pub fn compose(
         };
     overlay(&mut b, &cfg.replaced, 1, &mut out.problems);
 
-    let lines: Vec<Lines> = texts.iter().map(|t| Lines::of(t.as_deref())).collect();
     let mut fresh: Vec<(usize, ItemPlan)> = Vec::new();
     let mut edits: Vec<(usize, ItemPlan)> = Vec::new();
     for (i, item) in items.iter().enumerate() {

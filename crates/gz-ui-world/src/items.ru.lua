@@ -1375,7 +1375,7 @@ return {
   { "The icon's texture '{texture}' is neither the game's nor the project's.", "Текстуры иконки «{texture}» нет ни в игре, ни в проекте." },
   { "The rectangle {x}, {y}, {w} x {h} cells reaches past the texture '{texture}' ({pw} x {ph} px, {cw} x {ch} cells).", "Прямоугольник {x}, {y}, {w} x {h} ячеек выходит за край текстуры «{texture}» ({pw} x {ph} пикс., {cw} x {ch} ячеек)." },
 
-  -- where it is found (I423..I425, I430)
+  -- where it is found (I423..I425, I430, I431)
   { "The recipe's tool '{tool}' is no section of the game or of the module.", "Инструмент рецепта «{tool}» — не секция игры или модуля." },
   { "The recipe's part '{part}' is no section of the game or of the module.", "Часть рецепта «{part}» — не секция игры или модуля." },
   { "The trader's config '{by}' is neither the game's nor the project's (configs\\{file}).", "Конфига торговца «{by}» нет ни в игре, ни в проекте (configs\\{file})." },
@@ -1383,6 +1383,7 @@ return {
   { "The config configs\\{file} is neither the game's nor the project's.", "Конфига configs\\{file} нет ни в игре, ни в проекте." },
   { "'{who}' is no community of the game, nor a community and one of its ranks.", "«{who}» — не группировка игры и не группировка с одним из её рангов." },
   { "The death loot has no count (loot.count): the death manager never spawns an item without one.", "У добычи с трупов не задано количество (loot.count): менеджер смерти никогда не спавнит предмет без него." },
+  { "[{section}] has a use scene already: 'like' is what a new scene starts from, and this one keeps its own.", "У [{section}] уже есть сцена использования: «like» задаёт, с чего начинается новая сцена, а эта остаётся своей." },
 
   -- what the composition makes of the item (I401..I410, I428, I429); a loop's sentence first, it
   -- ends the way the shorter ones do

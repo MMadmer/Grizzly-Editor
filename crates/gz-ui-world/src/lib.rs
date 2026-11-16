@@ -286,6 +286,7 @@ mod i18n_tests {
             ("I428", "the module's config configs\\items\\qa.ltx does not compose, so what the items resolve to may differ: line 4: no section".into()),
             ("I429", format!("the HUD section [{h}] has no base, and the item's bases name no HUD section: it holds only what hud.set says (hud.base names one)")),
             ("I430", "the death loot has no count (loot.count): the death manager never spawns an item without one".into()),
+            ("I431", "[qa_bread] has a use scene already: 'like' is what a new scene starts from, and this one keeps its own".into()),
         ];
         // three plain English words of the sentence in a row: a part of it left in English
         let english = |en: &str, tr: &str| {

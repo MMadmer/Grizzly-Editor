@@ -225,8 +225,10 @@ impl Items {
         self.roster
             .fresh(&(), stamp, move || {
                 let read = |rel: &RelPath| -> Result<String, String> { model::read_file(&rel.to_fs(&root)) };
-                let items: Vec<(String, Result<String, String>)> =
+                let mut items: Vec<(String, Result<String, String>)> =
                     exec.par_io(files.items.clone(), |rel| (rel.as_str().to_owned(), read(&rel)));
+                // the order the game takes them in: of two changes of one key the later path wins
+                items.sort_by_cached_key(|(f, _)| gz_base::text::game_order_key(f));
                 let text_of = |rel: &RelPath| -> Option<String> {
                     gz_editor::fsx::read_opt(&rel.to_fs(&root))
                         .ok()
@@ -255,7 +257,8 @@ impl Items {
                         });
                     }
                 }
-                cfg.patches.sort_by_key(|p| p.rel.to_ascii_lowercase());
+                cfg.xms.sort_by_cached_key(|f| gz_base::text::game_order_key(&f.rel));
+                cfg.patches.sort_by_cached_key(|p| gz_base::text::game_order_key(&p.rel));
                 Roster::build(stamp, &module, items, game, &cfg, &root, &crate::atlas::picture_size)
             })
             .await
@@ -397,16 +400,20 @@ impl Items {
 
     /// What an item a form edits resolves to and every problem of it, as the build would see the
     /// module with the item written into its file (`item.file`, a file of the roster or a new
-    /// one): the composition made again with it, on the IO pool.
+    /// one): that one file read and the composition made again on the CPU pool, what the game is
+    /// asked for the problems on the IO pool.
     pub async fn check_edit(&self, editor: &Arc<Editor>, item: &Item) -> (Option<Resolution>, Vec<Issue>) {
         let roster = self.roster(editor).await;
         let catalog = self.catalog(editor).await;
         let lookups = self.lookups(editor).await;
         let root = self.root.clone();
         let (file, text) = (item.file.clone(), model::write(item));
+        let edited = {
+            let (file, root) = (file.clone(), root.clone());
+            self.exec.cpu(move || roster.with_edit(&file, text, &root, &crate::atlas::picture_size)).await
+        };
         self.exec
             .io(move || {
-                let edited = roster.with_edit(&file, text, &root, &crate::atlas::picture_size);
                 let Some(i) = edited.index_of_file(&file) else { return (None, Vec::new()) };
                 let res = edited.resolution(i, Some(&catalog.catalog));
                 (res, issues_of(&edited, i, &catalog.catalog, &*lookups, &root))

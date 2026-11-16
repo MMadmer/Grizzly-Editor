@@ -15,6 +15,7 @@
 //! | `I425` | warning | A death loot community that is not there. |
 //! | `I426` | note | No game is linked: what only the game knows was not looked up. |
 //! | `I430` | warning | A new item's death loot without a count: the death manager never spawns it. |
+//! | `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |
 
 use std::path::Path;
 
@@ -43,6 +44,7 @@ pub const NO_CONFIG: &str = "I424";
 pub const NO_COMMUNITY: &str = "I425";
 pub const UNLINKED: &str = "I426";
 pub const NEVER_DROPS: &str = "I430";
+pub const LIKE_IGNORED: &str = "I431";
 
 /// What only the linked game and the project know. Blocking to ask (a model's motions are read
 /// on first need): check on the IO pool.
@@ -486,12 +488,20 @@ pub fn validate(item: &Item, applied: &Applied, comp: &Composition, cx: &Cx<'_>)
         && let Some(mut have) = cx.lookups.config_sections(crate::compose::SCENES)
     {
         have.extend(patched_sections(comp, crate::compose::SCENES, &item.file));
+        let path =
+            if matches!(item.scene, Some(Scene::Like(_))) { at(&["scene"]) } else { at(&["scene", "like"]) };
+        // the game makes a section once: `like` is what a NEW scene starts from
+        if have.iter().any(|h| h.eq_ignore_ascii_case(&applied.section)) {
+            out.push(Issue::warning(
+                LIKE_IGNORED,
+                path.clone(),
+                format!(
+                    "[{}] has a use scene already: 'like' is what a new scene starts from, and this one keeps its own",
+                    applied.section
+                ),
+            ));
+        }
         if !have.iter().any(|h| h.eq_ignore_ascii_case(like)) {
-            let path = if matches!(item.scene, Some(Scene::Like(_))) {
-                at(&["scene"])
-            } else {
-                at(&["scene", "like"])
-            };
             out.push(Issue::warning(
                 NO_SECTION,
                 path,

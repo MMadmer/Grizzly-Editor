@@ -87,9 +87,12 @@ refuses the whole item**: a key no config can hold, a value with a line break, a
 A module's characters, then its items - the new sections first (an item made from another item of the module \
 after that one, else in the order of their paths), then the changes in the order of their paths -, then its \
 `configs\\xms\\*.ltx`, then its `patch\\*.ltxp`: what the module's own overlays and patches say of an item still \
-counts. A section an item makes that the module's overlay defines again is merged, the later one winning. Every \
-change reaches the sections that inherit the changed key and do not set it themselves: `add = { ammo_class = ... }` \
-on `wpn_ak74` reaches `wpn_ak74_kobra`.\n\n\
+counts. A section an item makes that the module's overlay defines again is merged, the later one winning - its \
+own sections, and the ones made for the rows it adds (`[xms_craft]`, a scene's HUD section, a section of `lists`). \
+Every change reaches the sections that inherit the changed key and do not set it themselves: \
+`add = { ammo_class = ... }` on `wpn_ak74` reaches `wpn_ak74_kobra`. The order of paths is the game's: the paths \
+compared byte by byte as the game reads them, ASCII letters lower-cased and `/` between folders - \
+`items/weapons/ak` before `items/weapons2/ak`, `B` after `a`; of two changes of one key the later path wins.\n\n\
 A refused item stops nothing: the game leaves it out with one line in its log (`! XMS: [<module>] <file>: left out \
 - <why>`) - no base, an unknown base, a name that cannot be a section, an edit of a section that is not there.\n\n\
 ## Icons\n\n\
@@ -146,7 +149,8 @@ first one.\n\n\
 | `I427` | error | A value outside what its key takes, or a part the game cannot read: the whole item is left out. |\n\
 | `I428` | warning | A config of the module that does not compose. |\n\
 | `I429` | warning | A new item's HUD section without a base, whose bases name no HUD section either. |\n\
-| `I430` | warning | A new item's death loot without a count: the death manager never spawns it. |\n";
+| `I430` | warning | A new item's death loot without a count: the death manager never spawns it. |\n\
+| `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |\n";
 
 /// The reference of the item kind, as Markdown.
 #[must_use]

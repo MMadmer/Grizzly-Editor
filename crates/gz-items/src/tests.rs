@@ -760,3 +760,60 @@ fn a_template_needs_no_base_and_a_change_refuses_a_hud_base() {
     ]);
     assert!(codes(&r, "x.itemasset", &full_game()).iter().all(|c| *c != "I407"));
 }
+
+#[test]
+fn a_scene_started_from_another_on_an_item_that_has_one_is_said() {
+    let g = Game {
+        configs: vec![("items\\items\\animations_settings.ltx", vec!["vodka", "bread"])],
+        ..full_game()
+    };
+    let r = roster(&[
+        ("a.itemasset", "return { item = 1, edit = \"bread\", scene = { like = \"vodka\", sound = \"s\" } }"),
+        ("b.itemasset", "return { item = 1, section = \"b\", base = \"bread\", scene = \"vodka\" }"),
+    ]);
+    // the game makes a scene's section once: `like` on a scene that is there starts nothing
+    let a = issues(&r, "a.itemasset", &g);
+    let a: Vec<(&str, String)> = a.iter().map(|i| (i.code, gz_luadata::path::show(&i.path))).collect();
+    assert_eq!(a, [("I431", "scene.like".to_owned())]);
+    // a new item's scene does start from it
+    assert!(codes(&r, "b.itemasset", &g).iter().all(|c| *c != "I431" && *c != "I417"));
+}
+
+#[test]
+fn a_made_section_starts_from_what_the_item_makes_before_it() {
+    let r = roster(&[(
+        "v.itemasset",
+        "return { item = 1, section = \"v\", base = \"wpn_ak74\", set = { cost = 7 }, hud = { base = \"wpn_ak74_hud\" },
+          sections = {
+            { name = \"v_scope\", base = \"v\", set = { scope_status = 1 } },
+            { name = \"v_scope_hud\", base = \"v_hud\" },
+            { name = \"v_scope2\", base = \"v_scope\" },
+            { name = \"v_lost\", base = \"v_later\" },
+          } }",
+    )]);
+    let i = r.find("v").unwrap();
+    // one unknown base leaves the whole item out, as the game does - and names that row alone
+    let all = issues(&r, "v.itemasset", &full_game());
+    let bad: Vec<String> =
+        all.iter().filter(|x| x.code == "I408").map(|x| gz_luadata::path::show(&x.path)).collect();
+    assert_eq!(bad, ["sections[3].base"]);
+    assert!(r.resolution(i, None).unwrap().left_out);
+    // without the row that names nothing, the variants inherit the item's own section and each other
+    let r = roster(&[(
+        "v.itemasset",
+        "return { item = 1, section = \"v\", base = \"wpn_ak74\", set = { cost = 7 }, hud = { base = \"wpn_ak74_hud\" },
+          sections = {
+            { name = \"v_scope\", base = \"v\", set = { scope_status = 1 } },
+            { name = \"v_scope_hud\", base = \"v_hud\" },
+            { name = \"v_scope2\", base = \"v_scope\" },
+          } }",
+    )]);
+    let val = |s: &str, k: &str| {
+        crate::resolve::view(&r.composition.ltx, s, &r.composition, "", &[])
+            .get(k)
+            .and_then(|x| x.value.clone())
+    };
+    assert_eq!(val("v_scope", "cost").as_deref(), Some("7"));
+    assert_eq!(val("v_scope2", "scope_status").as_deref(), Some("1"));
+    assert!(crate::resolve::view(&r.composition.ltx, "v_scope_hud", &r.composition, "", &[]).exists);
+}

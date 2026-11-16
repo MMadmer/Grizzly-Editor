@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 
 use crate::atlas::{self, Plan, Wanted};
 use crate::catalog::Catalog;
-use crate::compose::{self, Composition, ModuleConfigs};
+use crate::compose::{self, Composition, Lines, ModuleConfigs};
 use crate::model::{Icon, Issue, Item, Kind, load_text};
 use crate::resolve::{Resolution, resolve};
 use crate::validate::TWICE;
@@ -46,9 +46,33 @@ pub struct Roster {
     pub plan: Plan,
     /// The string ids the module's items make: `<section>_name`, `_short`, `_descr`.
     pub strings: Vec<String>,
-    /// What it was made from: the files' texts and the module's configs ([`Roster::with_edit`]).
-    sources: Arc<Vec<(String, Result<String, String>)>>,
+    /// What it was made from: the files as they read and the module's configs
+    /// ([`Roster::with_edit`]).
+    sources: Arc<Vec<Source>>,
     configs: Arc<ModuleConfigs>,
+}
+
+/// A file as it reads, before the module is composed: its entry and the lines of its text. Read
+/// once - a form's check of one item reads that item's text and nothing else again.
+#[derive(Clone, Debug)]
+struct Source {
+    entry: Entry,
+    lines: Arc<Lines>,
+}
+
+impl Source {
+    fn read(file: String, text: Result<String, String>) -> Self {
+        match text.and_then(|t| load_text(&t, &file).map(|r| (r, t))) {
+            Ok(((item, issues), t)) => {
+                Self { entry: Entry { item, issues, readable: true }, lines: Arc::new(Lines::of(Some(&t))) }
+            }
+            Err(e) => {
+                let item = Item { file: file.clone(), ..Item::default() };
+                let issues = vec![Issue::error(UNREADABLE, Vec::new(), format!("{file}: {e}"))];
+                Self { entry: Entry { item, issues, readable: false }, lines: Arc::new(Lines::of(None)) }
+            }
+        }
+    }
 }
 
 impl Roster {
@@ -63,26 +87,22 @@ impl Roster {
         root: &Path,
         picture: &atlas::PictureSize,
     ) -> Self {
-        let sources = Arc::new(files.clone());
-        let mut entries = Vec::with_capacity(files.len());
-        let mut texts = Vec::with_capacity(files.len());
-        for (file, text) in files {
-            match text.and_then(|t| load_text(&t, &file).map(|r| (r, t))) {
-                Ok(((item, issues), t)) => {
-                    entries.push(Entry { item, issues, readable: true });
-                    texts.push(Some(t));
-                }
-                Err(e) => {
-                    let item = Item { file: file.clone(), ..Item::default() };
-                    entries.push(Entry {
-                        item,
-                        issues: vec![Issue::error(UNREADABLE, Vec::new(), format!("{file}: {e}"))],
-                        readable: false,
-                    });
-                    texts.push(None);
-                }
-            }
-        }
+        let sources: Vec<Source> = files.into_iter().map(|(file, text)| Source::read(file, text)).collect();
+        Self::assemble(stamp, module, Arc::new(sources), game, Arc::new(configs.clone()), root, picture)
+    }
+
+    /// The roster of files that are read: composed and planned.
+    fn assemble(
+        stamp: Rev,
+        module: &str,
+        sources: Arc<Vec<Source>>,
+        game: Arc<Ltx>,
+        configs: Arc<ModuleConfigs>,
+        root: &Path,
+        picture: &atlas::PictureSize,
+    ) -> Self {
+        let entries: Vec<Entry> = sources.iter().map(|s| s.entry.clone()).collect();
+        let lines: Vec<Arc<Lines>> = sources.iter().map(|s| s.lines.clone()).collect();
         // the pictures the build packs: each one that is there and reads
         let mut wanted = Vec::new();
         for e in entries.iter().filter(|e| e.readable && !e.item.is_abstract()) {
@@ -108,7 +128,7 @@ impl Roster {
         // any malformed part makes the game leave the whole item out
         let malformed: Vec<bool> =
             entries.iter().map(|e| !e.readable || e.issues.iter().any(Issue::is_error)).collect();
-        let composition = compose::compose(&game, configs, &items, &texts, &malformed, module, &plan);
+        let composition = compose::compose(&game, &configs, &items, &lines, &malformed, module, &plan);
         let mut strings = Vec::new();
         for (e, a) in entries.iter().zip(&composition.applied) {
             if e.readable && !e.item.is_abstract() && !a.section.is_empty() {
@@ -126,7 +146,7 @@ impl Roster {
             plan,
             strings,
             sources,
-            configs: Arc::new(configs.clone()),
+            configs,
         };
         roster.mark_twins();
         roster
@@ -137,15 +157,18 @@ impl Roster {
     #[must_use]
     pub fn with_edit(&self, file: &str, text: String, root: &Path, picture: &atlas::PictureSize) -> Self {
         let key = file.replace('\\', "/");
-        let mut files: Vec<(String, Result<String, String>)> = self.sources.as_ref().clone();
-        match files.iter_mut().find(|(f, _)| f.eq_ignore_ascii_case(&key)) {
-            Some(slot) => slot.1 = Ok(text),
+        // the one file is read; every other is as the roster read it
+        let one = Source::read(key.clone(), Ok(text));
+        let mut sources: Vec<Source> = self.sources.as_ref().clone();
+        match sources.iter_mut().find(|s| s.entry.item.file.eq_ignore_ascii_case(&key)) {
+            Some(slot) => *slot = one,
             None => {
-                files.push((key, Ok(text)));
-                files.sort_by_key(|(f, _)| f.to_ascii_lowercase());
+                sources.push(one);
+                sources.sort_by_cached_key(|s| gz_base::text::game_order_key(&s.entry.item.file));
             }
         }
-        Self::build(self.stamp, &self.module, files, self.game.clone(), &self.configs, root, picture)
+        let (game, configs) = (self.game.clone(), self.configs.clone());
+        Self::assemble(self.stamp, &self.module, Arc::new(sources), game, configs, root, picture)
     }
 
     /// Two items of one section: a problem on each.

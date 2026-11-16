@@ -614,6 +614,9 @@ pub struct Builder {
     removed: Vec<bool>,
     /// The sections that name each one among their parents, in the order they were made.
     children: Vec<Vec<usize>>,
+    /// The heirs of a name no section has now - it was removed, or never made: a section made
+    /// under that name later has them, as the game finds heirs by the parent's name.
+    waiting: FxHashMap<Arc<str>, Vec<usize>>,
     files: Vec<Arc<str>>,
     file_ids: FxHashMap<Arc<str>, u32>,
     warnings: Vec<LtxWarning>,
@@ -631,6 +634,7 @@ impl Builder {
             created: Vec::new(),
             removed: Vec::new(),
             children: Vec::new(),
+            waiting: FxHashMap::default(),
             files: Vec::new(),
             file_ids: FxHashMap::default(),
             warnings: Vec::new(),
@@ -660,7 +664,8 @@ impl Builder {
             b.sections.push(s.clone());
             b.created.push(at);
             b.removed.push(false);
-            b.children.push(Vec::new());
+            let heirs = b.waiting.remove(&s.name).unwrap_or_default();
+            b.children.push(heirs);
             b.link_parents(at);
         }
         for f in ltx.files.iter() {
@@ -763,20 +768,23 @@ impl Builder {
         self.sections.push(s);
         self.created.push(i);
         self.removed.push(false);
-        self.children.push(Vec::new());
+        // the heirs of a section of this name that was removed, or that was not there yet
+        let heirs = self.sections.get(i).and_then(|s| self.waiting.remove(&s.name)).unwrap_or_default();
+        self.children.push(heirs);
         self.link_parents(i);
         i
     }
 
-    /// Lists section `i` among the children of each of its parents.
+    /// Lists section `i` among the children of each of its parents - by their names: a parent
+    /// that is not there now has its heirs kept for the section that takes the name.
     fn link_parents(&mut self, i: usize) {
-        let parents: Vec<usize> = self
-            .sections
-            .get(i)
-            .map(|s| s.parents.iter().filter_map(|p| self.find(p)).collect())
-            .unwrap_or_default();
-        for p in parents {
-            if let Some(c) = self.children.get_mut(p)
+        let parents: Vec<Arc<str>> = self.sections.get(i).map(|s| s.parents.clone()).unwrap_or_default();
+        for name in parents {
+            let list = match self.find(&name) {
+                Some(p) => self.children.get_mut(p),
+                None => Some(self.waiting.entry(name).or_default()),
+            };
+            if let Some(c) = list
                 && !c.contains(&i)
             {
                 c.push(i);
@@ -1079,10 +1087,15 @@ impl Builder {
                 }
                 Op::DropSection(name) => {
                     let del = name.to_ascii_lowercase();
-                    if let Some(i) = self.by_name.remove(del.as_str())
-                        && let Some(r) = self.removed.get_mut(i)
-                    {
-                        *r = true;
+                    if let Some((name, i)) = self.by_name.remove_entry(del.as_str()) {
+                        if let Some(r) = self.removed.get_mut(i) {
+                            *r = true;
+                        }
+                        // its heirs keep what they copied and wait for a section of that name
+                        let heirs = self.children.get_mut(i).map(std::mem::take).unwrap_or_default();
+                        if !heirs.is_empty() {
+                            self.waiting.entry(name).or_default().extend(heirs);
+                        }
                     }
                     valid = false;
                 }
@@ -1168,36 +1181,43 @@ pub fn compose_file(
     Ok(b.finish())
 }
 
-/// `xms_merge_section`: `src` into `dst`, layer against layer. What it wrote is a line of
-/// `dst`'s own; answers the keys it wrote.
+/// `xms_merge_section`: `src` into `dst`, layer against layer; answers the keys it wrote. A merge
+/// is `dst` saying a key itself - every key of a source without parents, the source's own lines of
+/// one that restates them (the lines it copied from them are written, and stay inherited) -
+/// whichever side wins the value.
 fn merge_section(dst: &mut Section, src: Section) -> Vec<Arc<str>> {
     let dst_layer = dst.layer;
     let n = dst.items.len();
     let layers = dst.item_layers.get_or_insert_with(|| vec![dst_layer; n]);
+    let says_all = src.parents.is_empty();
+    let heir = !dst.parents.is_empty();
     let mut changed = Vec::new();
     for it in src.items {
-        let it = Item { own: true, ..it };
-        dst.dropped.retain(|d| *d != it.key);
+        let says = !heir || says_all || it.own;
         match dst.index.get(&*it.key) {
             None => {
+                // a key `!key` took away stays the section's own word
+                let held = dst.dropped.contains(&it.key);
+                dst.dropped.retain(|d| *d != it.key);
                 dst.index.insert(it.key.clone(), u32::try_from(dst.items.len()).unwrap_or(u32::MAX));
                 changed.push(it.key.clone());
-                dst.items.push(it);
+                dst.items.push(Item { own: says || held, ..it });
                 layers.push(src.layer);
             }
             Some(&i) => {
                 let old = layers.get(i as usize).copied().unwrap_or(0);
-                if src.layer >= old {
-                    if let Some(x) = dst.items.get_mut(i as usize) {
+                let wins = src.layer >= old;
+                if let Some(x) = dst.items.get_mut(i as usize) {
+                    if wins {
                         changed.push(it.key.clone());
                         x.value = it.value;
                         x.file = it.file;
                         x.line = it.line;
-                        x.own = true;
                     }
-                    if let Some(l) = layers.get_mut(i as usize) {
-                        *l = src.layer;
-                    }
+                    x.own |= says;
+                }
+                if wins && let Some(l) = layers.get_mut(i as usize) {
+                    *l = src.layer;
                 }
             }
         }
@@ -1815,6 +1835,45 @@ mod tests {
         let l = b.finish().ltx;
         assert_eq!(val(&l, "wpn_ak74_m1", "weight").as_deref(), Some("3"));
         assert_eq!(val(&l, "wpn_ak74_own", "weight").as_deref(), Some("9"));
+    }
+
+    #[test]
+    fn an_overlay_that_restates_parents_keeps_what_it_copied_inherited() {
+        let files: FxHashMap<String, ParsedFile> =
+            [("c\\system.ltx", WEAPONS), ("mod\\over.ltx", "[wpn_ak74_kobra]:wpn_ak74\nscope = k2\n")]
+                .into_iter()
+                .map(|(p, t)| (p.to_owned(), parse_file(t, Dialect::Game)))
+                .collect();
+        let loader = Game(files);
+        let mut b = Builder::new(Dialect::Game);
+        b.load("c\\system.ltx", &loader).unwrap();
+        b.set_merge(true);
+        b.overlay("mod\\over.ltx", &loader).unwrap();
+        // the overlay's header copied the parent's lines: merged, they are no word of the child's own
+        b.patch("p.ltxp", "[wpn_ak74]\ncost = 9\n", 1);
+        let l = b.finish().ltx;
+        assert_eq!(val(&l, "wpn_ak74_kobra", "scope").as_deref(), Some("k2"));
+        assert_eq!(val(&l, "wpn_ak74_kobra", "cost").as_deref(), Some("9"));
+        assert_eq!(val(&l, "wpn_ak74_m1", "cost").as_deref(), Some("9"));
+        let kobra = l.section("wpn_ak74_kobra").unwrap();
+        assert!(kobra.get("scope").unwrap().own && !kobra.get("cost").unwrap().own);
+    }
+
+    #[test]
+    fn a_section_made_again_keeps_its_heirs() {
+        let mut b = tree(WEAPONS);
+        b.patch("p.ltxp", "[!wpn_ak74]\n[wpn_ak74] : base\ncost = 9\n", 1);
+        let l = b.finish().ltx;
+        // the heirs are found by the parent's name: the new section's change reaches them
+        assert_eq!(val(&l, "wpn_ak74_kobra", "cost").as_deref(), Some("9"));
+        assert_eq!(val(&l, "wpn_ak74_m1", "cost").as_deref(), Some("9"));
+        assert_eq!(val(&l, "wpn_ak74_own", "cost").as_deref(), Some("50"));
+        // what they copied from the removed one stays until the new one says otherwise
+        assert_eq!(val(&l, "wpn_ak74_kobra", "scopes").as_deref(), Some("x"));
+        // and a finished tree goes on the same way
+        let mut b = Builder::from_ltx(&l, Dialect::Game);
+        b.patch("q.ltxp", "[!wpn_ak74]\n[wpn_ak74] : base\ncost = 11\n", 1);
+        assert_eq!(val(&b.finish().ltx, "wpn_ak74_m1", "cost").as_deref(), Some("11"));
     }
 
     #[test]

@@ -36,6 +36,16 @@ pub fn utf8_to_cp1251(text: &str) -> (Cow<'_, [u8]>, bool) {
     (Cow::Owned(out), lossy)
 }
 
+/// The key the game takes a module's files in turn by, wherever the order decides something (two
+/// items that change one section, two patches of one key): the path as the game reads it (cp1251),
+/// its ASCII letters lower-cased, `/` between folders, compared byte by byte. So `a/k` comes before
+/// `a2/k`, and `B` after `a`.
+#[must_use]
+pub fn game_order_key(path: &str) -> Vec<u8> {
+    let (bytes, _) = utf8_to_cp1251(path);
+    bytes.iter().map(|&b| if b == b'\\' { b'/' } else { b.to_ascii_lowercase() }).collect()
+}
+
 /// Whether the game, which reads names through cp1251, can open a file of this name.
 #[must_use]
 pub fn fits_cp1251(text: &str) -> bool {
@@ -103,6 +113,28 @@ pub fn io_reason(e: &std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_games_order_of_a_modules_files() {
+        let mut v = vec![
+            "items/weapons2/ak.itemasset",
+            "items/weapons/ak.itemasset",
+            "items/B.itemasset",
+            "items/a.itemasset",
+        ];
+        v.sort_by_key(|p| game_order_key(p));
+        assert_eq!(
+            v,
+            [
+                "items/a.itemasset",
+                "items/B.itemasset",
+                "items/weapons/ak.itemasset",
+                "items/weapons2/ak.itemasset"
+            ]
+        );
+        // either slash, any case of the ASCII letters
+        assert_eq!(game_order_key("Items\\AK"), game_order_key("items/ak"));
+    }
 
     #[test]
     fn round_trips_cyrillic() {

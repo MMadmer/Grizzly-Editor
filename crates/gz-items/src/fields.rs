@@ -253,7 +253,12 @@ pub const HUD: &[Field] = &[
 
 pub const SECTION: &[Field] = &[
     f("name", Ty::Section, "", "A section the item makes, named as written."),
-    f("base", Ty::Sections, "none", "What the made section starts from."),
+    f(
+        "base",
+        Ty::Sections,
+        "none",
+        "What the made section starts from: a section that is there, or one the item itself makes before it - its own section, its HUD section, an earlier row.",
+    ),
     f("set", Ty::Keys, "", "Its keys."),
     f(
         "edit",
@@ -273,7 +278,7 @@ pub const CRAFT: &[Field] = &[
         "",
         "The tool or the workbench the recipe is in: the section the craft window is opened with (`itm_repairkit_tier_1`).",
     ),
-    f("count", Ty::Integer { min: 1, max: 1_000_000 }, "1", "How many the recipe makes."),
+    f("count", Ty::Integer { min: 1, max: 1000 }, "1", "How many the recipe makes."),
     f(
         "parts",
         Ty::List("one to four sections"),
