@@ -401,6 +401,8 @@ impl ShellState {
             log_state,
             reset_layout,
             translations,
+            // read by the areas as they install
+            no_releases: _,
         } = builder;
         JobMarks::of(&editor).log_state.lock().clone_from(&log_state);
         // the window's own actions first, then the areas': a later id replaces an earlier one

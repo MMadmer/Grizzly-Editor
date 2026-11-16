@@ -108,7 +108,7 @@ fn main() -> ExitCode {
     let exec = runtime.exec();
 
     startup.stage("Registering commands");
-    let registry = build_registry();
+    let registry = build_registry(PREVIEW);
 
     // a commandlet is the editor without a window
     let headless = cli.headless || cli.commandlet();
@@ -213,7 +213,7 @@ fn main() -> ExitCode {
         let fonts = gz_ui::font::FontFiles::read(&gz_ui::font::system_font_dir());
         startup.stage("Building the shell");
         let mut shell = gz_app::ShellBuilder::new();
-        install_ui(&mut shell);
+        install_ui(&mut shell, PREVIEW);
         let mut opts = gz_app::window_options(&editor);
         opts.start_minimized = cli.minimized;
         let shell = gz_app::GrizzlyShell::new(
@@ -244,7 +244,12 @@ fn main() -> ExitCode {
 }
 
 /// Every command of the editor: each area's own, then the ones the registry itself brings.
-fn build_registry() -> Registry {
+/// A preview build (`Build.ps1 -Preview`, the feature `preview`; docs/ARCHITECTURE.md, "A preview build"):
+/// the editor for trying a module out before the editor's release. Nothing it makes reaches players: no
+/// release command, no Package Release, Publish Release, Releases or Submit to Mod Browser.
+const PREVIEW: bool = cfg!(feature = "preview");
+
+fn build_registry(preview: bool) -> Registry {
     let mut registry = Registry::new();
     core_cmds::register(&mut registry);
     // the frame's commands, also headless (they answer "no window" there); an area that owns one
@@ -258,11 +263,15 @@ fn build_registry() -> Registry {
     gz_media::register(&mut registry);
     gz_items::register(&mut registry);
     gz_nq::register(&mut registry);
-    gz_release::register(&mut registry);
-    gz_publish::register(&mut registry);
+    if !preview {
+        gz_release::register(&mut registry);
+        gz_publish::register(&mut registry);
+    }
     gz_update::register(&mut registry);
-    // after gz-release: the real release.catalog replaces its key-only stand-in
-    gz_catalog::register(&mut registry);
+    if !preview {
+        // after gz-release: the real release.catalog replaces its key-only stand-in
+        gz_catalog::register(&mut registry);
+    }
     gz_screens::register(&mut registry);
     gz_world::register(&mut registry);
     gz_scene::register(&mut registry);
@@ -272,7 +281,9 @@ fn build_registry() -> Registry {
     gz_ui_content::register(&mut registry);
     gz_ui_previews::register(&mut registry);
     gz_ui_pda::register(&mut registry);
-    gz_ui_release::register(&mut registry);
+    if !preview {
+        gz_ui_release::register(&mut registry);
+    }
     // after gz-scene: it wraps scene.get with the panels' side
     gz_ui_level::register(&mut registry);
     gz_ui_viewport::register(&mut registry);
@@ -285,12 +296,17 @@ fn build_registry() -> Registry {
 }
 
 /// What the UI crates plug into the shell: each one's `install`, one line per crate.
-fn install_ui(shell: &mut gz_app::ShellBuilder) {
+fn install_ui(shell: &mut gz_app::ShellBuilder, preview: bool) {
+    if preview {
+        shell.without_releases();
+    }
     gz_ui_app::install(shell);
     gz_ui_mod::install(shell);
     gz_ui_content::install(shell);
     gz_ui_previews::install(shell);
-    gz_ui_release::install(shell);
+    if !preview {
+        gz_ui_release::install(shell);
+    }
     gz_ui_pda::install(shell);
     gz_ui_level::install(shell);
     gz_ui_viewport::install(shell);
@@ -342,7 +358,7 @@ mod tests {
     /// a name of the agreed form, a summary that is a sentence, and a word on every parameter.
     #[test]
     fn every_card_is_worth_reading() {
-        let registry = super::build_registry();
+        let registry = super::build_registry(false);
         let mut seen = std::collections::BTreeSet::new();
         let mut wrong = Vec::new();
         for c in registry.commands() {
@@ -381,12 +397,42 @@ mod tests {
         );
     }
 
+    /// A preview build (`Build.ps1 -Preview`) puts nothing in front of players: no command that
+    /// publishes or reaches GitHub's releases or the Mod Browser, no window or action of them; the
+    /// builds stay.
+    #[test]
+    fn a_preview_build_offers_nothing_that_reaches_players() {
+        let full = super::build_registry(false);
+        let preview = super::build_registry(true);
+        assert!(full.has("release.publish") && full.has("mod.package") && full.has("release.catalog"));
+        for c in preview.commands() {
+            assert!(c.spec.effect != gz_editor::Effect::Publish, "{} reaches players", c.name);
+            assert!(!c.name.starts_with("release."), "{} is a release command", c.name);
+        }
+        assert!(preview.has("mod.build") && preview.has("mod.set") && preview.has("asset.check"));
+        let mut shell = ShellBuilder::new();
+        super::install_ui(&mut shell, true);
+        for id in ["publish_release", "submit", "package_release"] {
+            assert!(!shell.has_dialog(id), "the dialog {id} is there");
+        }
+        assert!(!shell.has_document("releases"));
+        for id in [
+            gz_ui_mod::menu::PACKAGE,
+            gz_ui_mod::menu::PUBLISH,
+            gz_ui_mod::menu::RELEASES,
+            gz_ui_mod::menu::CATALOG,
+        ] {
+            assert!(!shell.has_action(id), "the action {id} is there");
+        }
+        assert!(shell.has_action(gz_ui_mod::menu::BUILD_INTO_GAME) && shell.has_dialog("build_to_folder"));
+    }
+
     /// The shell keeps a sentence for a surface nobody installed (a test of `gz-app` alone):
     /// the editor installs every one of them, so none of those sentences is ever its answer.
     #[test]
     fn the_editor_installs_every_surface_the_contract_names() {
         let mut shell = ShellBuilder::new();
-        super::install_ui(&mut shell);
+        super::install_ui(&mut shell, false);
         for kind in contract::DOCUMENT_KINDS {
             assert!(shell.has_document(kind), "no tab of the kind {kind}");
         }
@@ -434,7 +480,7 @@ mod tests {
     #[test]
     fn the_catalogs_are_one_sound_catalog() {
         let mut shell = ShellBuilder::new();
-        super::install_ui(&mut shell);
+        super::install_ui(&mut shell, false);
         let mut sources: Vec<&'static str> = vec![gz_ui::i18n::KIT_RU, gz_app::lang::SHELL_RU];
         sources.extend(shell.translations());
         let files = catalog_files();

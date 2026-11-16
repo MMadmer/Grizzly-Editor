@@ -10,10 +10,14 @@
 #   .\Build.ps1 -Package    - the release, then its archives in Bin\x64\Package (tools/rust/package.py):
 #                             Grizzly-Editor-<version>.zip, its -symbols.zip and update-manifest.txt.
 #                             Nothing is published; a release goes out by the author's hand.
+#   .\Build.ps1 -Preview -Out <dir> - a preview build: the editor with nothing that reaches players (no Package
+#                             Release, Publish Release, Releases, Submit to Mod Browser, no release.* command)
+#                             and no updater, for trying a module out before the editor's release
 param(
     [string]$Out = '',
     [switch]$Debug,
-    [switch]$Package
+    [switch]$Package,
+    [switch]$Preview
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,6 +32,8 @@ function Fail([string]$msg) { Write-Host "`nBUILD SETUP ERROR: $msg" -Foreground
 
 if ($PSVersionTable.PSVersion.Major -lt 7) { Fail "run it with pwsh 7: pwsh -NoProfile -File .\Build.ps1" }
 if ($Package -and $Debug) { Fail "a package is made from the release build: drop -Debug" }
+if ($Preview -and $Package) { Fail "a preview build is no release: drop -Package" }
+if ($Preview -and -not $Out) { Fail "a preview build goes to a folder of its own: give -Out <dir>" }
 
 $bin = if ($Out) { [IO.Path]::GetFullPath($Out, (Get-Location).Path) } else { Join-Path $root "Bin\x64\$config" }
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
@@ -40,6 +46,7 @@ if (-not $cargo) { Fail "cargo not found. Install rustup (https://rustup.rs); ru
 Remove-Item Env:NoDefaultCurrentDirectoryInExePath -ErrorAction SilentlyContinue
 $cargoArgs = @('build', '-p', 'grizzly', '-p', 'gz-mcp-bridge')
 if (-not $Debug) { $cargoArgs += '--release' }
+if ($Preview) { $cargoArgs += @('--features', 'grizzly/preview') }
 Push-Location $root
 try { & $cargo @cargoArgs } finally { Pop-Location }
 if ($LASTEXITCODE) { exit $LASTEXITCODE }

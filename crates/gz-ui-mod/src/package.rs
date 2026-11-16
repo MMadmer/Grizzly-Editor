@@ -551,6 +551,9 @@ impl PackageDialog {
 }
 
 pub(crate) fn install(b: &mut ShellBuilder) {
+    if !b.releases() {
+        return;
+    }
     let state = Rc::new(RefCell::new(PackageDialog::default()));
     let (open_state, draw_state) = (state.clone(), state);
     b.dialog(DialogDesc {

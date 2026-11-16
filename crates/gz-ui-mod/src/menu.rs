@@ -106,22 +106,29 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             .args(|_| dialog("export_flat"))
             .enabled(with_project),
     );
-    b.action(
-        Action::new(PACKAGE, "Package Release...", "Mod", "mod.view")
-            .icon(Icon::Package)
-            .args(|_| dialog("package_release"))
-            .enabled(with_project),
-    );
-    for id in [MOD_SETTINGS, BUILD_INTO_GAME, BUILD_TO_FOLDER, EXPORT_FLAT, PACKAGE] {
+    // a preview build packages no release
+    let releases = b.releases();
+    if releases {
+        b.action(
+            Action::new(PACKAGE, "Package Release...", "Mod", "mod.view")
+                .icon(Icon::Package)
+                .args(|_| dialog("package_release"))
+                .enabled(with_project),
+        );
+    }
+    for id in [MOD_SETTINGS, BUILD_INTO_GAME, BUILD_TO_FOLDER, EXPORT_FLAT] {
         row(b, id, None);
     }
-    b.project_toolbar(0, build_mod);
+    if releases {
+        row(b, PACKAGE, None);
+    }
+    b.project_toolbar(0, move |tb, cx| build_mod(tb, cx, releases));
 }
 
 /// Shipping the mod is the most-used action of the editor: the one Primary button of the row, on
 /// every tab. Its label keeps its width: what a running job does is in the tip, and a click brings
 /// the job's card up.
-fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
+fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>, releases: bool) {
     crate::cards::ensure(cx.editor);
     let editor = cx.editor.clone();
     let busy = build_running(&editor);
@@ -146,13 +153,15 @@ fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
                 picked = Some(id);
             }
         }
-        ui.separator();
-        if menu_item(
-            ui,
-            "Package Release...",
-            MenuItem { icon: Icon::Package, enabled: !busy, ..MenuItem::default() },
-        ) {
-            picked = Some(PACKAGE);
+        if releases {
+            ui.separator();
+            if menu_item(
+                ui,
+                "Package Release...",
+                MenuItem { icon: Icon::Package, enabled: !busy, ..MenuItem::default() },
+            ) {
+                picked = Some(PACKAGE);
+            }
         }
     }) {
         picked = Some(BUILD_INTO_GAME);

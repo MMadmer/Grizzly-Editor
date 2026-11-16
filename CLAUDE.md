@@ -389,7 +389,8 @@ A change of plan is a change of its document first.
   there; it says what it built and how long it took. A program of that folder that is running while it is
   replaced - an agent's bridge, an editor left open - is put aside as `<name>.old-<n>` and keeps running: the copy
   goes with a later build, and the build says which programs to start again. `-Debug`, `-Out <folder>`, `-Package`
-  (the release archive the updater installs from, below). One build, cargo alone; Visual Studio's
+  (the release archive the updater installs from, below), `-Preview -Out <folder>` (a preview build: nothing that
+  reaches players, no updater - `docs/ARCHITECTURE.md` section 8). One build, cargo alone; Visual Studio's
   C++ workload is needed only for the C compiler of the vendored LuaJIT and libvorbis and the Windows SDK libraries.
   The everyday build is `bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge` (`Intermediate\cargo\debug`).
 - The release profile (`Cargo.toml`): thin LTO, 16 codegen units, the line tables in the PDB beside the executable.

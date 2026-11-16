@@ -158,6 +158,14 @@ An area crate is its domain plus `service.rs` and `cmd.rs` with one `register(re
 `install(builder)`. The scripts that check and test the workspace are `tools/rust/check.sh` and
 `tools/rust/test.sh`; the QA suites run through `tools/qa/run_all.py`.
 
+**A preview build** (`Build.ps1 -Preview -Out <folder>`, the feature `preview` of `grizzly`) is the editor for
+trying a module out before the editor's release: nothing it makes reaches players. It registers no command of
+`gz-release`, `gz-publish`, `gz-catalog` and `gz-ui-release` (no `mod.package`, `mod.thumbnail`, `release.*`),
+installs no `gz-ui-release` surface (Publish Release, Releases, Submit to Mod Browser) and `gz-ui-mod` leaves
+Package Release out (`ShellBuilder::without_releases`, read by a surface as it installs). The builds into the
+game and into a folder stay. It is no package (`-Package` is refused): without an installation manifest it has
+no updater. The editor's test `a_preview_build_offers_nothing_that_reaches_players` holds it.
+
 ## 9. The contract with the game
 
 Every artifact that leaves the editor for the game, a release or the catalog, and every file of the game the

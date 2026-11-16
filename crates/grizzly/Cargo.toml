@@ -19,6 +19,11 @@ path = "src/main.rs"
 name = "Grizzly-Cmd"
 path = "src/cmd_twin.rs"
 
+[features]
+# A preview build: no command, action, dialog or tab that puts a module in front of players
+# (Build.ps1 -Preview; docs/ARCHITECTURE.md, "A preview build").
+preview = []
+
 [dependencies]
 gz-base.workspace = true
 gz-task.workspace = true

@@ -191,6 +191,8 @@ pub struct ShellBuilder {
     pub(crate) reset_layout: Option<ResetLayoutFn>,
     /// The areas' catalogs of the window's languages (`ru.lua`, Lua data).
     pub(crate) translations: Vec<&'static str>,
+    /// A preview build: nothing the editor makes is put in front of players from it.
+    pub(crate) no_releases: bool,
 }
 
 impl ShellBuilder {
@@ -299,6 +301,18 @@ impl ShellBuilder {
             order,
             content: MenuContent::Custom(Box::new(draw)),
         });
+    }
+
+    /// A preview build of the editor (docs/ARCHITECTURE.md, "A preview build"): the areas that put a
+    /// module in front of players leave their actions, dialogs and tabs out. Called before they install.
+    pub fn without_releases(&mut self) {
+        self.no_releases = true;
+    }
+
+    /// Whether the window may offer what reaches players: false in a preview build.
+    #[must_use]
+    pub fn releases(&self) -> bool {
+        !self.no_releases
     }
 
     /// Items at the right end of every toolbar (Build Mod, Publish Release, Releases), lowest

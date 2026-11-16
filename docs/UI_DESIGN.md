@@ -227,7 +227,7 @@ Errors and notes for the author become queued notices once the UI draws.
 Chrome totals 122 pt:
 - **Caption (32):** logo, menus, a drag band of at least 48, the project name (dropped first), – ▢ ✕.
 - **Tab row (30):** the major tabs and ⌄, from the left edge, in the chrome colour - a row of its own, so that no tab moves when the active one brings other menus into the caption (Level's Scene, Build and View, a graph tab's Graph). It is client area, not part of the drag band. The Start page has no tab row (nor a toolbar).
-- **Toolbar (36):** the tab's `toolbar()` (or its status), then Spring, then the project's group on every tab - [Build Mod ▾ (Primary split)] [Publish Release] [Releases]. Releases is checked on the Releases tab and stays where it is. Publish Release keeps its label while a job runs: the state is in its tip.
+- **Toolbar (36):** the tab's `toolbar()` (or its status), then Spring, then the project's group on every tab - [Build Mod ▾ (Primary split)] [Publish Release] [Releases]; a preview build (docs/ARCHITECTURE.md section 8) has Build Mod alone, no Package Release in it or in the Mod menu, and no Publish Release, Releases or Submit to Mod Browser anywhere. Releases is checked on the Releases tab and stays where it is. Publish Release keeps its label while a job runs: the state is in its tip.
 - **Status bar (24).**
 
 **Caption**
