@@ -4,7 +4,7 @@
 Drives the editor over MCP on a THROW-AWAY COPY of a project; every file is written with Python,
 the way an agent's own file tools write it:
 
-- A: asset.kinds lists the eleven kinds; asset.reference answers each of them (quests with the linked
+- A: asset.kinds lists the twelve kinds; asset.reference answers each of them (quests with the linked
   game's node kinds, the module manifest's format by any of its names);
 - B: asset.check puts problems at their lines and columns, fail_on=error makes it fail, a file
   of a newer version is refused with the sentence;
@@ -99,10 +99,10 @@ def phase_a() -> None:
     bad = cmd("asset.reference", kind="nothing")
     check(bad.get("code") == "not_found" and "module manifest" in bad.get("error", ""),
           "A an unknown kind is not_found and names the manifest among the kinds", json.dumps(bad)[:200])
-    # eleven kinds - the model, the texture and the sound among them - and every one has a reference that answers
+    # twelve kinds - the item, the model, the texture and the sound among them - and every one has a reference that answers
     names = [x.get("name") for x in k.get("kinds", [])]
-    check(len(names) == 11 and {"module manifest", "model", "texture", "sound"} <= set(names),
-          "A asset.kinds lists eleven kinds, the manifest and the media kinds among them", names)
+    check(len(names) == 12 and {"module manifest", "item", "model", "texture", "sound"} <= set(names),
+          "A asset.kinds lists twelve kinds, the manifest, the item and the media kinds among them", names)
     for name in names:
         r = cmd("asset.reference", kind=name)
         check(r.get("ok") and len(r.get("text", "")) > 200, "A asset.reference kind=%s answers a document" % name,

@@ -76,7 +76,9 @@ def wait_for_copy(job: Job) -> dict:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline and job.is_alive():
         row = job_row()
-        if row.get("determinate") and row.get("step") == 1 and row.get("fraction", 0) > 0:
+        # the fraction is the job's and the numbers the card's, each told at its own rate: a row of the copy is
+        # one that has both
+        if row.get("determinate") and row.get("step") == 1 and row.get("fraction", 0) > 0 and row.get("numbers"):
             return row
         time.sleep(.02)
     return {}
