@@ -14,7 +14,9 @@ mod's work is the mod minus its BASE (the game's files it was made from), applie
     converted (their diffs go to `port\\` for the next step);
   * strings: the ids the mod adds or changes, one table per language; icons: the pictures that are the mod's
     own, cut out of its atlas; particles: the effects and groups it adds or changes, as loose `.pe` / `.pg`;
-  * media: the files that are the mod's own bytes, and an older game version only where the mod's work needs it.
+  * media: the files that are the mod's own bytes, and an older game version only where the mod's work needs it;
+    its motion files against the game's of the same paths (`motion_files.py`): a copy of the game's file gets the
+    motions the game has grown since, a file of another skeleton gets a name of its own.
 
     python tools/classic_mod/classic_to_module.py --mod <gamedata> --game <game root> --out <new project>
         --id <module id> [--name <title>] [--base <archive names, comma separated, or a folder>]
@@ -43,6 +45,7 @@ import icons  # noqa: E402
 import items  # noqa: E402
 import luadata  # noqa: E402
 import media  # noqa: E402
+import motion_files  # noqa: E402
 import notes  # noqa: E402
 import particles  # noqa: E402
 import strings  # noqa: E402
@@ -1239,6 +1242,30 @@ class Converter:
         self.rep["use_animations"] = {"sections": len(out), "item_table_entries": len(tbl),
                                       "by_kind": dict(collections.Counter(e["kind"] for e in out))}
 
+    def motion_files(self):
+        """The module's motion files against the game's of the same paths: what `motion_files.py` does, with
+        the files it changed written into the ledger as they are now."""
+        self.log("motion files against the game's of the same paths")
+        done = motion_files.process(self.out, self.game, self.id, say=lambda _line: None)
+        by_lower = {rel.lower(): rel for rel in self.written}
+
+        def refresh(rel, was=None):
+            old = by_lower.get((was or rel).lower())
+            if old is None:
+                return
+            del self.written[old]
+            with open(os.path.join(self.out, rel), "rb") as f:
+                data = f.read()
+            self.written[rel if was else old] = (hashlib.sha256(data).hexdigest(), len(data))
+
+        for rel in list(done.merged) + done.pointed:
+            refresh(rel)
+        for was, rel in done.renamed.items():
+            refresh(rel, was)
+        self.motion_done = done
+        self.log(f"motion files: {len(done.merged)} got the game's motions, {len(done.renamed)} of another skeleton "
+                 f"renamed, {len(done.pointed)} models pointed at them, {len(done.kept)} left as they are")
+
     def run(self):
         os.makedirs(self.out, exist_ok=True)
         self.prepare_out()
@@ -1258,6 +1285,7 @@ class Converter:
         self.use_animations()
         self.media()
         self.references()
+        self.motion_files()
         self.lint_ltxp()
         self.project()
         notes.write(self)

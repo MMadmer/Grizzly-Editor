@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-"""A motion file of another skeleton never replaces the game's.
+"""A classic mod's motion files against the game's of the same paths.
 
-A classic mod ships its own models with their motion files (`.omf`) under the game's paths. Where the mod's
-model has another skeleton than the game's, its motion file is another file under the old name - and mounted
-over the game's it takes the motions away from every model of TODAY's game that still names that path and
-that the mod does not replace (a medkit the game added after the mod was made, for one): the first scene
-that plays one of those motions stops the game.
+A classic mod ships its own models with their motion files (`.omf`) under the game's paths, as whole copies made
+over the game of its day. Mounted over today's game such a copy is wrong in one of two ways, and this settles
+both for any classic mod:
 
-For every motion file of the project that stands on a path the game has, with another set of bones, and that
-some model of the game the project does not replace still names, this gives the project's file a name of its
-own (`<name>_<module id>.omf`) and points the project's own models at it. The game's file is the game's again.
+  * **The same skeleton, fewer motions.** Today's game has grown the file since - new weapons and devices put
+    their hands motions into the files the hands models already name - and the mod's copy takes those motions
+    away: the game stops with a missing motion the moment one is played. The project's file keeps everything it
+    has and gets every motion of the game's file it lacks (by name: the mod's own motion wins), its bone tracks
+    laid into the file's own track order by bone name.
+  * **Another skeleton.** The mod's model has other bones than the game's, so its motion file is another file
+    under the old name, and every model that still names that path - the game's own that the mod does not
+    replace, a model the game adds later, another module's - loses its motions. The project's file gets a name
+    of its own (`<name>_<module id>.omf`) and the project's models are pointed at it. The game's file is the
+    game's again.
 
     python tools/classic_mod/motion_files.py --project <module project> --game <game root> [--dry]
 
-It only ever renames a file of the project and rewrites the motion references of the project's models; a second
-run changes nothing. Needs python-lzo and the game's tools\\stalker-tools (the converter's archive reader).
+The converter runs it as one of its steps; run by hand it does the same to a project that exists. It only ever
+changes files of the project - a motion file's contents or name, the motion references of the project's own
+models - and a second run changes nothing. Needs python-lzo and the game's tools\\stalker-tools (the converter's
+archive reader).
 """
 from __future__ import annotations
 
@@ -25,6 +32,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import archives  # noqa: E402
+import omf  # noqa: E402
 
 MOTIONS = 15       # the motion definitions of a motion file, with the bones by name
 REFS = 19          # a model's motion files: one string, names joined by commas
@@ -124,16 +132,26 @@ def module_id(project: str) -> str:
     raise SystemExit("mod.ltx names no id")
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--project", required=True, help="the module project")
-    ap.add_argument("--game", required=True, help="the game's root")
-    ap.add_argument("--dry", action="store_true", help="say what would change and change nothing")
-    a = ap.parse_args()
-    game = archives.Game(a.game)
-    root = os.path.join(a.project, "gamedata")
+class Done:
+    """What a run changed, by the project's own paths (`gamedata\\meshes\\...`)."""
+
+    def __init__(self):
+        self.merged: dict[str, int] = {}     # motion file -> the game's motions it got
+        self.renamed: dict[str, str] = {}    # motion file -> its new path
+        self.pointed: list[str] = []         # models whose motion references were rewritten
+        self.kept: dict[str, str] = {}       # motion file -> why it was left as it is
+
+
+def process(project: str, game, module: str, dry: bool = False, say=print) -> Done:
+    """Settles every motion file of `project` that stands on a path the game has. `game` is the converter's
+    archive reader (`archives.Game`)."""
+    done = Done()
+    root = os.path.join(project, "gamedata")
     meshes = os.path.join(root, "meshes")
-    suffix = "_" + module_id(a.project)
+    suffix = "_" + module
+
+    def own(path: str) -> str:
+        return os.path.relpath(path, project)
 
     mine = {}
     for folder, _, files in os.walk(meshes):
@@ -141,61 +159,83 @@ def main():
             path = os.path.join(folder, name)
             mine[os.path.relpath(path, root).replace("/", "\\").lower()] = path
 
-    # the project's motion files that stand on a game path with another set of bones
+    # every motion file of the project on a game path: of the game's skeleton, or of another
     foreign = {}
-    for rel, path in mine.items():
+    for rel, path in sorted(mine.items()):
         if not rel.endswith(".omf") or rel[:-4].endswith(suffix):
             continue
         v = game.effective(rel)
         if v is None:
             continue
         with open(path, "rb") as f:
-            a_bones = bones_of(f.read())
-        b_bones = bones_of(game.read(v))
-        if a_bones is not None and b_bones is not None and a_bones != b_bones:
-            foreign[rel[len("meshes\\"):-4]] = rel
-    if not foreign:
-        print("no motion file of another skeleton stands on a game path")
-        return
-
-    # the game's models the project does not replace that still name one of them
-    users = {k: [] for k in foreign}
-    for rel in sorted(game.versions):
-        if not (rel.startswith("meshes\\") and rel.endswith(".ogf")) or rel in mine:
-            continue
-        v = game.effective(rel)
-        for name in refs_of(game.read(v)):
-            if key(name) in users:
-                users[key(name)].append(rel)
-    rename = {k: k + suffix for k, models in users.items() if models}
-    for k in sorted(foreign):
-        if k in rename:
-            print(f"renamed\tmeshes\\{k}.omf\t-> {os.path.basename(rename[k])}.omf\t{len(users[k])} model(s) of the game keep the game's file, "
-                  f"first: {users[k][0]}")
-        else:
-            print(f"kept\tmeshes\\{k}.omf\tno model of the game outside the project names it")
-    if not rename:
-        return
-
-    pointed = 0
-    for rel, path in sorted(mine.items()):
-        if not rel.endswith(".ogf"):
-            continue
-        with open(path, "rb") as f:
             data = f.read()
-        new = with_refs(data, rename)
-        if new is None:
+        theirs = game.read(v)
+        a_bones, b_bones = bones_of(data), bones_of(theirs)
+        if a_bones is None or b_bones is None:
+            done.kept[own(path)] = "it does not read as a motion file" if a_bones is None else "the game's file does not read"
+            say(f"kept\t{rel}\t{done.kept[own(path)]}")
             continue
-        pointed += 1
-        print(f"pointed\t{rel}")
-        if not a.dry:
+        if a_bones != b_bones:
+            foreign[rel[len("meshes\\"):-4]] = rel
+            continue
+        try:
+            merged, added, skipped = omf.merge(data, theirs)
+        except (ValueError, struct.error, IndexError, KeyError, UnicodeDecodeError) as e:
+            done.kept[own(path)] = f"it does not read whole ({e})"
+            say(f"kept\t{rel}\t{done.kept[own(path)]}")
+            continue
+        if merged is None:
+            if "*" in skipped:
+                done.kept[own(path)] = skipped["*"]
+                say(f"kept\t{rel}\t{skipped['*']}")
+            continue
+        done.merged[own(path)] = len(added)
+        say(f"merged\t{rel}\t+{len(added)} of the game's motions" + (f", {len(skipped)} left out" if skipped else ""))
+        if not dry:
             with open(path, "wb") as f:
-                f.write(new)
-    if not a.dry:
+                f.write(merged)
+
+    # a file of another skeleton never stands on the game's path, whoever names that path today
+    rename = {k: k + suffix for k in foreign}
+    for k in sorted(foreign):
+        say(f"renamed\tmeshes\\{k}.omf\t-> {os.path.basename(rename[k])}.omf\tanother skeleton than the game's file")
+    if rename:
+        for rel, path in sorted(mine.items()):
+            if not rel.endswith(".ogf"):
+                continue
+            with open(path, "rb") as f:
+                data = f.read()
+            new = with_refs(data, rename)
+            if new is None:
+                continue
+            done.pointed.append(own(path))
+            say(f"pointed\t{rel}")
+            if not dry:
+                with open(path, "wb") as f:
+                    f.write(new)
         for k, to in rename.items():
             src = mine[foreign[k]]
-            os.replace(src, os.path.join(os.path.dirname(src), os.path.basename(to) + ".omf"))
-    print(f"{len(rename)} motion file(s) renamed, {pointed} model(s) of the project pointed at them" + (" (dry run)" if a.dry else ""))
+            dst = os.path.join(os.path.dirname(src), os.path.basename(to) + ".omf")
+            done.renamed[own(src)] = own(dst)
+            if not dry:
+                os.replace(src, dst)
+    say(f"{len(done.merged)} motion file(s) got the game's motions, {len(done.renamed)} renamed, "
+        f"{len(done.pointed)} model(s) of the project pointed at them" + (" (dry run)" if dry else ""))
+    return done
 
 
-main()
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--project", required=True, help="the module project")
+    ap.add_argument("--game", required=True, help="the game's root")
+    ap.add_argument("--dry", action="store_true", help="say what would change and change nothing")
+    a = ap.parse_args()
+    game = archives.Game(a.game)
+    try:
+        process(a.project, game, module_id(a.project), a.dry)
+    finally:
+        game.close()
+
+
+if __name__ == "__main__":
+    main()

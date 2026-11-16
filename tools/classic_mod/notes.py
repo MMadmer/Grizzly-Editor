@@ -157,10 +157,23 @@ def write(cv):
                  "lines (`patch\\" + cv.id + "_system_files.ltxp`): the patch reaches both.")
     if cv.flattened:
         L.append("- The game makes an item's sections only when every parent they name is there before it (a new item waits "
-                 "for another new item, never for a change or for itself). These were written over their parent's own "
+                 "for another new item, never for a change). These were written over their parent's own "
                  "parents, with what they took from it: " +
                  ", ".join(f"`{s}` (over {', '.join(f'`{x}`' for x in now)} instead of {', '.join(f'`{x}`' for x in was)})"
                            for s, was, now in cv.flattened) + ".")
+    md = getattr(cv, "motion_done", None)
+    if md and md.merged:
+        L.append(f"- {len(md.merged)} motion files of the mod are copies of the game's from the game it was made over. "
+                 f"Mounted over today's game they would take away the motions the game has put into those files since, "
+                 f"and the game stops when one is played: each got the motions it lacks ({sum(md.merged.values())} in "
+                 "all), the mod's own motion winning where both have one name.")
+    if md and md.renamed:
+        L.append(f"- {len(md.renamed)} motion files of the mod are written for other bones than the game's file of the "
+                 f"same path. Each has a name of its own (`<name>_{cv.id}.omf`) and the module's {len(md.pointed)} models "
+                 "that use them name it: the game's file stays the game's, for every model that names that path.")
+    if md and md.kept:
+        L.append(f"- {len(md.kept)} motion files on a game path were left as they are: " +
+                 ", ".join(f"`{f}` ({why})" for f, why in sorted(md.kept.items())) + ".")
     if cv.recipes:
         L.append("- Craft recipes the mod added to `ui_itm_craft.script` are the items' `craft`: " +
                  ", ".join(f"`{r}` at `{at}`" for r, rows in sorted(cv.recipes.items()) for at, _, _ in rows) + ".")
