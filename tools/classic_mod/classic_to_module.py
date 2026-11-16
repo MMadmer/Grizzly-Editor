@@ -305,6 +305,12 @@ class Converter:
         self.log(f"left to the next step (use animations): {len(excluded)} sections")
         self.intent = it
         self.icon_pass(it, own)
+        # the keys inheritance would move: what the mod left holds, a new section is what the mod made it (the
+        # icons are the pictures', judged apart)
+        excluded_set = set(excluded)
+        it.agreed = [a for a in it.agreed if a[0] not in excluded_set]
+        held = compose.hold(G, M, it, skip_keys=items.ICON_KEYS)
+        self.log(f"held against inheritance: {held} keys")
         W = compose.wanted(G, it)
         own = items.Owners(W, M, G)
         self.W, self.own = W, own

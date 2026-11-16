@@ -30,6 +30,8 @@ class Intent:
         self.both_added: list[str] = []
         self.lost_game_additions: list[str] = []         # sections the game added since the base (kept)
         self.removed_keys: list[tuple] = []             # (section, key) the mod takes away
+        self.agreed: list[tuple] = []                   # (section, key, today's value) the mod left as its base had it
+        self.held: list[tuple] = []                     # (section, key, value) pinned so that it holds (`hold`)
 
     def pin(self, sect, key, value):
         self.pins.setdefault(sect, {})[key] = value
@@ -54,8 +56,10 @@ def three_way(B: Config, M: Config, G: Config, scope=None) -> Intent:
                         it.removed_keys.append((s, k))
                     if gv != bv and gv != mv:
                         it.conflicts.append((s, k, bv, gv, mv))
-                elif gv != mv:
-                    it.rollbacks.append((s, k))
+                else:
+                    it.agreed.append((s, k, gv))
+                    if gv != mv:
+                        it.rollbacks.append((s, k))
         elif in_m and in_g:
             it.both_added.append(s)
             mr, gr = M.resolve(s), G.resolve(s)
@@ -91,6 +95,44 @@ def wanted(G: Config, it: Intent, fallback: Config | None = None) -> Config:
         W.add(sect.copy())
     W.invalidate()
     return W
+
+
+def hold(G: Config, M: Config, it: Intent, skip_keys=(), rounds=8) -> int:
+    """Pins what inheritance would otherwise move. A change of a parent reaches every section that does not say
+    the key itself, and in today's game a section often inherits what the mod's copy said itself:
+      * a key the mod left as its base had it keeps today's value - the mod changing the parent (its own copy
+        said the child's value outright, or the child's value came from elsewhere) does not reach it;
+      * a section the mod makes is what the mod made it: a key it inherits from a parent today's game changed
+        since gets the mod's value.
+    Repeated until nothing moves, as one pin may move another. Answers the number of pins added."""
+    skip = set(skip_keys)
+    added = 0
+    for _ in range(rounds):
+        W = wanted(G, it)
+        moved = 0
+        for s, k, gv in it.agreed:
+            if k in skip or s not in it.pins and s not in W.sections:
+                continue
+            if val(W.resolve(s), k) != gv:
+                it.pin(s, k, REMOVED if gv is ABSENT else gv)
+                it.held.append((s, k, gv))
+                moved += 1
+        for s, sect in it.new.items():
+            if s not in M.sections:
+                continue
+            mr, wr = M.resolve(s), W.resolve(s)
+            for k in sorted(set(mr) | set(wr)):
+                if k in skip:
+                    continue
+                mv = val(mr, k)
+                if val(wr, k) != mv:
+                    sect.own[k] = REMOVED if mv is ABSENT else mv
+                    it.held.append((s, k, mv))
+                    moved += 1
+        added += moved
+        if not moved:
+            break
+    return added
 
 
 # ---- the directives -----------------------------------------------------------------------------------

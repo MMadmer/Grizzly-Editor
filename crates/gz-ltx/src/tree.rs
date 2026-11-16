@@ -461,10 +461,13 @@ impl Section {
         self.index.get(key).and_then(|&i| self.items.get(i as usize))
     }
 
-    /// Whether the section says its own word on a key: a line of its own, or a `!key`.
+    /// Whether the section says its own word on a key: a line of its own, or a `!key`. An inventory icon is its
+    /// texture and its rectangle together, as the game reads it: a section that states its own rectangle keeps
+    /// its texture when a parent's changes.
     #[must_use]
     pub fn holds(&self, key: &str) -> bool {
-        self.get(key).is_some_and(|it| it.own) || self.dropped.iter().any(|d| &**d == key)
+        let says = |k: &str| self.get(k).is_some_and(|it| it.own) || self.dropped.iter().any(|d| &**d == k);
+        says(key) || key == "icons_texture" && (says("inv_grid_x") || says("inv_grid_y"))
     }
 
     /// A parent's line, copied: never a line of the section's own.
@@ -1857,6 +1860,23 @@ mod tests {
         assert_eq!(val(&l, "wpn_ak74_m1", "cost").as_deref(), Some("9"));
         let kobra = l.section("wpn_ak74_kobra").unwrap();
         assert!(kobra.get("scope").unwrap().own && !kobra.get("cost").unwrap().own);
+    }
+
+    #[test]
+    fn a_variant_with_its_own_icon_cells_keeps_its_texture() {
+        let mut b = tree(
+            "[base]\ninv_grid_x = 1\ninv_grid_y = 1\n[item]:base\ninv_grid_x = 4\n[variant]:item\ninv_grid_y = 9\n[plain]:item\ncost = 3\n",
+        );
+        // the item gets a picture of its own: a texture and a rectangle on it
+        b.patch("p.ltxp", "[item]\nicons_texture = ui\\mod_icons\ninv_grid_x = 0\ninv_grid_y = 0\n", 1);
+        let l = b.finish().ltx;
+        // a variant with cells of its own keeps the texture it had: none, the game's atlas
+        assert_eq!(val(&l, "variant", "icons_texture"), None);
+        assert_eq!(val(&l, "variant", "inv_grid_x").as_deref(), Some("0"));
+        assert_eq!(val(&l, "variant", "inv_grid_y").as_deref(), Some("9"));
+        // one without takes the whole new icon
+        assert_eq!(val(&l, "plain", "icons_texture").as_deref(), Some("ui\\mod_icons"));
+        assert_eq!(val(&l, "plain", "inv_grid_y").as_deref(), Some("0"));
     }
 
     #[test]

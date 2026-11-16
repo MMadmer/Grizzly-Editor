@@ -103,7 +103,8 @@ every such picture into `gamedata\\textures\\ui\\<module>_icons.dds` - by the it
 cells; `w` and `h` left out are its size in cells, rounded up (100 x 50 px is 2 x 1) - and ships each asset with \
 `icon = { texture = [[ui\\<module>_icons]], x, y, w, h }`, nothing else of its text changed. The pictures are \
 sources and never ship. An icon on a change gives the game's item a new picture without touching the game's \
-atlas.\n\n\
+atlas. An icon is its texture and its rectangle together: a section that states its own rectangle - a variant \
+with its own cells - keeps its texture when its base gets a picture.\n\n\
 ## The catalog\n\n\
 What a key of an item's section means is the game's: its `configs\\item_catalog.ltx` (the editor's bundled copy \
 when no game is linked) names the families of items by their engine class and, for every key of an item's or its \
