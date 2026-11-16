@@ -150,8 +150,10 @@ What the suites hold, beyond what their names say:
   section its 759 item assets make or change there, all 8598 first-person motions played, six weapons held.
 - **A module's content in the extension save** (the game's `tools/qa/saves/Run-ModuleSavesQa.ps1`, its Lua tests
   `test_examples.lua` (z30)): a module's objects, state and data out of the world save, back with their ids on a
-  load, kept through a game without the module and through `-no_xms`, dropped by `xms_forget`; a damaged
-  length in a module's data ends the read of that value.
+  load, kept through a game without the module and through `-no_xms`, dropped by `xms_forget`; an older
+  save that holds a module's spawn-layer object in the world save (made by the engine of the build before,
+  the runner's `-OlderRuntime`) taken out and brought back once; a damaged length in a module's data ends the
+  read of that value.
 - **Radio and the streamer mode** (`test_screens`, the game's `tools/qa/sound/Run-SoundQa.ps1`, its
   `tools/radio/test_radio_scripts.lua`): the sound asset as the one place of the copyright mark; a refused,
   a replaced and a free sound started 2D, 3D and looped; the mode switched while something plays; the radio's
