@@ -229,14 +229,14 @@ pub struct NqService {
     /// Moves with every change of a graph file the project's watcher reports.
     graphs_rev: Arc<RevCounter>,
     catalog: Query<(), Catalog>,
-    catalog_gen: AtomicU32,
+    catalog_gen: Arc<AtomicU32>,
     game_pickers: Query<(), Option<Arc<GameIndex>>>,
     project_pickers: Query<(), ProjectPart>,
     pickers: Query<(), Pickers>,
     caps: Query<(), Option<Arc<ItemCaps>>>,
     index: Query<bool, IndexSnapshot>,
-    parsed: Mutex<FxHashMap<String, Parsed>>,
-    generations: Mutex<[(u64, u32, bool); 2]>,
+    parsed: Arc<Mutex<FxHashMap<String, Parsed>>>,
+    generations: Arc<Mutex<[(u64, u32, bool); 2]>>,
     problems: Query<String, Vec<NqProblem>>,
     characters: RwLock<Option<Arc<dyn CharacterLookup>>>,
     scene: RwLock<Option<Arc<dyn SceneLookup>>>,
@@ -280,14 +280,14 @@ impl NqService {
                 docs_rev: RevCounter::new(),
                 graphs_rev,
                 catalog: Query::new(exec.clone()),
-                catalog_gen: AtomicU32::new(0),
+                catalog_gen: Arc::new(AtomicU32::new(0)),
                 game_pickers: Query::new(exec.clone()),
                 project_pickers: Query::new(exec.clone()),
                 pickers: Query::new(exec.clone()),
                 caps: Query::new(exec.clone()),
                 index: Query::new(exec.clone()),
-                parsed: Mutex::new(FxHashMap::default()),
-                generations: Mutex::new([(0, 0, false); 2]),
+                parsed: Arc::new(Mutex::new(FxHashMap::default())),
+                generations: Arc::new(Mutex::new([(0, 0, false); 2])),
                 problems: Query::new(exec.clone()),
                 characters: RwLock::new(None),
                 scene: RwLock::new(None),
@@ -411,12 +411,15 @@ impl NqService {
         let bundled = Bundled::of(editor);
         let files = game.map(|(f, _)| f);
         let root = PathBuf::from(&self.root);
-        let generation = self.catalog_gen.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-        let built = self
-            .exec
-            .io(move || load_catalog(files.as_deref(), &bundled, &root, &tree, &own, generation))
-            .await;
-        self.catalog.fresh(&(), rev, move || built).await
+        let generations = self.catalog_gen.clone();
+        // the query's own computation: a check of a folder of quests asks once per file, and one of
+        // them reads the catalog - with one generation, so what was parsed against it stays good
+        self.catalog
+            .fresh(&(), rev, move || {
+                let generation = generations.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+                load_catalog(files.as_deref(), &bundled, &root, &tree, &own, generation)
+            })
+            .await
     }
 
     // ---- the pickers ---------------------------------------------------------------------------
@@ -508,19 +511,16 @@ impl NqService {
             return c.as_ref().clone();
         }
         let ltx = link.configs().await.ok();
-        let built = match ltx {
-            None => None,
-            Some(ltx) => {
-                let script = self
-                    .exec
-                    .io(move || {
-                        files.read("scripts/class_registrator.script").map(|b| decode(&b)).unwrap_or_default()
-                    })
-                    .await;
+        self.caps
+            .fresh(&(), rev, move || {
+                let ltx = ltx?;
+                let script =
+                    files.read("scripts/class_registrator.script").map(|b| decode(&b)).unwrap_or_default();
                 Some(Arc::new(ItemCaps::new(ltx, &script)))
-            }
-        };
-        self.caps.fresh(&(), rev, move || built).await.as_ref().clone()
+            })
+            .await
+            .as_ref()
+            .clone()
     }
 
     /// [`way_paths`](Self::way_paths) once the linked game's patrols are read.
@@ -642,86 +642,93 @@ impl NqService {
             return s;
         }
         let root_norm = normalize_path(&self.root);
-        let mut todo: Vec<ToRead> = Vec::new();
-        let mut entries: Vec<IndexEntry> = Vec::new();
         let dirty: Vec<Arc<DocHandle>> = if overlay {
             self.docs.lock().iter().filter(|d| d.is_dirty()).cloned().collect()
         } else {
             Vec::new()
         };
-        {
-            let cache = self.parsed.lock();
-            for rel in &files {
-                let abs = format!("{root_norm}\\{}", rel.to_backslash());
-                let key = path_key(&abs);
-                if let Some(d) = dirty.iter().find(|d| d.path.read().key == key) {
-                    entries.push(memory_entry(&catalog, d, rel.as_str(), &key));
-                    continue;
-                }
-                let stamp = match tree.entry(rel).map(|e| e.kind) {
-                    Some(EntryKind::File { size, modified, .. }) => (size, modified),
-                    _ => (0, None),
-                };
-                match cache.get(&key) {
-                    Some(c) if c.stamp == stamp && c.catalog == catalog.generation && stamp.1.is_some() => {
-                        entries.push(c.entry.clone())
-                    }
-                    _ => todo.push((rel.as_str().to_owned(), key, rel.to_fs(Path::new(&self.root)), stamp)),
-                }
-            }
-        }
-        if !todo.is_empty() {
-            let cat = catalog.clone();
-            let exec = self.exec.clone();
-            let read: Vec<(String, (u64, Option<SystemTime>), IndexEntry)> = self
-                .exec
-                .io(move || {
-                    exec.par_io(todo, |(rel, key, abs, stamp)| {
-                        let entry = match read_graph_file(&abs) {
-                            Ok(text) => index::disk_entry(&cat, &rel, &key, &text),
-                            Err(e) => IndexEntry {
-                                rel: rel.clone(),
-                                key: key.clone(),
-                                graph: Arc::new(Graph::default()),
-                                error: e,
-                                readable: false,
-                                complete: false,
-                                memory: false,
-                                content_hash: 0,
-                            },
+        let (root, root_key) = (PathBuf::from(&self.root), self.root_key.clone());
+        let (parsed, generations, exec) = (self.parsed.clone(), self.generations.clone(), self.exec.clone());
+        // the query's own computation: every graph of a project asks at once when a folder is
+        // checked, and one of them reads the files
+        self.index
+            .fresh(&overlay, rev, move || {
+                let mut todo: Vec<ToRead> = Vec::new();
+                let mut entries: Vec<IndexEntry> = Vec::new();
+                {
+                    let cache = parsed.lock();
+                    for rel in &files {
+                        let abs = format!("{root_norm}\\{}", rel.to_backslash());
+                        let key = path_key(&abs);
+                        if let Some(d) = dirty.iter().find(|d| d.path.read().key == key) {
+                            entries.push(memory_entry(&catalog, d, rel.as_str(), &key));
+                            continue;
+                        }
+                        let stamp = match tree.entry(rel).map(|e| e.kind) {
+                            Some(EntryKind::File { size, modified, .. }) => (size, modified),
+                            _ => (0, None),
                         };
-                        (key, stamp, entry)
-                    })
-                })
-                .await;
-            let mut cache = self.parsed.lock();
-            for (key, stamp, entry) in read {
-                cache.insert(key, Parsed { stamp, catalog: catalog.generation, entry: entry.clone() });
-                entries.push(entry);
-            }
-        }
-        // dirty documents of the project the tree does not list (yet)
-        for d in &dirty {
-            let p = d.path();
-            if !p.inside || !asset::is_graph_path(&p.wire) || entries.iter().any(|e| e.key == p.key) {
-                continue;
-            }
-            entries.push(memory_entry(&catalog, d, &p.wire, &p.key));
-        }
-        entries.sort_by(|a, b| a.key.cmp(&b.key));
-        let fingerprint = index::fingerprint(&self.root_key, &entries);
-        let generation = {
-            let mut g = self.generations.lock();
-            let slot = &mut g[usize::from(overlay)];
-            if !slot.2 || slot.0 != fingerprint {
-                slot.0 = fingerprint;
-                slot.1 = slot.1.wrapping_add(1).max(1);
-                slot.2 = true;
-            }
-            slot.1
-        };
-        let snap = IndexSnapshot { entries, generation, fingerprint };
-        self.index.fresh(&overlay, rev, move || snap).await
+                        match cache.get(&key) {
+                            Some(c)
+                                if c.stamp == stamp
+                                    && c.catalog == catalog.generation
+                                    && stamp.1.is_some() =>
+                            {
+                                entries.push(c.entry.clone())
+                            }
+                            _ => todo.push((rel.as_str().to_owned(), key, rel.to_fs(&root), stamp)),
+                        }
+                    }
+                }
+                if !todo.is_empty() {
+                    let cat = catalog.clone();
+                    let read: Vec<(String, (u64, Option<SystemTime>), IndexEntry)> =
+                        exec.par_io(todo, |(rel, key, abs, stamp)| {
+                            let entry = match read_graph_file(&abs) {
+                                Ok(text) => index::disk_entry(&cat, &rel, &key, &text),
+                                Err(e) => IndexEntry {
+                                    rel: rel.clone(),
+                                    key: key.clone(),
+                                    graph: Arc::new(Graph::default()),
+                                    error: e,
+                                    readable: false,
+                                    complete: false,
+                                    memory: false,
+                                    content_hash: 0,
+                                },
+                            };
+                            (key, stamp, entry)
+                        });
+                    let mut cache = parsed.lock();
+                    for (key, stamp, entry) in read {
+                        cache
+                            .insert(key, Parsed { stamp, catalog: catalog.generation, entry: entry.clone() });
+                        entries.push(entry);
+                    }
+                }
+                // dirty documents of the project the tree does not list (yet)
+                for d in &dirty {
+                    let p = d.path();
+                    if !p.inside || !asset::is_graph_path(&p.wire) || entries.iter().any(|e| e.key == p.key) {
+                        continue;
+                    }
+                    entries.push(memory_entry(&catalog, d, &p.wire, &p.key));
+                }
+                entries.sort_by(|a, b| a.key.cmp(&b.key));
+                let fingerprint = index::fingerprint(&root_key, &entries);
+                let generation = {
+                    let mut g = generations.lock();
+                    let slot = &mut g[usize::from(overlay)];
+                    if !slot.2 || slot.0 != fingerprint {
+                        slot.0 = fingerprint;
+                        slot.1 = slot.1.wrapping_add(1).max(1);
+                        slot.2 = true;
+                    }
+                    slot.1
+                };
+                IndexSnapshot { entries, generation, fingerprint }
+            })
+            .await
     }
 
     // ---- validation ----------------------------------------------------------------------------
