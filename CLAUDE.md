@@ -779,15 +779,18 @@ A change of plan is a change of its document first.
 - An old mod's whole-file copies would otherwise take the game's newer sections and values with them: Weapons Evolution 2026, made over an
   old Dead Air, would have lost some three thousand sections of today's game and rolled back twenty-five hundred values, and the game did not
   start. The same holds for binary files a mod copied from the old game: its 41 motion files lacked the motions the game grew since, and
-  every HUD key that names one stops the game - the port merges the game's motions back in.
+  every HUD key that names one stops the game - the converter merges the game's motions back in.
 - **Nothing is bent to one mod.** A mod is an example of what authors need: what it needs and the game or the
   editor lacks becomes a general ability (the game reads one form of a placement key when the other is missing,
   for every module), and what is only an old mod's shape is a rule of the converter, for any classic mod -
   never a branch for a name.
-- `tools/classic_mod/motion_files.py` (any classic mod): a motion file of the mod written for other bones than
-  the game's file of the same path gets a name of its own, and the mod's models are pointed at it - mounted over
-  the game's it took the motions from every model of today's game the mod does not replace, and the first scene
-  that played one stopped the game.
+- `tools/classic_mod/motion_files.py` is a step of every conversion (and runs by hand on a project that
+  exists; a second run changes nothing): a motion file of the mod on a game path with the game's skeleton gets
+  the motions today's game has in that file and the mod's lacks, the mod's own winning by name; one written for
+  other bones gets a name of its own, always, and the mod's models are pointed at it - mounted over the game's
+  it took the motions from every model that names that path and the mod does not replace, and the first scene
+  that played one stopped the game. What a conversion needs is a step of the converter, never a script kept
+  in the converted project.
 - `mod.ltx` of such a module says `mode = *` and `target = any`: it mounts in every game, like the classic install did,
   and keeps `target = any` when the manifest is saved.
 - Nothing leaves a module for merely looking unused: a `.ogf` names its `_lod` model from inside, and a list made by reading files had five
@@ -1296,12 +1299,20 @@ A change of plan is a change of its document first.
   group, the unit, the help. The form, the check and the reference read it; the editor's code names no item
   key but the handful the inventory's picture needs (`item_form.rs`, `game_keys`). A new key is a row of the
   catalog, never of the editor.
-- **The check composes the module as the game would** (`gz-items`' `Items`: codes `I400`-`I430`): what the game
+- **The check composes the module as the game would** (`gz-items`' `Items`: codes `I400`-`I431`): what the game
   would leave out is an error, what would only look or sound wrong a warning. The roster and the game's
   lookups are queries computed INSIDE `Query::fresh` - once, however many files ask: built beside it, a check
   of a folder of 715 items built them 715 times at once and overflowed the IO pool's stacks. The config tree
   the editor reads holds the engine's own overlays (`gz-game`'s `configs.rs`, `OVERLAYS`), laid as the engine
   lays them: without them a key the engine adds itself read as missing.
+- **The composition is the game's, line for line**: the order a module's files are taken in is one function on
+  each side (`gz_base::text::game_order_key`, the game's `PathOrderLess`: cp1251 bytes, ASCII lower-cased, `/`
+  between folders - of two changes of one key the later path wins); an overlay merge marks as a section's own
+  word exactly what the game marks (the lines a restated parent gave stay inherited); heirs are found by the
+  parent's NAME, so a section removed and made again keeps them. A difference between the two is a check that
+  lies: `gz-ltx`'s tests hold each rule to a case, and a change of one side is a change of both.
+- A form's check reads the one file that changed (`Roster::with_edit` over the roster's read files) and composes
+  on the CPU pool; what it asks the game for runs on the IO pool. The tab asks for one check at a time.
 - The form: what comes from a list is picked (the chooser over the linked game's items, by the names the
   player reads); the value a key inherits is its field's hint and only what the author typed is written; a
   problem is a sentence under its row. The catalog's texts and the check's sentences are Russian through

@@ -135,6 +135,28 @@ What the suites hold, beyond what their names say:
   dialog and menu of `ui.contract` at both sizes with `untranslated` empty and no text cut whose English fits;
   every catalog reads and holds one English per context.
 
+- **Items** (`gz-items`' and `gz-ltx`'s tests, `test_items`, the game's `tools/qa/items/Run-ItemsQa.ps1`): the
+  item kind read, checked, resolved and saved as a difference; the module composed as the game composes it - the
+  order of its files, what an overlay merge makes a section's own word, the heirs of a section made again, a
+  made section that starts from the item's own - each held to a case on the editor's side and, in the real
+  game at the main menu, to what a generated module makes: sections, strings, HUD, recipes, the rows of other
+  configs, an overlay's own recipe in the section the items made, a parent of 600 characters, a list of 4899,
+  and with no module the composed configs byte for byte what the build before read.
+- **A classic mod made a module** (Weapons Evolution 2026, the project `WeaponsEvolution2026`): 760 files
+  checked in 8 seconds and 308 MB with 0 errors and 24 warnings (the mod's own: motions, strings, textures it
+  names and nobody has); built (9035 files); packaged in QA mode before the last fixes (10 parts, 2.2 GB, the
+  content rules passing with three script lines named for review); and run in a new game by the game's
+  `tools/qa/module/Run-ModuleInGameQa.ps1` in one start of two minutes - mounted with nothing refused, every
+  section its 759 item assets make or change there, all 8598 first-person motions played, six weapons held.
+- **A module's content in the extension save** (the game's `tools/qa/saves/Run-ModuleSavesQa.ps1`, its Lua tests
+  `test_examples.lua` (z30)): a module's objects, state and data out of the world save, back with their ids on a
+  load, kept through a game without the module and through `-no_xms`, dropped by `xms_forget`; a damaged
+  length in a module's data ends the read of that value.
+- **Radio and the streamer mode** (`test_screens`, the game's `tools/qa/sound/Run-SoundQa.ps1`, its
+  `tools/radio/test_radio_scripts.lua`): the sound asset as the one place of the copyright mark; a refused,
+  a replaced and a free sound started 2D, 3D and looped; the mode switched while something plays; the radio's
+  pickers with a module's music, with a playlist, and with no module at all.
+
 ## 2. Not proven by a run
 
 - The Russian of what the tour does not bring up: a notice, a toast, a confirmation, an error state, a problem
@@ -181,6 +203,23 @@ What the suites hold, beyond what their names say:
   and the Save dialog of a scene that has no file, picked or cancelled: a person's clicks and the system's
   dialog, which no suite answers. The commands behind them are driven (`test_scene_tools` Z, `test_pda` H);
   the window's own paths are held by the code they share with them (`save_tabs`).
+
+- Items and the converted mod, what no run has shown: a weapon of the module reloading, firing and aiming; a
+  craft, a start kit, an upgrade, the death loot and a trader's stock in play; a use scene by a real use (the
+  scenes' motions were played, the item was not eaten); the first-person death; a save with the Weapons
+  Evolution module itself; the original 0.98b reading a save a module was in (there is no original engine on
+  this machine: the world save is read back by a script the way that game reads it); the streamer option
+  switched from the options window; the first-person picture of the Items tab against a frame of the game,
+  and at 1280 x 720, where it is not drawn. The full read of the work did not reach: the quest runtime's
+  changes for saves, the game's screens code, the three stock script trees against the save wrappers, the
+  Items and Sound tabs' per-frame work and save round trips, the picture's maths, the scene radio and `S214`,
+  the references `ITEM.md`, `SOUND.md` and `UI_DESIGN.md` against the code, twenty items compared three ways
+  by hand (the converter's own check compares every section and key), the converter's `items.py`,
+  `compose.py`, `particles.py` and `media.py`.
+- The game's list of its own copyrighted music (`dead_air_x64_sound_rights.ltx`) was put together from what the
+  files and their names say; its author has not read it.
+- A hostile save: a module's object record and spawn range are checked before they are used, a kept task
+  record is read as the original game reads its own, with no check.
 
 ## 3. Decisions
 
@@ -433,6 +472,24 @@ What the suites hold, beyond what their names say:
 - The module's own config sections are indexed (`gz-mod`'s `sections.rs`), so an item, a squad or a spawn section
   the module itself brings is no "unknown" warning in a character, a quest or the start kit.
 - The model in the Characters tab is the model viewer's document embedded, not a copy of it.
+
+### Items, saves and classic mods
+
+- An item's composition is the game's code ported, and where the two differed the editor's check lied; each
+  difference found - the order of a module's files, what a merge makes a section's own, heirs by name - is now
+  one rule with a test on the editor's side and a line of the game's document.
+- The form's check composes the whole module again for one edited item: the files are read once and kept, one
+  check runs at a time. Keeping the composition up to the edited item would make it a fraction of that; it is
+  not done.
+- The check of an item's motions (`I419`) reads the item's HUD model alone. A hands motion a key names is not
+  looked up in the hands rig: the game's module runner plays every motion of every item and names the ones
+  that are not there.
+- A build does not warn when a module's motion file stands on a game path other game models use: the converter
+  settles it for a classic mod, and a module made in the editor ships its motions under its own names.
+- What a conversion needs is the converter's (`tools/classic_mod`), never a script left in the converted
+  project: the project holds its notes, the record the converter wrote, and the two helpers of its own
+  hand-made step.
+- The Sound QA of the game takes its sounds and effects as arguments: a tool of the game names no project.
 
 ### The updater
 
