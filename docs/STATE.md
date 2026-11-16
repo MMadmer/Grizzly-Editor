@@ -142,12 +142,18 @@ What the suites hold, beyond what their names say:
   game at the main menu, to what a generated module makes: sections, strings, HUD, recipes, the rows of other
   configs, an overlay's own recipe in the section the items made, a parent of 600 characters, a list of 4899,
   and with no module the composed configs byte for byte what the build before read.
-- **A classic mod made a module** (Weapons Evolution 2026, the project `WeaponsEvolution2026`): 760 files
-  checked in 8 seconds and 308 MB with 0 errors and 24 warnings (the mod's own: motions, strings, textures it
-  names and nobody has); built (9035 files); packaged in QA mode before the last fixes (10 parts, 2.2 GB, the
+- **A classic mod made a module** (Weapons Evolution 2026, the project `WeaponsEvolution2026`): 781 files
+  checked in 5 seconds and 289 MB with 0 errors and 24 warnings (the mod's own: motions, strings, textures it
+  names and nobody has); built (9057 files); packaged in QA mode before the last fixes (10 parts, 2.2 GB, the
   content rules passing with three script lines named for review); and run in a new game by the game's
   `tools/qa/module/Run-ModuleInGameQa.ps1` in one start of two minutes - mounted with nothing refused, every
-  section its 759 item assets make or change there, all 8598 first-person motions played, six weapons held.
+  section its 780 item assets make or change there, all 8676 first-person motions played (the skinning, bag,
+  exoskeleton and kept-scene HUD sections through `-PlayHuds`), seven weapons held. Held against the original
+  mod on its own (the project's `PORT_NOTES.md`, "Held against the original mod"): its 8368 files, 496 206
+  resolved keys of the system config and every key of 33 configs opened by name as the real engine composes
+  them with the module and without it (`-DumpConfigs`, `-WithoutModule`), 1287 icons, 9046 texts, 1182
+  particle effects, every use scene and the skinning; what it found is fixed in the converter, the game or
+  the project.
 - **A module's content in the extension save** (the game's `tools/qa/saves/Run-ModuleSavesQa.ps1`, its Lua tests
   `test_examples.lua` (z30)): a module's objects, state and data out of the world save, back with their ids on a
   load, kept through a game without the module and through `-no_xms`, dropped by `xms_forget`; an older
