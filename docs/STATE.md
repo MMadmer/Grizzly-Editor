@@ -211,8 +211,9 @@ What the suites hold, beyond what their names say:
   scenes' motions were played, the item was not eaten); the first-person death; a save with the Weapons
   Evolution module itself; the original 0.98b reading a save a module was in (there is no original engine on
   this machine: the world save is read back by a script the way that game reads it); the streamer option
-  switched from the options window; the first-person picture of the Items tab against a frame of the game,
-  and at 1280 x 720, where it is not drawn. The full read of the work did not reach: the quest runtime's
+  switched from the options window; the first-person picture of the Items tab against a frame of the game
+  (in a narrow window - 1280 x 720 - the preview column gives way to the form, as in Characters, so there is
+  no picture to look at there). The full read of the work did not reach: the quest runtime's
   changes for saves, the game's screens code, the three stock script trees against the save wrappers, the
   Items and Sound tabs' per-frame work and save round trips, the picture's maths, the scene radio and `S214`,
   the references `ITEM.md`, `SOUND.md` and `UI_DESIGN.md` against the code, twenty items compared three ways
