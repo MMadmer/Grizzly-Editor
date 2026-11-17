@@ -99,10 +99,13 @@ def phase_a() -> None:
     bad = cmd("asset.reference", kind="nothing")
     check(bad.get("code") == "not_found" and "module manifest" in bad.get("error", ""),
           "A an unknown kind is not_found and names the manifest among the kinds", json.dumps(bad)[:200])
-    # twelve kinds - the item, the model, the texture and the sound among them - and every one has a reference that answers
+    # fifteen kinds - the item, a trader's shelf, the loot table and the recipes, the model, the texture and the sound
+    # among them - and every one has a reference that answers
     names = [x.get("name") for x in k.get("kinds", [])]
-    check(len(names) == 12 and {"module manifest", "item", "model", "texture", "sound"} <= set(names),
-          "A asset.kinds lists twelve kinds, the manifest, the item and the media kinds among them", names)
+    check(len(names) == 15 and {"module manifest", "item", "trader", "loot table", "recipes", "model", "texture",
+                                "sound"} <= set(names),
+          "A asset.kinds lists fifteen kinds, the manifest, the item, the three tables and the media kinds among them",
+          names)
     for name in names:
         r = cmd("asset.reference", kind=name)
         check(r.get("ok") and len(r.get("text", "")) > 200, "A asset.reference kind=%s answers a document" % name,

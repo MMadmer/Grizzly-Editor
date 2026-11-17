@@ -79,6 +79,10 @@ pub struct PackageResult {
     /// The Mod Browser's content rules: what it refuses, and what its review looks at.
     pub catalog_block: Vec<String>,
     pub catalog_review: Vec<String>,
+    /// Where the module's code works with the network (`<path>:<line>`), first places first;
+    /// empty when it does not. A fact for the author, never a problem: the game marks such a
+    /// module where players pick and manage modules.
+    pub network: Vec<String>,
 }
 
 /// The Task Center's row of a packaging: the build's own row while the module stages.
@@ -339,6 +343,7 @@ async fn package(
 struct Draft {
     manifest_ref: CardFile,
     thumbnail_ref: Option<CardFile>,
+    network: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -390,6 +395,7 @@ async fn stage_and_pack(
     let done = packed.result?;
     out.catalog_block = done.catalog_block;
     out.catalog_review = done.catalog_review;
+    out.network = done.network;
     out.out_dir = out_dir.to_owned();
     out.requires_game = requires_game.to_owned();
     out.files = done.files;
@@ -419,7 +425,13 @@ async fn finish_release(
     let mut text = descriptor_head(&facts, &out.index, &out.packages);
     let root_io = root.to_path_buf();
     let tables = editor.exec.io(move || StringTables::read(&root_io)).await;
-    text.push_str(&card_section(m, &tables, &draft.manifest_ref, draft.thumbnail_ref.as_ref()));
+    text.push_str(&card_section(
+        m,
+        &tables,
+        &draft.manifest_ref,
+        draft.thumbnail_ref.as_ref(),
+        draft.network,
+    ));
 
     // signed with the author key when there is one to sign with: one signature covers the card,
     // the index hash and the package hashes - every byte of the release
@@ -607,6 +619,7 @@ struct Packaged {
     packages: Vec<Asset>,
     catalog_block: Vec<String>,
     catalog_review: Vec<String>,
+    network: Vec<String>,
     draft: Draft,
 }
 
@@ -656,7 +669,7 @@ impl PackJob {
         }
 
         self.feeder.stage("Reading the content the way the Mod Browser does", 0, 0);
-        let (catalog_block, catalog_review) = self.check_content(&files);
+        let (catalog_block, catalog_review, network) = self.check_content(&files);
         // the author learns it here, not from a refused submission
         for text in catalog_block.iter().take(10) {
             warnings.push_str(&format!("the Mod Browser refuses {text}\n"));
@@ -730,7 +743,8 @@ impl PackJob {
 
         // The Mod Browser's card pins the manifest and the thumbnail by their hashes
         let thumbnail_path = self.thumbnail.replace('\\', "/");
-        let mut draft = Draft { manifest_ref: CardFile::default(), thumbnail_ref: None };
+        let mut draft =
+            Draft { manifest_ref: CardFile::default(), thumbnail_ref: None, network: !network.is_empty() };
         for f in &files {
             let card = || CardFile { path: f.path.clone(), size: f.size, sha256: f.rec.sha256.clone() };
             if f.path == "mod.ltx" {
@@ -763,14 +777,16 @@ impl PackJob {
             packages,
             catalog_block,
             catalog_review,
+            network,
             draft,
         })
     }
 
-    /// MOD_CATALOG 8 and 10.3 over what the release ships, read the way the catalog reads a
-    /// release: a script whole, anything else by what it starts with. In the order the files
-    /// were found.
-    fn check_content(&self, files: &[Staged]) -> (Vec<String>, Vec<String>) {
+    /// MOD_CATALOG 8, 10.3 and 10.4 over what the release ships, read the way the catalog reads a
+    /// release: a file that carries code whole, anything else by what it starts with. In the
+    /// order the files were found: what the Mod Browser refuses, what its review looks at, and
+    /// where the code works with the network.
+    fn check_content(&self, files: &[Staged]) -> (Vec<String>, Vec<String>, Vec<String>) {
         let items: Vec<(PathBuf, String, u64)> =
             files.iter().map(|f| (self.module_dir.join(&f.rel), f.path.clone(), f.size)).collect();
         let found: Vec<Vec<Finding>> = self.exec.par_io(items, |(src, path, size)| {
@@ -789,11 +805,17 @@ impl PackJob {
             check_content(&path, &data, &mut out);
             out
         });
-        let (mut block, mut review) = (Vec::new(), Vec::new());
+        let (mut block, mut review, mut network) = (Vec::new(), Vec::new(), Vec::new());
         for f in found.into_iter().flatten() {
-            if f.level == Level::Block { block.push(f.text) } else { review.push(f.text) }
+            if f.code == crate::content::NETWORK {
+                network.push(f.text);
+            } else if f.level == Level::Block {
+                block.push(f.text);
+            } else {
+                review.push(f.text);
+            }
         }
-        (block, review)
+        (block, review, network)
     }
 
     /// Files of one package into one zip, every file hashed on its way in - the index wants the

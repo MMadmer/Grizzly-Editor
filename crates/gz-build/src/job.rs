@@ -62,6 +62,56 @@ pub struct BuildResult {
     /// The clean build's refusal: the first ten of the files it would delete, and how many.
     pub stale_names: Vec<String>,
     pub stale_count: usize,
+    /// What the module's code does that the game's protected mode refuses (`<path>:<line> <what>`):
+    /// the Mod Browser turns such a module away, and the code fails in a protected game.
+    pub code_refused: Vec<String>,
+    /// How many places of the code the Mod Browser's review would look at.
+    pub code_review: usize,
+    /// Where the code works with the network (`<path>:<line>`); empty when it does not. A fact
+    /// for the author, never a problem: the game marks such a module.
+    pub network: Vec<String>,
+}
+
+/// What the build read in one file of code.
+struct CodeRead {
+    refused: Vec<String>,
+    review: usize,
+    network: Option<String>,
+}
+
+/// The module's code as the game's protected mode and the Mod Browser read it (the game's
+/// MOD_CATALOG 10.3 and 10.4): every file that carries code, whole. Blocking.
+fn read_code(walk: &BuildWalk, exec: &gz_task::Executors, out: &mut BuildResult) {
+    let items: Vec<(PathBuf, String, gz_mod::code::CodeKind)> = walk
+        .files
+        .iter()
+        .filter_map(|f| {
+            let rel = f.rel.as_str().replace('\\', "/");
+            let kind = gz_mod::code::code_kind(&rel)?;
+            // a file of code larger than this is no script anybody wrote
+            (f.size <= 16 << 20).then_some(())?;
+            Some((f.source(&walk.root)?, rel, kind))
+        })
+        .collect();
+    let read: Vec<CodeRead> = exec.par_io(items, |(src, rel, kind)| {
+        let mut one = CodeRead { refused: Vec::new(), review: 0, network: None };
+        let Ok(text) = std::fs::read(&src) else { return one };
+        let report = gz_mod::code::report(kind, &text);
+        for f in report.findings {
+            if f.blocks {
+                one.refused.push(format!("{rel}:{} {}", f.line, f.what));
+            } else {
+                one.review += 1;
+            }
+        }
+        one.network = report.network.map(|line| format!("{rel}:{line}"));
+        one
+    });
+    for one in read {
+        out.code_refused.extend(one.refused);
+        out.code_review += one.review;
+        out.network.extend(one.network);
+    }
 }
 
 /// The clean build's refusal as the question the window asks before it builds again with
@@ -487,6 +537,31 @@ async fn build(
     out.left_out = walk.left_out_texts();
     if !out.left_out.is_empty() {
         editor.log.info(format!("[XMS] left out of the build: {}", listed(&out.left_out, ", ")));
+    }
+    // The module's code, read the way the game's protected mode and the Mod Browser read it. What
+    // they refuse is the author's to know now, not from a player's log; the network is a fact the
+    // build states and nothing more.
+    feeder.stage(0, "Reading the module's code");
+    {
+        let (walk_io, exec) = (walk.clone(), editor.exec.clone());
+        let mut code = BuildResult::default();
+        code = editor
+            .exec
+            .io(move || {
+                read_code(&walk_io, &exec, &mut code);
+                code
+            })
+            .await;
+        out.code_refused = code.code_refused;
+        out.code_review = code.code_review;
+        out.network = code.network;
+    }
+    if !out.code_refused.is_empty() {
+        warnings.push(format!(
+            "the game's protected mode and the Mod Browser refuse this code: {} place(s)\n  {}",
+            out.code_refused.len(),
+            listed(&out.code_refused.iter().take(10).cloned().collect::<Vec<_>>(), "\n  ")
+        ));
     }
     // The editor takes any name; the game reads a module through the ANSI APIs of a cp1251
     // system, where a character cp1251 lacks comes back as '?' and the file never opens. It

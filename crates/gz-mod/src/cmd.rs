@@ -110,7 +110,8 @@ pub fn manifest_json(editor: &Editor, state: &ManifestState, m: &Manifest, tree:
         "author": m.author,
         "description": m.description,
         "disable_game_updates": m.disable_game_updates,
-        "website": m.website,
+        "website": m.page(),
+        "links": links_json(m),
         "github": m.update_github,
         "api": m.api,
         "target": m.target,
@@ -266,6 +267,23 @@ fn parse_vars(v: &Value) -> Result<Vec<GlobalVar>, CmdError> {
     Ok(vars)
 }
 
+/// The module's links as the card shows them: every kind that has one, GitHub's from the update
+/// repository.
+fn links_json(m: &Manifest) -> Value {
+    let mut out = Map::new();
+    for kind in crate::LINK_KINDS {
+        let link = m.link(kind);
+        if !link.is_empty() {
+            out.insert(kind.key().into(), json!(link));
+        }
+    }
+    let github = crate::github_link(&m.update_github);
+    if !github.is_empty() {
+        out.insert("github".into(), json!(github));
+    }
+    Value::Object(out)
+}
+
 const MODULE_KEYS: [&str; 10] = [
     "id",
     "name",
@@ -329,12 +347,21 @@ async fn module_edits(
             } else {
                 Edit::remove("module", "disable_game_updates")
             }),
+            // the one page of before [links]: it goes where the links are, as the kind it is
             "website" => {
                 let w = trim(&text);
                 if let Some(why) = refusal("module", "website", w) {
                     return Err(refuse(why));
                 }
-                edits.push(Edit::optional("module", "website", w));
+                edits.push(Edit::remove("module", "website"));
+                match crate::website_kind(w) {
+                    Some(kind) => edits.push(Edit::optional("links", kind.key(), w)),
+                    None => {
+                        if let Some(kind) = crate::website_kind(&cur.website) {
+                            edits.push(Edit::remove("links", kind.key()));
+                        }
+                    }
+                }
             }
             "mode" => {
                 // `*` is a classic module's: every mode
@@ -498,6 +525,24 @@ async fn mod_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
                     edits.push(Edit::optional("update", "github", &repo));
                 }
             }
+            "links" => {
+                const KEYS: [&str; 6] = ["ap_pro", "moddb", "telegram", "discord", "boosty", "patreon"];
+                for (key, value) in section_keys("links", v)? {
+                    let Some(kind) = crate::LinkKind::of_key(key) else {
+                        return Err(unknown_key("links", key, &KEYS));
+                    };
+                    let link = text_of(value, ",");
+                    let link = trim(&link);
+                    if let Some(why) = refusal("links", key, link) {
+                        return Err(refuse(why));
+                    }
+                    edits.push(Edit::optional("links", key, link));
+                    // one fact, one line: the older key of the same kind gives way
+                    if crate::website_kind(&cur.website) == Some(kind) {
+                        edits.push(Edit::remove("module", "website"));
+                    }
+                }
+            }
             "order" => {
                 for (key, value) in section_keys("order", v)? {
                     if key != "after" && key != "before" {
@@ -538,7 +583,7 @@ async fn mod_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
             "commands" => command_edits(&cur, v, &mut edits)?,
             other => {
                 return Err(refuse(format!(
-                    "mod.set does not set [{other}]: module, update, order, requires, conflicts, exclude, vars, provides_mode, pda and commands are its sections (world.set, screens.set and the files themselves change the rest)"
+                    "mod.set does not set [{other}]: module, update, links, order, requires, conflicts, exclude, vars, provides_mode, pda and commands are its sections (world.set, screens.set and the files themselves change the rest)"
                 )));
             }
         }

@@ -40,6 +40,8 @@ pub enum Check {
     Version,
     /// [`crate::validate_website`].
     Website,
+    /// [`crate::validate_link`] of that kind.
+    Link(crate::LinkKind),
     /// Words of the Mod Browser's vocabulary ([`crate::rules::TAG_VOCABULARY`]), lower case.
     Tags,
     /// One of the four targets.
@@ -168,8 +170,9 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "website",
                 "an https link on ap-pro.ru or moddb.com",
                 "empty",
-                "The module's page, opened from the Mods menu. Any other host is refused by the editor \
-                 (mod.set, the check, the build) and ignored by the game.",
+                "The module's one page, as modules wrote it before [links]: the game reads it as the AP-PRO or \
+                 the ModDB link while [links] names none of that kind, and mod.set writes it there. Any \
+                 other host is refused by the editor (mod.set, the check, the build) and ignored by the game.",
             ).judged(Check::Website),
             key(
                 "thumbnail",
@@ -282,6 +285,40 @@ pub const SECTIONS: &[SectionDoc] = &[
             "The repository whose latest release carries the module. A pasted github.com address is \
              shortened by mod.set. Publish Release writes to it.",
         ).judged(Check::Repo)],
+    },
+    SectionDoc {
+        name: "links",
+        reader: Reader::Manifest,
+        summary: "Where the module's card leads: a small round picture per link in the Mods menu and the Mod \
+                  Browser. Each key takes a page of its own service and nothing else; the GitHub link is \
+                  [update] github and is not written here.",
+        keys: &[
+            key(
+                "ap_pro",
+                "an https link on ap-pro.ru",
+                "empty",
+                "The module's page or topic on AP-PRO. The Mod Browser lists a module that has this link or \
+                 the ModDB one.",
+            ).judged(Check::Link(crate::LinkKind::ApPro)),
+            key("moddb", "an https link on moddb.com", "empty", "The module's page on ModDB.")
+                .judged(Check::Link(crate::LinkKind::ModDb)),
+            key(
+                "telegram",
+                "an https link to a page on t.me",
+                "empty",
+                "The module's or its author's Telegram channel or chat.",
+            ).judged(Check::Link(crate::LinkKind::Telegram)),
+            key(
+                "discord",
+                "an https invitation on discord.gg or discord.com/invite/",
+                "empty",
+                "The invitation to the module's Discord server.",
+            ).judged(Check::Link(crate::LinkKind::Discord)),
+            key("boosty", "an https link to a page on boosty.to", "empty", "The author's Boosty page.")
+                .judged(Check::Link(crate::LinkKind::Boosty)),
+            key("patreon", "an https link to a page on patreon.com", "empty", "The author's Patreon page.")
+                .judged(Check::Link(crate::LinkKind::Patreon)),
+        ],
     },
     SectionDoc {
         name: "exclude",

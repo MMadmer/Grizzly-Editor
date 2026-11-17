@@ -174,6 +174,18 @@ pub fn build_answer(r: &BuildResult) -> Reply {
         "baked": r.bake_note,
         "warnings": r.warnings,
         "left_out": r.left_out,
+        // the module's code as the game's protected mode and the Mod Browser read it
+        "code": {
+            "refused": r.code_refused,
+            "review": r.code_review,
+        },
+        // the code works with the network: the game marks the module so - a fact, no problem
+        "network": {
+            "used": !r.network.is_empty(),
+            "places": r.network.iter().take(10).collect::<Vec<_>>(),
+            "count": r.network.len(),
+            "note": if r.network.is_empty() { "" } else { gz_mod::code::NETWORK_NOTE },
+        },
     }))
 }
 

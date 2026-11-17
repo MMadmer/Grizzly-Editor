@@ -180,6 +180,25 @@ pub(crate) fn split_lines(text: &str, out: &mut Vec<String>) {
     out.extend(text.lines().map(str::trim_end).filter(|l| !l.is_empty()).map(str::to_owned));
 }
 
+/// The footnote of a result whose module works with the network: what the game does about it. A
+/// fact for the author - never a warning, and nothing a log calls a problem.
+#[must_use]
+pub fn network_note(places: &[String]) -> Option<Tx<'static>> {
+    let first = places.first()?;
+    Some(if places.len() > 1 {
+        tr!(
+            "The module's code works with the network ({place} and {n} more). The game marks it Network access in the Mods menu and the Mod Browser and says so before a player installs it.",
+            place = Tx::raw(first.clone()),
+            n = places.len() - 1
+        )
+    } else {
+        tr!(
+            "The module's code works with the network ({place}). The game marks it Network access in the Mods menu and the Mod Browser and says so before a player installs it.",
+            place = Tx::raw(first.clone())
+        )
+    })
+}
+
 /// What a build or an export did, in the result dialog every build shares.
 #[must_use]
 pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
@@ -221,6 +240,7 @@ pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
     spec.rows = rows;
     spec.left_out.clone_from(&r.left_out);
     spec.warnings = warnings;
+    spec.notes.extend(network_note(&r.network));
     let path = r.path.clone();
     spec.action =
         Some(ResultAction { label: "Open Folder".into(), run: Arc::new(move || call::open_folder(&path)) });

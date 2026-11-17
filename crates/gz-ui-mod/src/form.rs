@@ -83,7 +83,9 @@ pub struct Form {
     pub version: String,
     pub author: String,
     pub description: String,
-    pub website: String,
+    /// The module's links by [`gz_mod::LinkKind::index`]: what `[links]` says, the older
+    /// `website` in the slot of the kind it is.
+    pub links: [String; 6],
     pub github: String,
     pub target: String,
     pub mode: String,
@@ -126,7 +128,7 @@ impl Form {
             version: m.version.clone(),
             author: m.author.clone(),
             description: cut_to(&m.description, DESCRIPTION_ROOM),
-            website: m.website.clone(),
+            links: gz_mod::LINK_KINDS.map(|kind| m.link(kind).to_owned()),
             github: m.update_github.clone(),
             target: m.target.clone(),
             mode: m.mode.clone(),
@@ -158,7 +160,7 @@ impl Form {
             version,
             author,
             description,
-            website,
+            links,
             github,
             target,
             mode,
@@ -519,18 +521,17 @@ pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
             "1 to 4 numbers separated by dots, e.g. 1.2.0.",
         ));
     }
-    let website = f.website.trim();
-    if !validate_website(website) {
-        out.push(problem(
-            GENERAL,
-            "website",
-            Tone::Error,
-            true,
-            "Only https://ap-pro.ru and https://moddb.com links are allowed.",
-        ));
-    } else if !website.is_empty() && !website_is_module_page(website) {
-        // the listing wants the module's own page, which the game's own check does not ask for
-        out.push(problem(GENERAL, "website", Tone::Warning, false, "The Mod Browser lists a module with its own page, e.g. https://ap-pro.ru/stuff/<section>/<name>-r<number>/."));
+    for kind in gz_mod::LINK_KINDS {
+        let link = f.links.get(kind.index()).map_or("", |l| l.trim());
+        if !gz_mod::validate_link(kind, link) {
+            out.push(problem(GENERAL, kind.key(), Tone::Error, true, link_takes(kind)));
+        } else if matches!(kind, gz_mod::LinkKind::ApPro | gz_mod::LinkKind::ModDb)
+            && !link.is_empty()
+            && !website_is_module_page(link)
+        {
+            // the listing wants the module's own page, which the game's own check does not ask for
+            out.push(problem(GENERAL, kind.key(), Tone::Warning, false, "The Mod Browser lists a module with its own page, e.g. https://ap-pro.ru/stuff/<section>/<name>-r<number>/."));
+        }
     }
     if !validate_github_repo(&normalize_github_repo(&f.github)) {
         out.push(problem(GENERAL, "github", Tone::Error, true, "owner/repo, e.g. Madmer/agroprom-story."));
@@ -687,6 +688,49 @@ fn list(v: &[String]) -> Value {
     Value::Array(v.iter().map(|x| s(x)).collect())
 }
 
+/// What a link of a kind takes, as the sentence under its field.
+#[must_use]
+pub fn link_takes(kind: gz_mod::LinkKind) -> &'static str {
+    match kind {
+        gz_mod::LinkKind::ApPro => "An https link to a page on ap-pro.ru.",
+        gz_mod::LinkKind::ModDb => "An https link to a page on moddb.com.",
+        gz_mod::LinkKind::Telegram => "An https link to a page on t.me, e.g. https://t.me/my_channel.",
+        gz_mod::LinkKind::Discord => "An https invitation, e.g. https://discord.gg/abc123.",
+        gz_mod::LinkKind::Boosty => "An https link to a page on boosty.to, e.g. https://boosty.to/my_page.",
+        gz_mod::LinkKind::Patreon => {
+            "An https link to a page on patreon.com, e.g. https://www.patreon.com/my_page."
+        }
+    }
+}
+
+/// What a link of a kind is, as the hint of its row.
+#[must_use]
+pub fn link_hint(kind: gz_mod::LinkKind) -> &'static str {
+    match kind {
+        gz_mod::LinkKind::ApPro => {
+            "The mod's page or topic on AP-PRO. The Mod Browser lists a mod that has this link or the ModDB one."
+        }
+        gz_mod::LinkKind::ModDb => "The mod's page on ModDB.",
+        gz_mod::LinkKind::Telegram => "The mod's or its author's Telegram channel or chat.",
+        gz_mod::LinkKind::Discord => "The invitation to the mod's Discord server.",
+        gz_mod::LinkKind::Boosty => "The author's Boosty page.",
+        gz_mod::LinkKind::Patreon => "The author's Patreon page.",
+    }
+}
+
+/// What an empty field of a kind shows.
+#[must_use]
+pub fn link_example(kind: gz_mod::LinkKind) -> &'static str {
+    match kind {
+        gz_mod::LinkKind::ApPro => "https://ap-pro.ru/stuff/...",
+        gz_mod::LinkKind::ModDb => "https://www.moddb.com/mods/...",
+        gz_mod::LinkKind::Telegram => "https://t.me/...",
+        gz_mod::LinkKind::Discord => "https://discord.gg/...",
+        gz_mod::LinkKind::Boosty => "https://boosty.to/...",
+        gz_mod::LinkKind::Patreon => "https://www.patreon.com/...",
+    }
+}
+
 /// The changes that make `mod.ltx` say what `form` says, where `base` is what it says now.
 #[must_use]
 pub fn plan(base: &Form, form: &Form) -> Plan {
@@ -696,7 +740,13 @@ pub fn plan(base: &Form, form: &Form) -> Plan {
             $(if form.$f != base.$f { p.key($section, $key, s(&form.$f)); })*
         };
     }
-    text!("module": id => "id", name => "name", version => "version", author => "author", description => "description", website => "website", mode => "mode");
+    text!("module": id => "id", name => "name", version => "version", author => "author", description => "description", mode => "mode");
+    for kind in gz_mod::LINK_KINDS {
+        let (now, was) = (form.links.get(kind.index()), base.links.get(kind.index()));
+        if now != was {
+            p.key("links", kind.key(), s(now.map_or("", |l| l.trim())));
+        }
+    }
     text!("update": github => "github");
     if form.after != base.after {
         p.key("order", "after", list(&form.after));
@@ -857,20 +907,27 @@ mod tests {
         let f = Form {
             id: String::new(),
             version: "x".into(),
-            website: "https://example.com".into(),
+            links: gz_mod::LINK_KINDS.map(|k| {
+                if k == gz_mod::LinkKind::ApPro { "https://example.com".to_owned() } else { String::new() }
+            }),
             github: "nope".into(),
             ..form()
         };
         let p = check(&f, &Aux::default());
         let fields: Vec<&str> = p.iter().map(|p| p.field.as_str()).collect();
-        assert_eq!(fields, ["id", "version", "website", "github"]);
+        assert_eq!(fields, ["id", "version", "ap_pro", "github"]);
         assert!(p.iter().all(|p| p.blocks && p.tone == Tone::Error));
         assert_eq!(blocking(&p).1, 4);
     }
 
     #[test]
     fn a_website_that_is_not_the_module_page_warns() {
-        let f = Form { website: "https://ap-pro.ru/".into(), ..form() };
+        let f = Form {
+            links: gz_mod::LINK_KINDS.map(|k| {
+                if k == gz_mod::LinkKind::ApPro { "https://ap-pro.ru/".to_owned() } else { String::new() }
+            }),
+            ..form()
+        };
         let p = check(&f, &Aux::default());
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].tone, Tone::Warning);

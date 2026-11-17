@@ -75,6 +75,127 @@ pub fn validate_version(version: &str) -> bool {
     dotted_number(version, 1, 4) && version.len() <= 32
 }
 
+/// Where a module's card leads (`MOD_UPDATES.md` 1.5): a key of `[links]` each, with the hosts its
+/// page may be on. GitHub is not one of them: the card's GitHub link is the update repository.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LinkKind {
+    ApPro,
+    ModDb,
+    Telegram,
+    Discord,
+    Boosty,
+    Patreon,
+}
+
+/// Every kind, in the order the card shows them.
+pub const LINK_KINDS: [LinkKind; 6] = [
+    LinkKind::ApPro,
+    LinkKind::ModDb,
+    LinkKind::Telegram,
+    LinkKind::Discord,
+    LinkKind::Boosty,
+    LinkKind::Patreon,
+];
+
+impl LinkKind {
+    /// The key of `[links]` and of a release's card.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            LinkKind::ApPro => "ap_pro",
+            LinkKind::ModDb => "moddb",
+            LinkKind::Telegram => "telegram",
+            LinkKind::Discord => "discord",
+            LinkKind::Boosty => "boosty",
+            LinkKind::Patreon => "patreon",
+        }
+    }
+
+    /// The service's own name.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            LinkKind::ApPro => "AP-PRO",
+            LinkKind::ModDb => "ModDB",
+            LinkKind::Telegram => "Telegram",
+            LinkKind::Discord => "Discord",
+            LinkKind::Boosty => "Boosty",
+            LinkKind::Patreon => "Patreon",
+        }
+    }
+
+    #[must_use]
+    pub fn of_key(key: &str) -> Option<Self> {
+        LINK_KINDS.into_iter().find(|k| k.key() == key)
+    }
+
+    /// Its place in [`LINK_KINDS`].
+    #[must_use]
+    pub fn index(self) -> usize {
+        LINK_KINDS.iter().position(|k| *k == self).unwrap_or(0)
+    }
+}
+
+/// `https://<host><path>` of a link: the host whole and in lower case, the path in the charset a
+/// link takes. `None` for anything else - a user part, a port and `host.evil.example` all land in
+/// the host and fail to be one.
+fn link_parts(url: &str) -> Option<(String, &str)> {
+    if url.len() > 512 {
+        return None;
+    }
+    let rest = url.strip_prefix("https://")?;
+    let (host, path) = match rest.find('/') {
+        Some(i) => (rest.get(..i).unwrap_or(""), rest.get(i..).unwrap_or("")),
+        None => (rest, ""),
+    };
+    path.bytes()
+        .all(|c| c.is_ascii_alphanumeric() || b"-._~/?#&=%+".contains(&c))
+        .then(|| (host.to_ascii_lowercase(), path))
+}
+
+/// `MOD_UPDATES.md` 1.5: an https page of that service and nothing else; empty is valid. The
+/// game's `XMS::ValidLink`, rule for rule: change both or neither.
+#[must_use]
+pub fn validate_link(kind: LinkKind, url: &str) -> bool {
+    if url.is_empty() {
+        return true;
+    }
+    let Some((host, path)) = link_parts(url) else { return false };
+    let on = |hosts: &[&str]| hosts.contains(&host.as_str());
+    // a page of the service, not its front door
+    let page = path.len() > 1;
+    match kind {
+        LinkKind::ApPro => on(&["ap-pro.ru", "www.ap-pro.ru"]),
+        LinkKind::ModDb => on(&["moddb.com", "www.moddb.com"]),
+        LinkKind::Telegram => on(&["t.me", "telegram.me"]) && page,
+        LinkKind::Discord => {
+            (on(&["discord.gg"]) && page)
+                || (on(&["discord.com", "www.discord.com"]) && path.starts_with("/invite/") && path.len() > 8)
+        }
+        LinkKind::Boosty => on(&["boosty.to"]) && page,
+        LinkKind::Patreon => on(&["patreon.com", "www.patreon.com"]) && page,
+    }
+}
+
+/// Which of the two an address of the older `website` key is.
+#[must_use]
+pub fn website_kind(url: &str) -> Option<LinkKind> {
+    if url.is_empty() {
+        return None;
+    }
+    [LinkKind::ApPro, LinkKind::ModDb].into_iter().find(|k| validate_link(*k, url))
+}
+
+/// The address of a repository's page, for the card's GitHub link.
+#[must_use]
+pub fn github_link(repo: &str) -> String {
+    if validate_github_repo(repo) && !repo.is_empty() {
+        format!("https://github.com/{repo}")
+    } else {
+        String::new()
+    }
+}
+
 /// `MOD_UPDATES.md` 1.3: https, the host exactly `(www.)ap-pro.ru` or `(www.)moddb.com`, no
 /// user info or port, a limited charset, 512 bytes at most; empty is valid.
 #[must_use]
@@ -218,6 +339,7 @@ pub fn accepts(check: Check, value: &str) -> bool {
         Check::Id => validate_id(v),
         Check::Version => validate_version(v),
         Check::Website => validate_website(v),
+        Check::Link(kind) => validate_link(kind, v),
         Check::Tags => split_list(v, ',').iter().all(|t| known_tag(t)),
         Check::Target => TARGETS.iter().any(|t| t.eq_ignore_ascii_case(v)),
         Check::Mode => validate_mode_ref(v),
@@ -582,6 +704,7 @@ fn value_problems(line: &Line<'_>, doc_section: &'static SectionDoc, out: &mut V
             let (code, error) = match check {
                 Check::Version => ("mod.version", true),
                 Check::Website => ("mod.website", true),
+                Check::Link(_) => ("mod.link", true),
                 Check::Target => ("mod.target_value", true),
                 Check::Mode => ("mod.mode", true),
                 Check::Repo => ("mod.github", true),
@@ -822,6 +945,49 @@ mod tests {
         assert!(!validate_version("1234567890"));
         assert!(!validate_version("v1.0"));
         assert!(dotted_number("1.4.1", 3, 3) && !dotted_number("1.4", 3, 3));
+    }
+
+    #[test]
+    fn links_are_pages_of_their_own_services() {
+        // the game's XMS::ValidLink and the catalog's valid_link hold the same cases
+        for (kind, good) in [
+            (LinkKind::Telegram, "https://t.me/dead_air_refined"),
+            (LinkKind::Discord, "https://discord.gg/abc123"),
+            (LinkKind::Discord, "https://discord.com/invite/abc123"),
+            (LinkKind::Boosty, "https://boosty.to/page"),
+            (LinkKind::Patreon, "https://www.patreon.com/page"),
+            (LinkKind::ApPro, "https://ap-pro.ru"),
+            (LinkKind::ModDb, "https://www.moddb.com/mods/x"),
+            (LinkKind::Telegram, ""),
+        ] {
+            assert!(validate_link(kind, good), "{kind:?} {good}");
+        }
+        for (kind, bad) in [
+            (LinkKind::Telegram, "https://t.me/"),
+            (LinkKind::Telegram, "https://t.me.evil.example/x"),
+            (LinkKind::Telegram, "http://t.me/x"),
+            (LinkKind::Discord, "https://discord.com/channels/1"),
+            (LinkKind::Boosty, "https://boosty.to"),
+            (LinkKind::Patreon, "https://user@patreon.com/x"),
+            (LinkKind::Telegram, "https://t.me/a b"),
+            (LinkKind::ModDb, "https://t.me/x"),
+        ] {
+            assert!(!validate_link(kind, bad), "{kind:?} {bad}");
+        }
+        assert_eq!(website_kind("https://www.moddb.com/mods/x"), Some(LinkKind::ModDb));
+        assert_eq!(website_kind("https://ap-pro.ru/stuff/a/b-r1/"), Some(LinkKind::ApPro));
+        assert_eq!(website_kind(""), None);
+        assert_eq!(github_link("me/od"), "https://github.com/me/od");
+        assert_eq!(github_link(""), "");
+        assert!(refusal("links", "telegram", "https://example.org/x").is_some());
+        assert!(refusal("links", "telegram", "https://t.me/x").is_none());
+        // the older website stands in for the link of its kind until [links] names one
+        let m = crate::Manifest::parse(&crate::ManifestDoc::parse(
+            "[module]\r\nid = od\r\nwebsite = https://www.moddb.com/mods/od\r\n[links]\r\ntelegram = https://t.me/od\r\n",
+        ));
+        assert_eq!(m.link(LinkKind::ModDb), "https://www.moddb.com/mods/od");
+        assert_eq!(m.link(LinkKind::Telegram), "https://t.me/od");
+        assert_eq!((m.link(LinkKind::ApPro), m.page()), ("", "https://www.moddb.com/mods/od"));
     }
 
     #[test]

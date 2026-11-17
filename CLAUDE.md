@@ -924,6 +924,15 @@ A change of plan is a change of its document first.
   editor keeps as written is never reported. The tag vocabulary is `gz_mod::TAG_VOCABULARY`. The website allow-list (AP-PRO, ModDB) is
   enforced on BOTH sides: the game ignores any other link, the editor refuses
   to save it. Extending it is a game release first.
+- **A module's links are `mod.ltx [links]`** (the game's MOD_UPDATES 1.5): `ap_pro`, `moddb`, `telegram`,
+  `discord`, `boosty`, `patreon`, each a page of its own service and nothing else (`gz_mod::LinkKind`,
+  `validate_link` - the game's `XMS::ValidLink` and the catalog's `valid_link`, rule for rule, held to one
+  list of cases on the three sides). **GitHub is never written**: the card's GitHub link is `[update]
+  github`. The older `[module] website` is read as the AP-PRO or the ModDB link while `[links]` names none
+  of that kind (`Manifest::link`, `Manifest::page` - the module's own page, which the Mod Browser asks
+  for), and `mod.set` writes it there. Mod Settings shows a row per service; a release's card carries the
+  links under their keys and `website` for games that know no others. The game draws a small round
+  picture per link on the module's card.
 - `releases\` is editor-only (`gz-project`'s `rules.rs` `is_editor_only`): never shown
   as content, never exported, never packaged. Inside the project a release may
   only be written under `releases\`.
@@ -1029,6 +1038,24 @@ A change of plan is a change of its document first.
   the release is written anyway: a module outside the catalog ships what it likes.
   The tokenizer, the rules and the messages are the catalog's `catalog.py`, ported;
   change both or neither.
+- **The editor reads all the code a module ships, at every build** (`gz_mod::code`: one scan for the
+  module build, the packaging and the catalog's check). Code is what the game runs as Lua: scripts
+  (`.script`, `.lua`), shader scripts (`.s`) and the strings of the assets that carry code as text
+  (`.nqasset`, `.behasset`, `.pdaasset` - a string that calls something is read as a script). What the
+  game's protected mode refuses (ffi, `string.buffer`, `jit.util`, `os.execute`, `io.popen`,
+  `forgot_password`, ...) is a warning of the build and blocks a listing; what a reviewer looks at
+  (computed loads, `debug.*`, a program of the system named in a string, ...) is counted. `mod.build`
+  answers `code { refused, review }`.
+- **The network is a fact, never a problem** (the game's MOD_CATALOG 10.4, `gz_mod::code::network_line` -
+  the game's `xms_netrule.h` and the catalog's `network_line`, one rule held to one list of cases on the
+  three sides). A module whose code names the game's network API (`xms.http`) or a library or program
+  that reaches the network by itself works with the network: the game marks it "Network access" on its
+  card and before an install. The editor says so where the author meets a result - a footnote of the
+  build's, the packaging's and the publish's result dialog (`ResultSpec::notes`, the information tone),
+  `network { used, places, count, note }` in `mod.build` and `mod.package`, a note among Submit's
+  requirements - and never in a warning, an error or a log line of either. Package Release writes
+  `network = 1` into the card; a published card without it over code that works with the network blocks
+  the submission (the catalog refuses it the same way).
 - `[module] thumbnail` / `tags`: the editor makes `thumbnail.dds` at the module root
   (the middle square, 256 x 256, DXT1 - DXT5 with transparency -, every mip level)
   from any picture; Mod Settings (Mod Browser page, `gz-ui-mod`'s `settings.rs`) keeps a chosen picture in

@@ -1047,6 +1047,10 @@ impl PublishDialog {
         };
         let mut spec = ResultSpec::new("publish_result", "Publish Release", tone, headline);
         if job.state == PublishState::Done {
+            // what went out is what the packaging of this publish read
+            if let Some(packed) = gz_release::Releases::of(editor).last() {
+                spec.notes.extend(gz_ui_mod::build::network_note(&packed.network));
+            }
             spec.rows = vec![
                 ("Repository".into(), Tx::raw(job.repo.clone())),
                 ("Tag".into(), Tx::raw(job.tag.clone())),

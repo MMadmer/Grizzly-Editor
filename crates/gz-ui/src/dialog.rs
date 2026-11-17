@@ -142,6 +142,9 @@ pub struct ResultSpec {
     /// Up to 8 are shown: sentences a domain crate wrote, shown translated where the catalog
     /// knows them.
     pub warnings: Vec<String>,
+    /// Facts the author should know that are no problem: a footnote each, in the information
+    /// tone, under everything else. Never logged as a warning.
+    pub notes: Vec<Tx<'static>>,
     pub action: Option<ResultAction>,
 }
 
@@ -157,6 +160,7 @@ impl ResultSpec {
             rows: Vec::new(),
             left_out: Vec::new(),
             warnings: Vec::new(),
+            notes: Vec::new(),
             action: None,
         }
     }
@@ -883,6 +887,12 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                                 p.text_muted,
                                 Clip::End,
                             );
+                        }
+                    }
+                    if !r.notes.is_empty() {
+                        ui.add_space(4.0);
+                        for note in &r.notes {
+                            text::status(ui, Tone::Info, note.borrow());
                         }
                     }
                 }

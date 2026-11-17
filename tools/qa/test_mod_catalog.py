@@ -73,6 +73,12 @@ AUTHOR = "QA Author"
 DESCRIPTION = 'Mod Browser QA module.\nA "quoted" word.'
 VERSION = "1.0.0"
 WEBSITE = "https://ap-pro.ru/stuff/qa/qa-mod-r1/"
+TELEGRAM = "https://t.me/qa_catalog_mod"
+BOOSTY = "https://boosty.to/qa_author"
+# a script of the module that names the game's network API: the third line is the use
+NET_SCRIPT = "gamedata/scripts/qa_net.script"
+NET_SCRIPT_TEXT = (b"-- xms.http in a comment is no use of it\r\nfunction ask(url, done)\r\n"
+                   b"\treturn xms.http.request(url, done)\r\nend\r\n")
 SUBMIT_TITLE = "Submit " + MODULE_ID
 SUBMITTED_LINE = "Submitted from Grizzly Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7)."
 WITHDRAW_TITLE = "Withdraw " + MODULE_ID
@@ -925,6 +931,23 @@ class Run:
         check(r.get("ok"), "B the manifest takes id, name, version, author, website and github", short(r))
         self.plain_mode = not current.get("mode")
 
+        # the links of the card: a key per service, GitHub's from the repository, the one website as the kind it is
+        r = cmd("mod.set", set={"links": {"telegram": TELEGRAM, "boosty": BOOSTY}})
+        check(r.get("ok"), "B the manifest takes the links by their services", short(r))
+        r = cmd("mod.set", set={"links": {"telegram": "https://example.org/x"}})
+        check(not r.get("ok") and "telegram takes" in json.dumps(r), "B a link that is no page of its service is refused",
+              short(r))
+        r = cmd("mod.set", set={"links": {"vk": "https://vk.com/x"}})
+        check(not r.get("ok") and "ap_pro, moddb, telegram, discord, boosty, patreon" in json.dumps(r),
+              "B a service the game does not know is refused, with the ones it knows", short(r))
+        links = manifest_now().get("links") or {}
+        check(links == {"ap_pro": WEBSITE, "telegram": TELEGRAM, "boosty": BOOSTY,
+                        "github": "https://github.com/" + GITHUB_REPO},
+              "B mod.info answers the card's links, GitHub's from the repository", short(links))
+        text = (read_bytes(os.path.join(self.copy, "mod.ltx")) or b"").decode("utf-8", "replace")
+        check("[links]" in text and "ap_pro" in text and "\nwebsite" not in text,
+              "B the website is written where the links are, once", text[:400])
+
         thumb = os.path.join(self.copy, "thumbnail.dds")
         opaque = os.path.join(self.work, "pictures", "qa_opaque.png")
         write_bytes(opaque, opaque_picture())
@@ -1040,9 +1063,18 @@ class Run:
 
     # ------------------------------------------------------------------------------ D: the signed descriptor
     def descriptor(self) -> None:
+        # the module's code names the game's network API from here on: a fact of the release, never a problem of it
+        write_bytes(os.path.join(self.copy, *NET_SCRIPT.split("/")), NET_SCRIPT_TEXT)
         r = cmd("mod.package")
         check(r.get("ok") and r.get("signed") is True and r.get("key_id") == self.key_id,
               "D the package is signed with the author key", short(r))
+        net = r.get("network") or {}
+        check(net.get("used") is True and net.get("places") == [NET_SCRIPT + ":3"] and net.get("count") == 1 and
+              "Network access" in net.get("note", ""), "D the packaging says the code works with the network, and where",
+              short(net))
+        check("network" not in (r.get("warnings") or "").lower() and
+              not [c for c in r.get("catalog_content") or [] if "qa_net" in c.get("text", "")],
+              "D and that is neither a warning nor a finding", short(r.get("warnings")))
         check(not [c for c in r.get("catalog_content") or [] if c.get("level") == "block"],
               "D and the module holds nothing the catalog refuses", short(r.get("catalog_content")))
         folder = os.path.join(self.copy, "releases", VERSION)
@@ -1065,6 +1097,9 @@ class Run:
               "D [card] names the mode", str(card.get("mode")))
         check([t.strip() for t in card.get("tags", "").split(",")] == ["story", "quests"], "D [card] carries the tags",
               str(card.get("tags")))
+        check(card.get("ap_pro") == WEBSITE and card.get("telegram") == TELEGRAM and card.get("boosty") == BOOSTY and
+              "github" not in card and "moddb" not in card, "D [card] carries the links by their services", str(card))
+        check(card.get("network") == "1", "D [card] says the code works with the network", str(card))
         index = read_index(os.path.join(folder, "%s-%s.files" % (MODULE_ID, VERSION)))
         thumb_path, thumb_size, thumb_sha = card_file(card.get("thumbnail", ""))
         manifest_path, manifest_size, manifest_sha = card_file(card.get("manifest", ""))
@@ -1101,6 +1136,8 @@ class Run:
         check(job_done(data, "check") and c.get("done") is True, "F check runs to the end", short(data.get("job")))
         check(not blocks(data) and c.get("blocking") is False, "F nothing blocks the published release",
               short(blocks(data)))
+        check(levels(data, "network") == ["note"], "F the network is a note among the requirements, never a block",
+              short([f for f in findings(data) if f.get("code") == "network"]))
         name, _, sha = self.package
         check(levels(data, "virustotal") == ["required"] and
               any("a report is required: Submit scans it first" in t for t in texts(data, "virustotal")) and

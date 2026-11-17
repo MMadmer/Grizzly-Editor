@@ -39,9 +39,10 @@ pub fn key_width(section: &str) -> usize {
 /// Where a section is written; sections it does not know close the file.
 fn section_rank(section: &str) -> usize {
     let s = section.to_ascii_lowercase();
-    const ORDER: [&str; 11] = [
+    const ORDER: [&str; 12] = [
         "module",
         "update",
+        "links",
         "requires",
         "order",
         "conflicts",
@@ -86,6 +87,7 @@ fn key_rank(section: &str, key: &str) -> usize {
             "target",
         ],
         "update" => &["github"],
+        "links" => &["ap_pro", "moddb", "telegram", "discord", "boosty", "patreon"],
         "order" => &["after", "before"],
         "provides_mode" => &["id", "title"],
         "world" => &[

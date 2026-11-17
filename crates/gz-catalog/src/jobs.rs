@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use gz_editor::{Cancel, Executors, JobCtx};
 use gz_github::{Github, IssueKind, Scan, VtPolicy, scan};
-use gz_release::content::{Finding, Level, check_content, content_head, content_need};
+use gz_release::content::{Finding, Level, NETWORK, check_content, content_head, content_need};
 
 use crate::model::{
     Check, Checked, Input, Release, Standing, read_listing, reason, submission_details, submission_text,
@@ -232,8 +232,11 @@ impl Run {
         }
 
         // the website the Mod Browser shows: the card's; the manifest's while there is no card
-        let website =
-            if have && rel.card && !rel.website.is_empty() { rel.website.clone() } else { m.website.clone() };
+        let website = if have && rel.card && !rel.website.is_empty() {
+            rel.website.clone()
+        } else {
+            m.page().to_owned()
+        };
         let moddb = website.contains("moddb.com");
         if website.is_empty() {
             check.add(
@@ -488,7 +491,7 @@ impl Run {
         let rel = &seen.rel;
         let m = &input.manifest;
         let website =
-            if rel.card && !rel.website.is_empty() { rel.website.clone() } else { m.website.clone() };
+            if rel.card && !rel.website.is_empty() { rel.website.clone() } else { m.page().to_owned() };
         let rq = gz_github::CatalogRequest {
             module_id: m.id.clone(),
             file_text: submission_text(m, &input.key, rel, &website),
@@ -701,7 +704,10 @@ fn local_release_findings(
             files += 1;
         }
     }
-    let mut out = Vec::with_capacity(found.len() + 1);
+    // the network is one fact of the module, not a finding per file
+    let network: Vec<String> = found.iter().filter(|f| f.code == NETWORK).map(|f| f.text.clone()).collect();
+    found.retain(|f| f.code != NETWORK);
+    let mut out = Vec::with_capacity(found.len() + 3);
     if !found.iter().any(|f| f.level == Level::Block) {
         out.push(Finding {
             level: Level::Ok,
@@ -710,5 +716,29 @@ fn local_release_findings(
         });
     }
     out.extend(found);
+    if let Some(first) = network.first() {
+        let more = if network.len() > 1 { format!(" and {} more", network.len() - 1) } else { String::new() };
+        out.push(Finding {
+            level: Level::Note,
+            code: NETWORK,
+            text: format!(
+                "The module's code works with the network ({first}{more}). The game marks it Network access in the Mods menu and the Mod Browser and says so before a player installs it."
+            ),
+        });
+        // the card is what the Mod Browser reads before anything is downloaded
+        if !rel.network {
+            out.push(Finding {
+                level: Level::Block,
+                code: NETWORK,
+                text: "The release's card does not say that the code works with the network: package and publish the release again.".to_owned(),
+            });
+        }
+    } else if rel.network {
+        out.push(Finding {
+            level: Level::Note,
+            code: NETWORK,
+            text: "The release's card says the code works with the network, and this check found no such code: the mark stays until a release without it.".to_owned(),
+        });
+    }
     out
 }

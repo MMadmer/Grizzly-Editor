@@ -48,6 +48,7 @@
 //!   `mod.set`, `mod.exclude`.
 
 mod cmd;
+pub mod code;
 pub mod commands;
 pub mod doc;
 pub mod edit;
@@ -80,6 +81,7 @@ pub use rules::{
     validate_github_repo, validate_id, validate_mode_id, validate_mode_ref, validate_own_mode_id,
     validate_version, validate_website,
 };
+pub use rules::{LINK_KINDS, LinkKind, github_link, validate_link, website_kind};
 pub use sections::{OwnSections, SectionSet, own_sections};
 pub use service::{
     ArgCx, ArgHook, FieldHook, ManifestArgs, ManifestCmd, ManifestFields, ManifestService, ManifestState,

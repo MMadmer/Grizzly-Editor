@@ -135,6 +135,16 @@ What the suites hold, beyond what their names say:
   dialog and menu of `ui.contract` at both sizes with `untranslated` empty and no text cut whose English fits;
   every catalog reads and holds one English per context.
 
+- **The code scan, the network mark and a module's links** (`gz-mod`'s `code` and `rules` tests, `gz-release`'s
+  `content` and `card` tests, the catalog's `catalog.py selftest`, the game's `Run-LtxQa.ps1` and
+  `Run-ModsQa.ps1 -Scenario Catalog`): every file that carries code read by one scan - scripts, shader scripts,
+  the strings of quests, behaviour graphs and PDA interfaces; the new blocking and review rules; the network
+  rule on one list of cases in Rust, Python and C++; the link rules on one list of cases in Rust and Python
+  and in the game by a module's manifest and a release's card; the card's `network = 1` and link keys in
+  their fixed order; the build's, the packaging's and the catalog check's answers. In the game: every escape
+  of the audit closed (the probe proves each one real in an ordinary game and closed under protection), a
+  request of `xms.http` to the QA's mock and back, the refusals of its address rule, the mark of an installed
+  module by its own files and of a browser card by its release.
 - **Traders, loot tables, recipes and the Economy tab** (`gz-items`' tests, `test_items` phase E, the game's
   `Run-LtxQa.ps1` and `Run-ItemsQa.ps1`): the three kinds read, written and saved as the difference; composed
   after the items in the game's order; their checks; an item's `sold` / `loot` / `craft` / `lists` and a row of
@@ -508,6 +518,21 @@ What the suites hold, beyond what their names say:
   project: the project holds its notes, the record the converter wrote, and the two helpers of its own
   hand-made step.
 - The Sound QA of the game takes its sounds and effects as arguments: a tool of the game names no project.
+- **Protected mode had ways out, and they are closed** (2026-11-17; the game's MOD_CATALOG 9.2). An audit
+  of the game's protected mode found: LuaJIT opening the FFI library by itself at a 64-bit literal (`1LL`)
+  and entering it among the loaded modules, so `require("ffi")` answered native code; `string.buffer`
+  handing out raw pointers; `login_manager:forgot_password` passing a script's text to a command
+  interpreter; `io.open` taking the C runtime's mode letters, of which `D` deletes a file opened to read -
+  the catalog's state among them, which switched protection off at the next start; `package.path`,
+  `package.searchpath`, `getFS():exist` and `file_length` asking the disk about a network path before any
+  rule; `ini_file` reading above its folder; console commands with a path the list of names did not know.
+  Each is closed in the engine, proven real by the QA's probe in an ordinary game and closed under
+  protection. The editor's and the catalog's scans refuse what could only work around the mode.
+- **The network is allowed and said out loud** (2026-11-17). Scripts had no way to the network in protected
+  mode, and the catalog promised there was none. Now the game has one request API for scripts
+  (`xms.http`: public https only, nothing of the player sent, sizes bounded), a mark worked out from a
+  module's own files by one rule on the three sides, and the API answers only while an enabled module
+  carries the mark. The editor states the fact in a footnote and an answer field, never as a problem.
 - **An item said what was another thing's, and that was the mistake** (2026-11-17): `sold`, `loot` and `craft`
   wrote a trader's shelf, the death loot and recipes from inside an item, and `lists` any line of any config.
   They are gone from the format; the three relations are kinds of their own (`.tradeasset`, `.lootasset`,

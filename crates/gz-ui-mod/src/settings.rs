@@ -794,13 +794,28 @@ impl ModSettingsDoc {
             messages(g, problems, "version");
             g.row("Author", "Shown in the game's Mods menu.", PropFlags::NONE, 0, |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "author"), &mut form.author, ""));
             let _ = g.block(|ui| text_block(ui, "Description", "Shown in the game's Mods menu. Plain text or a string table id.", &mut form.description, 4));
-            g.row("Website", "The mod's page on AP-PRO or ModDB. The game opens it from the Mods menu.", flags(problems, "website", PropFlags::NONE), 0, |ui| {
-                gz_ui::form::row_field(ui, ("gz-ui-mod.text", "website"), &mut form.website, gz_ui::Tx::raw("https://ap-pro.ru/stuff/..."))
-            });
-            messages(g, problems, "website");
+            // the links of the mod's card: a row per service, each with its own rule
+            for kind in gz_mod::LINK_KINDS {
+                let Some(link) = form.links.get_mut(kind.index()) else { continue };
+                g.row(
+                    gz_ui::Tx::raw(kind.title()),
+                    crate::form::link_hint(kind),
+                    flags(problems, kind.key(), PropFlags::NONE),
+                    0,
+                    |ui| {
+                        gz_ui::form::row_field(
+                            ui,
+                            ("gz-ui-mod.link", kind.key()),
+                            link,
+                            gz_ui::Tx::raw(crate::form::link_example(kind)),
+                        )
+                    },
+                );
+                messages(g, problems, kind.key());
+            }
             let repo = g.row(
                 "GitHub Repository",
-                "owner/repo. The game checks the latest release of this repository for updates. A pasted address is fine: it is kept as owner/repo.",
+                "owner/repo. The game checks the latest release of this repository for updates, and the mod's card links to it. A pasted address is fine: it is kept as owner/repo.",
                 flags(problems, "github", PropFlags::NONE),
                 0,
                 |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "github"), &mut form.github, gz_ui::Tx::raw("owner/repo")),

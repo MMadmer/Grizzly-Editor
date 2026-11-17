@@ -24,7 +24,7 @@ writes `mod.ltx` as you edit (MCP: `mod.info`, `mod.set`).
 | `name` | Shown to the player in the game's Mods menu. |
 | `version` | One to four numbers separated by dots: `1`, `1.2`, `1.2.0`, `1.2.0.4`. The game offers an update only when the released version is higher than the installed one. |
 | `author`, `description` | Optional. Shown in the Mods menu; the description may span lines. Both (and `name`) may be a string table id the module ships in its own `gamedata\configs\text\<language>\*.xml`. |
-| `website` | Optional. The mod's page, opened from the Mods menu. Only `https://ap-pro.ru/...` and `https://moddb.com/...` (with or without `www.`) are accepted — the game ignores anything else, so the editor refuses to save it. |
+| Links (AP-PRO, ModDB, Telegram, Discord, Boosty, Patreon) | Optional. Where the mod's card leads: the game shows a small round picture for each. Written as `[links]` (`ap_pro`, `moddb`, `telegram`, `discord`, `boosty`, `patreon`); each takes a page of its own service and nothing else — the game ignores anything else, so the editor refuses to save it. The GitHub link is the repository below. A manifest written before `[links]` keeps its `website` key: it is read as the AP-PRO or the ModDB link. |
 | `GitHub Repository` | Optional, `owner/repo` (a pasted repository URL is reduced to it). Written as `[update] github`; the game checks that repository's latest release for updates — see §4. |
 | **Target** (Game Mode page) | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
 
@@ -297,8 +297,15 @@ version or from one ten releases back.
 version the release runs on. It defaults to the version of the linked game;
 leave it empty when any version will do.
 
-`website` takes only AP-PRO and ModDB links. The allow-list is enforced by the
-game as well, so a link to anywhere else would simply never open.
+Each link of `[links]` takes only a page of its own service (AP-PRO, ModDB, Telegram,
+Discord, Boosty, Patreon). The lists are enforced by the game as well, so a link to
+anywhere else would simply never open.
+
+**Code and the network.** Every build reads all the code the module ships - scripts, shader
+scripts, and the Lua inside quests, behaviour graphs and PDA interfaces. What the game's
+protected mode refuses is a warning of the build. When the code works with the network
+(`xms.http`), the result says so in a footnote: nothing is wrong, the game marks such a
+module "Network access" for its players.
 
 The release format is a frozen contract between the editor and the game. Its
 normative text lives in the game repository, `docs/dead-air/MOD_UPDATES.md` —

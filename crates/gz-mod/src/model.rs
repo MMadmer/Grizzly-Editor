@@ -101,6 +101,9 @@ pub struct Manifest {
     /// May hold real line breaks.
     pub description: String,
     pub website: String,
+    /// `[links]` as written, by [`crate::LinkKind::index`]. Read through [`Manifest::link`]: the
+    /// older `website` stands in for the kind it is.
+    pub links: [String; 6],
     /// `[module] thumbnail`, project-relative with `\` separators as written.
     pub thumbnail: String,
     pub tags: Vec<String>,
@@ -143,6 +146,7 @@ enum Sec {
     Conflicts,
     Provides,
     Update,
+    Links,
     Exclude,
     Vars,
     Pda,
@@ -151,6 +155,26 @@ enum Sec {
     Playlist(usize),
     /// Read raw by the areas that own them, or unknown.
     Other,
+}
+
+impl Manifest {
+    /// The link of a kind: what `[links]` says, else the older `website` when it is of that kind.
+    #[must_use]
+    pub fn link(&self, kind: crate::LinkKind) -> &str {
+        let written = self.links.get(kind.index()).map_or("", String::as_str);
+        if written.is_empty() && crate::website_kind(&self.website) == Some(kind) {
+            &self.website
+        } else {
+            written
+        }
+    }
+
+    /// The module's own page, which the Mod Browser asks for: AP-PRO's, else ModDB's.
+    #[must_use]
+    pub fn page(&self) -> &str {
+        let ap_pro = self.link(crate::LinkKind::ApPro);
+        if ap_pro.is_empty() { self.link(crate::LinkKind::ModDb) } else { ap_pro }
+    }
 }
 
 fn truthy(v: &str) -> bool {
@@ -180,6 +204,7 @@ impl Manifest {
                         "conflicts" => Sec::Conflicts,
                         "provides_mode" => Sec::Provides,
                         "update" => Sec::Update,
+                        "links" => Sec::Links,
                         "exclude" => Sec::Exclude,
                         "vars" => Sec::Vars,
                         "pda" => Sec::Pda,
@@ -243,6 +268,21 @@ impl Manifest {
                 Sec::Update => {
                     if key == "github" {
                         m.update_github = value.to_owned();
+                    }
+                }
+                // a key per service; the names are the reference's, held together by its tests
+                Sec::Links => {
+                    let kind = match key {
+                        "ap_pro" => Some(crate::LinkKind::ApPro),
+                        "moddb" => Some(crate::LinkKind::ModDb),
+                        "telegram" => Some(crate::LinkKind::Telegram),
+                        "discord" => Some(crate::LinkKind::Discord),
+                        "boosty" => Some(crate::LinkKind::Boosty),
+                        "patreon" => Some(crate::LinkKind::Patreon),
+                        _ => None,
+                    };
+                    if let Some(slot) = kind.and_then(|k| m.links.get_mut(k.index())) {
+                        value.clone_into(slot);
                     }
                 }
                 // each `id` line starts a declared mode, `title` fills the last one

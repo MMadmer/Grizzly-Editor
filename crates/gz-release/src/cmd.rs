@@ -54,6 +54,21 @@ fn wire(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+/// What a command answers of the network (the game's MOD_CATALOG 10.4): whether the module's code
+/// works with it, where, and what that means for its players - a fact, never a problem.
+#[must_use]
+pub fn network_answer(places: &[String]) -> Value {
+    json!({
+        "used": !places.is_empty(),
+        "places": places.iter().take(10).collect::<Vec<_>>(),
+        "count": places.len(),
+        "note": if places.is_empty() { "" } else { NETWORK_NOTE },
+    })
+}
+
+/// What the author is told when the module's code works with the network.
+pub const NETWORK_NOTE: &str = gz_mod::code::NETWORK_NOTE;
+
 /// The answer of a packaging that ended.
 pub fn package_answer(r: &PackageResult) -> Reply {
     if r.cancelled {
@@ -84,6 +99,8 @@ pub fn package_answer(r: &PackageResult) -> Reply {
         "left_out": r.left_out,
         // the Mod Browser's content rules: reported, the release is written either way
         "catalog_content": catalog,
+        // the module's code works with the network: the game marks the module so
+        "network": network_answer(&r.network),
     }))
 }
 

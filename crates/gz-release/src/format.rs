@@ -106,6 +106,13 @@ pub fn release_gate(m: &Manifest) -> Result<(), String> {
             "a release needs an orderable version: 1-4 numbers separated by dots, e.g. 1.2.0".to_owned()
         );
     }
+    if let Some(kind) = gz_mod::LINK_KINDS.into_iter().find(|k| !gz_mod::validate_link(*k, m.link(*k))) {
+        return Err(format!(
+            "invalid {} link in mod.ltx: [links] {} takes a page of that service",
+            kind.title(),
+            kind.key()
+        ));
+    }
     if !validate_website(&m.website) {
         return Err(
             "invalid website in mod.ltx: only https://ap-pro.ru or https://moddb.com links are allowed"

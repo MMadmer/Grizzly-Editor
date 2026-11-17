@@ -164,13 +164,25 @@ pub fn card_section(
     tables: &StringTables,
     manifest: &CardFile,
     thumbnail: Option<&CardFile>,
+    network: bool,
 ) -> String {
     let mut out = String::from("\r\n[card]\r\n");
     card_text(&mut out, "name", tables, if m.name.is_empty() { &m.id } else { &m.name });
     card_text(&mut out, "author", tables, &m.author);
     card_text(&mut out, "description", tables, &m.description);
-    if !m.website.is_empty() {
-        key_line(&mut out, "website", &m.website);
+    // the module's own page, under the key every game reads; then each link by its kind
+    if !m.page().is_empty() {
+        key_line(&mut out, "website", m.page());
+    }
+    for kind in gz_mod::LINK_KINDS {
+        let link = m.link(kind);
+        if !link.is_empty() && gz_mod::validate_link(kind, link) {
+            key_line(&mut out, kind.key(), link);
+        }
+    }
+    // the module's code works with the network (10.4): the Mod Browser says so on the card
+    if network {
+        key_line(&mut out, "network", "1");
     }
 
     // the mode: the plain game, one the module brings, or one somebody else's
@@ -218,7 +230,7 @@ mod tests {
         let tables = StringTables::from_texts(vec![rus.as_bytes().to_vec()], vec![eng.as_bytes().to_vec()]);
         let mf = CardFile { path: "mod.ltx".into(), size: 812, sha256: "9a1b".into() };
         let th = CardFile { path: "thumbnail.dds".into(), size: 43832, sha256: "5e8f".into() };
-        let card = card_section(&m, &tables, &mf, Some(&th));
+        let card = card_section(&m, &tables, &mf, Some(&th), false);
         assert_eq!(
             card,
             "\r\n[card]\r\n\
@@ -227,6 +239,7 @@ mod tests {
              author      = \"Madmer\"\r\n\
              description = \"Night shifts.\\nA \\\"new\\\" mode.\"\r\n\
              website     = https://ap-pro.ru/stuff/x/overnight-delivery-r600/\r\n\
+             ap_pro      = https://ap-pro.ru/stuff/x/overnight-delivery-r600/\r\n\
              mode        = new od_mode\r\n\
              mode_title  = \"Night\\nShift\"\r\n\
              tags        = story, quests\r\n\
@@ -241,16 +254,25 @@ mod tests {
         let mf = CardFile { path: "mod.ltx".into(), size: 1, sha256: "00".into() };
         let mut m = manifest("[module]\r\nid = od\r\n");
         assert_eq!(
-            card_section(&m, &tables, &mf, None),
+            card_section(&m, &tables, &mf, None, false),
             "\r\n[card]\r\nname        = \"od\"\r\nmode        = plain\r\nmanifest    = mod.ltx, 1, 00\r\n"
         );
         m.mode = "*".into();
-        assert!(card_section(&m, &tables, &mf, None).contains("mode        = plain\r\n"));
+        assert!(card_section(&m, &tables, &mf, None, false).contains("mode        = plain\r\n"));
         m.mode = "da_story".into();
-        let other = card_section(&m, &tables, &mf, None);
+        let other = card_section(&m, &tables, &mf, None, false);
         assert!(other.contains("mode        = mode da_story\r\nmode_title  = \"da_story\"\r\n"), "{other}");
         m.provides_modes = vec![ProvidesMode { id: "da_story".into(), title: String::new() }];
-        assert!(card_section(&m, &tables, &mf, None).contains("mode        = new da_story\r\n"));
+        assert!(card_section(&m, &tables, &mf, None, false).contains("mode        = new da_story\r\n"));
+        // the links by their kinds - the older website as the kind it is, a link that is no page
+        // of its service left out - and the network mark, in the card's fixed order
+        let linked = manifest(
+            "[module]\r\nid = od\r\nwebsite = https://www.moddb.com/mods/od\r\n[links]\r\ntelegram = https://t.me/od\r\nboosty = https://boosty.to\r\n[update]\r\ngithub = me/od\r\n",
+        );
+        assert_eq!(
+            card_section(&linked, &tables, &mf, None, true),
+            "\r\n[card]\r\nname        = \"od\"\r\nwebsite     = https://www.moddb.com/mods/od\r\nmoddb       = https://www.moddb.com/mods/od\r\ntelegram    = https://t.me/od\r\nnetwork     = 1\r\nmode        = plain\r\nmanifest    = mod.ltx, 1, 00\r\n"
+        );
         // an id the tables do not hold stays as written; English alone stands for both
         let eng = StringTables::from_texts(
             Vec::new(),

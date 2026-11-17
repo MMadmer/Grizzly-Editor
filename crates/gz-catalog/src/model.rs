@@ -28,6 +28,8 @@ pub struct Release {
     pub packages: Vec<RelPackage>,
     pub card: bool,
     pub website: String,
+    /// The card says the module's code works with the network.
+    pub network: bool,
     pub thumbnail: String,
     pub tags: String,
     /// The key id the signature claims.
@@ -64,6 +66,7 @@ impl Release {
         for (key, value) in card {
             match key {
                 "website" => rel.website = ini::unquote(value),
+                "network" => rel.network = value == "1",
                 "thumbnail" => rel.thumbnail = value.to_owned(),
                 "tags" => rel.tags = value.to_owned(),
                 _ => {}

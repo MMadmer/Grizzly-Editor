@@ -177,7 +177,12 @@ def media_tabs(project: str, tag: str, shots: str | None) -> list[str]:
     folder, leaf = picture.rsplit("/", 1) if "/" in picture else ("", picture)
     asset = (folder + "/" if folder else "") + "qa_tour_" + leaf.rsplit(".", 1)[0] + ".texasset"
     qa.write(os.path.join(project, *asset.split("/")), 'return {\n  tex = 1,\n  source = "%s",\n}\n' % leaf)
-    shown = cmd("preview.texture", action="open", path=asset, source="project")
+    # the asset was written a moment ago: the preview has its keys once the project's watcher has told of the file
+    def with_keys():
+        answer = cmd("preview.texture", action="open", path=asset, source="project")
+        return answer if answer.get("ok") and (answer.get("asset") or {}).get("name") else None
+
+    shown = qa.until(with_keys, 10.0, 0.2) or cmd("preview.texture", action="open", path=asset, source="project")
     check(shown.get("ok") and (shown.get("asset") or {}).get("name"), label + " opens in the texture preview with its keys",
           qa.short(shown))
     if shown.get("ok"):

@@ -284,6 +284,7 @@ pub fn package_report(m: &Manifest, r: &PackageResult) -> ResultSpec {
     spec.rows = rows;
     spec.left_out.clone_from(&r.left_out);
     spec.warnings = warnings;
+    spec.notes.extend(crate::build::network_note(&r.network));
     let dir = r.out_dir.clone();
     spec.action =
         Some(ResultAction { label: "Open Folder".into(), run: Arc::new(move || call::open_folder(&dir)) });

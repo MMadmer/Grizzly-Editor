@@ -4,7 +4,12 @@
 //! likes, so the release is written either way; the findings are warnings and
 //! `catalog_content` in the answer.
 
+use gz_mod::code::{CodeKind, code_kind};
 use serde::Serialize;
+
+/// The code of the finding that says a file works with the network (10.4): its text is
+/// `<path>:<line>`, its level a note - the game marks such a module, nothing refuses it.
+pub const NETWORK: &str = "network";
 
 /// How much a finding weighs. `Required` is a requirement not met yet that a submission meets
 /// by itself (a VirusTotal report its scan waits for); the content rules give `Block` and
@@ -194,11 +199,11 @@ pub fn bytes_allowed(data: &[u8]) -> Result<(), &'static str> {
 }
 
 fn is_script(path: &str) -> bool {
-    path.len() > 7 && path.get(path.len() - 7..).is_some_and(|e| e.eq_ignore_ascii_case(".script"))
+    code_kind(path).is_some()
 }
 
-/// How much of a file [`check_content`] reads: all of a script (16 MiB at most), the first
-/// 64 KiB of anything else.
+/// How much of a file [`check_content`] reads: all of a file that carries code (16 MiB at most),
+/// the first 64 KiB of anything else.
 #[must_use]
 pub fn content_head(path: &str, size: u64) -> u64 {
     let limit = if is_script(path) { 16 << 20 } else { 64 << 10 };
@@ -217,8 +222,8 @@ pub fn content_need(head: &[u8], size: u64) -> u64 {
     if need > got && need <= size { need } else { got }
 }
 
-/// One file of a module against 8 and, for a script, 10.3. `path` is
-/// module-relative with `/`; a non-script needs only its first bytes.
+/// One file of a module against 8 and, for a file that carries code, 10.3 and 10.4. `path` is
+/// module-relative with `/`; any other file needs only its first bytes.
 pub fn check_content(path: &str, data: &[u8], out: &mut Vec<Finding>) {
     if let Err(why) = path_allowed(path) {
         out.push(Finding::new(Level::Block, "content", format!("{path}: {why}")));
@@ -228,347 +233,27 @@ pub fn check_content(path: &str, data: &[u8], out: &mut Vec<Finding>) {
         out.push(Finding::new(Level::Block, "content", format!("{path}: {why}")));
         return;
     }
-    if is_script(path) {
-        script_report(path, data, out);
+    if let Some(kind) = code_kind(path) {
+        code_report(path, kind, data, out);
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Name,
-    String,
-    Number,
-    Op,
-    Other,
-}
-
-struct Token<'a> {
-    kind: Kind,
-    text: &'a [u8],
-    line: u32,
-}
-
-fn name_start(c: u8) -> bool {
-    c.is_ascii_alphabetic() || c == b'_'
-}
-
-fn name_char(c: u8) -> bool {
-    name_start(c) || c.is_ascii_digit()
-}
-
-/// `[=*[` at `p`: the level of the long bracket.
-fn long_open(t: &[u8], p: usize) -> Option<usize> {
-    if t.get(p) != Some(&b'[') {
-        return None;
+/// 10.3 and 10.4 over one file that carries code: what only a module that runs unprotected would
+/// do, and whether the code works with the network (a note, never a problem).
+pub fn code_report(path: &str, kind: CodeKind, text: &[u8], out: &mut Vec<Finding>) {
+    let report = gz_mod::code::report(kind, text);
+    for f in report.findings {
+        let level = if f.blocks { Level::Block } else { Level::Review };
+        out.push(Finding::new(level, "script", format!("{path}:{} {}", f.line, f.what)));
     }
-    let mut q = p + 1;
-    while t.get(q) == Some(&b'=') {
-        q += 1;
+    if let Some(line) = report.network {
+        out.push(Finding::new(Level::Note, NETWORK, format!("{path}:{line}")));
     }
-    (t.get(q) == Some(&b'[')).then_some(q - p - 1)
 }
 
-/// The long bracket of `level` opened at `p` closes: the index past its `]=*]`.
-fn long_close(t: &[u8], p: usize, level: usize) -> Option<usize> {
-    let mut i = p + level + 2;
-    while i < t.len() {
-        if t.get(i) == Some(&b']') {
-            let mut q = i + 1;
-            let mut n = 0;
-            while t.get(q) == Some(&b'=') {
-                q += 1;
-                n += 1;
-            }
-            if n == level && t.get(q) == Some(&b']') {
-                return Some(q + 1);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-fn lines_in(t: &[u8], a: usize, b: usize) -> u32 {
-    t.get(a..b).map_or(0, |s| s.iter().filter(|&&c| c == b'\n').count() as u32)
-}
-
-const LONGER: &[&[u8]] = &[b"...", b"..", b"==", b"~=", b"<=", b">=", b"::"];
-const OPS: &[u8] = b"-+*/%^#&~|<>=(){}[];:,.";
-
-fn push<'a>(out: &mut Vec<Token<'a>>, t: &'a [u8], kind: Kind, a: usize, b: usize, line: u32) {
-    out.push(Token { kind, text: t.get(a..b).unwrap_or(&[]), line });
-}
-
-fn tokenize(t: &[u8]) -> Vec<Token<'_>> {
-    let mut out = Vec::new();
-    let mut p = 0usize;
-    let mut line = 1u32;
-    let end = t.len();
-    while p < end {
-        let c = t.get(p).copied().unwrap_or(0);
-        if matches!(c, b' ' | b'\t' | b'\r' | b'\n' | 0x0C | 0x0B) {
-            line += u32::from(c == b'\n');
-            p += 1;
-            continue;
-        }
-        if c == b'-' && t.get(p + 1) == Some(&b'-') {
-            if let Some(level) = long_open(t, p + 2)
-                && let Some(stop) = long_close(t, p + 2, level)
-            {
-                line += lines_in(t, p, stop);
-                p = stop;
-                continue;
-            }
-            // an unclosed long comment is an ordinary line comment, as the catalog reads it
-            while p < end && t.get(p) != Some(&b'\n') {
-                p += 1;
-            }
-            continue;
-        }
-        let start_line = line;
-        if let Some(level) = long_open(t, p)
-            && let Some(stop) = long_close(t, p, level)
-        {
-            push(&mut out, t, Kind::String, p, stop, start_line);
-            line += lines_in(t, p, stop);
-            p = stop;
-            continue;
-        }
-        if c == b'"' || c == b'\'' {
-            let mut q = p + 1;
-            while q < end && t.get(q) != Some(&c) && t.get(q) != Some(&b'\n') {
-                q += if t.get(q) == Some(&b'\\') && q + 1 < end { 2 } else { 1 };
-            }
-            if q < end && t.get(q) == Some(&c) {
-                push(&mut out, t, Kind::String, p, q + 1, start_line);
-                line += lines_in(t, p, q + 1);
-                p = q + 1;
-                continue;
-            }
-            // an unterminated quote is a stray character
-            push(&mut out, t, Kind::Other, p, p + 1, start_line);
-            p += 1;
-            continue;
-        }
-        let digit_at = |i: usize| t.get(i).is_some_and(u8::is_ascii_digit);
-        let xdigit_at = |i: usize| t.get(i).is_some_and(u8::is_ascii_hexdigit);
-        if c.is_ascii_digit() || (c == b'.' && digit_at(p + 1)) {
-            let mut q = p;
-            // only a complete exponent belongs to the number
-            let exponent = |q: &mut usize, lower: u8, upper: u8| {
-                let mut e = *q;
-                if !matches!(t.get(e), Some(&x) if x == lower || x == upper) {
-                    return;
-                }
-                e += 1;
-                if matches!(t.get(e), Some(b'+' | b'-')) {
-                    e += 1;
-                }
-                if !digit_at(e) {
-                    return;
-                }
-                while digit_at(e) {
-                    e += 1;
-                }
-                *q = e;
-            };
-            let hex = c == b'0'
-                && q + 2 < end
-                && matches!(t.get(q + 1), Some(b'x' | b'X'))
-                && (xdigit_at(q + 2) || t.get(q + 2) == Some(&b'.'));
-            if hex {
-                q += 2;
-                while xdigit_at(q) || t.get(q) == Some(&b'.') {
-                    q += 1;
-                }
-                exponent(&mut q, b'p', b'P');
-            } else {
-                while digit_at(q) {
-                    q += 1;
-                }
-                if t.get(q) == Some(&b'.') {
-                    q += 1;
-                }
-                while digit_at(q) {
-                    q += 1;
-                }
-                exponent(&mut q, b'e', b'E');
-            }
-            push(&mut out, t, Kind::Number, p, q, start_line);
-            p = q;
-            continue;
-        }
-        if name_start(c) {
-            let mut q = p;
-            while t.get(q).copied().is_some_and(name_char) {
-                q += 1;
-            }
-            push(&mut out, t, Kind::Name, p, q, start_line);
-            p = q;
-            continue;
-        }
-        let mut n = LONGER
-            .iter()
-            .find(|op| t.get(p..).is_some_and(|rest| rest.starts_with(op)))
-            .map_or(0, |op| op.len());
-        if n == 0 && c != 0 && OPS.contains(&c) {
-            n = 1;
-        }
-        push(&mut out, t, if n > 0 { Kind::Op } else { Kind::Other }, p, p + n.max(1), start_line);
-        p += n.max(1);
-    }
-    out
-}
-
-/// A long string of base64-ish characters only.
-fn encoded_blob(s: &[u8]) -> bool {
-    let (mut a, mut b) = (0usize, s.len());
-    while a < b && s.get(a).is_some_and(|c| b"\"'[=".contains(c)) {
-        a += 1;
-    }
-    while b > a && s.get(b - 1).is_some_and(|c| b"\"']=".contains(c)) {
-        b -= 1;
-    }
-    if a == b {
-        return false;
-    }
-    s.get(a..b).unwrap_or(&[]).iter().all(|&c| name_char(c) || b"+/=\\- \t\r\n".contains(&c))
-}
-
-/// A dotted name's first part, its second when it matters, and what the finding calls it.
-type Pattern = (&'static [u8], Option<&'static [u8]>, &'static str);
-
-const BLOCKING: &[Pattern] = &[
-    (b"ffi", None, "ffi"),
-    (b"os", Some(b"execute"), "os.execute"),
-    (b"io", Some(b"popen"), "io.popen"),
-    (b"package", Some(b"loadlib"), "package.loadlib"),
-    (b"string", Some(b"dump"), "string.dump"),
-    (b"lfs", Some(b"link"), "lfs.link"),
-    (b"StartDedicatedServer", None, "StartDedicatedServer"),
-];
-
-const REVIEW: &[(&[u8], &str)] = &[
-    (b"setfenv", "setfenv"),
-    (b"getfenv", "getfenv"),
-    (b"debug", "debug.*"),
-    (b"save_as", "ini_file:save_as"),
-    (b"w_open", "getFS():w_open"),
-    (b"file_delete", "getFS():file_delete"),
-    (b"file_rename", "getFS():file_rename"),
-    (b"file_copy", "getFS():file_copy"),
-    (b"dir_delete", "getFS():dir_delete"),
-];
-
-/// 10.3 over one script: what only a module that runs unprotected would do.
+/// 10.3 over one script.
 pub fn script_report(path: &str, text: &[u8], out: &mut Vec<Finding>) {
-    let tokens = tokenize(text);
-    let add = |out: &mut Vec<Finding>, level: Level, line: u32, what: &str| {
-        out.push(Finding::new(level, "script", format!("{path}:{line} {what}")));
-    };
-    let text_at = |i: usize| -> &[u8] { tokens.get(i).map_or(&[][..], |t| t.text) };
-    let kind_at = |i: usize| tokens.get(i).map(|t| t.kind);
-
-    for (i, token) in tokens.iter().enumerate() {
-        if token.kind != Kind::Name {
-            continue;
-        }
-        if i > 0 && matches!(text_at(i - 1), b"." | b":") {
-            continue;
-        }
-        // the dotted name starting here: a, a.b, a:b
-        let mut parts: Vec<&[u8]> = vec![token.text];
-        let mut after = i + 1;
-        while after + 1 < tokens.len()
-            && matches!(text_at(after), b"." | b":")
-            && kind_at(after + 1) == Some(Kind::Name)
-        {
-            parts.push(text_at(after + 1));
-            after += 2;
-        }
-        let first = parts.first().copied().unwrap_or(&[]);
-        let line = token.line;
-        for (a, b, what) in BLOCKING {
-            if first == *a && b.is_none_or(|b| parts.get(1) == Some(&b)) {
-                add(out, Level::Block, line, &format!("uses {what}"));
-            }
-        }
-        if first == b"require"
-            && text_at(after) == b"("
-            && kind_at(after + 1) == Some(Kind::String)
-            && contains(text_at(after + 1), b"ffi")
-        {
-            add(out, Level::Block, line, "loads ffi");
-        }
-        if matches!(first, b"load" | b"loadstring" | b"require" | b"dofile" | b"loadfile")
-            && text_at(after) == b"("
-        {
-            let literal =
-                kind_at(after + 1) == Some(Kind::String) && matches!(text_at(after + 2), b")" | b",");
-            if !literal {
-                add(
-                    out,
-                    Level::Review,
-                    line,
-                    &format!("{} of a computed string", String::from_utf8_lossy(first)),
-                );
-            }
-        }
-        if first == b"_G" && text_at(after) == b"[" {
-            add(out, Level::Review, line, "indexes _G by a computed name");
-        }
-        for (a, what) in REVIEW {
-            if parts.iter().any(|p| p == a) {
-                add(out, Level::Review, line, &format!("uses {what}"));
-            }
-        }
-        let n = parts.len();
-        let console = (n >= 2
-            && parts.get(n - 2) == Some(&&b"get_console"[..])
-            && parts.last() == Some(&&b"execute"[..]))
-            || (first == b"get_console" && text_at(after + 2) == b":" && text_at(after + 3) == b"execute");
-        if console {
-            add(out, Level::Review, line, "runs a console command");
-        }
-        if n == 2 && first == b"string" && parts.get(1) == Some(&&b"char"[..]) && text_at(after) == b"(" {
-            let (mut depth, mut commas) = (0i32, 0u32);
-            for t in tokens.iter().skip(after) {
-                match t.text {
-                    b"(" => depth += 1,
-                    b")" => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    b"," if depth == 1 => commas += 1,
-                    _ => {}
-                }
-            }
-            if commas >= 16 {
-                add(
-                    out,
-                    Level::Review,
-                    line,
-                    &format!("builds a string of {} characters with string.char", commas + 1),
-                );
-            }
-        }
-    }
-    for t in &tokens {
-        if t.kind == Kind::String && t.text.len() > 2000 && encoded_blob(t.text) {
-            add(
-                out,
-                Level::Review,
-                t.line,
-                &format!("holds a long encoded blob ({} characters)", t.text.len()),
-            );
-        }
-    }
-}
-
-fn contains(hay: &[u8], needle: &[u8]) -> bool {
-    hay.windows(needle.len()).any(|w| w == needle)
+    code_report(path, CodeKind::Script, text, out);
 }
 
 #[cfg(test)]
@@ -728,12 +413,26 @@ mod tests {
             findings("b.script", blob.as_bytes()),
             [(Level::Review, format!("b.script:1 holds a long encoded blob ({} characters)", 2402))]
         );
-        // numbers and exponents do not swallow names; 0x1p4 is one number
-        let tokens = tokenize(b"x = 0x1p4 + 1e e2 .5");
-        let texts: Vec<&[u8]> = tokens.iter().map(|t| t.text).collect();
-        assert_eq!(texts, [&b"x"[..], b"=", b"0x1p4", b"+", b"1", b"e", b"e2", b".5"]);
-        // an unterminated quote is a stray character, the rest still reads
-        let tokens = tokenize(b"a = \"open\nos.execute");
-        assert!(tokens.iter().any(|t| t.text == b"execute" && t.line == 2));
+    }
+
+    #[test]
+    fn every_file_that_carries_code_is_read_and_the_network_is_a_note() {
+        // a shader script and an asset's code are scripts as much as a .script
+        assert_eq!(
+            findings("gamedata/shaders/r3/x.s", b"os.execute('x')"),
+            [(Level::Block, "gamedata/shaders/r3/x.s:1 uses os.execute".to_owned())]
+        );
+        let asset = b"return { nodes = { { kind = \"lua\", code = \"xms.http.request(u, io.popen)\" } } }";
+        let mut out = Vec::new();
+        check_content("quests/a.nqasset", asset, &mut out);
+        let got: Vec<(Level, &str, &str)> = out.iter().map(|f| (f.level, f.code, f.text.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                (Level::Block, "script", "quests/a.nqasset:1 uses io.popen"),
+                (Level::Note, NETWORK, "quests/a.nqasset:1"),
+            ]
+        );
+        assert_eq!(content_head("quests/a.nqasset", 1 << 20), 1 << 20);
     }
 }
