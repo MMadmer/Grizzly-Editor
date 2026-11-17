@@ -563,7 +563,7 @@ def phase_i(project, shots, ed, before_scale, contract) -> None:
 
 
 # the tab kinds a tour opens without a file of their own, and how
-SINGLETONS = ("characters", "mod_settings", "world_rules", "screens", "releases", "preferences",
+SINGLETONS = ("characters", "economy", "mod_settings", "world_rules", "screens", "releases", "preferences",
               "light_animations", "texture_library", "sound_library")
 
 

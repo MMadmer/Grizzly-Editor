@@ -183,7 +183,6 @@ class ItemSpec:
         self.hud_ops: list = []
         self.hud_name = None
         self.sections: list = []    # ("new", Sect) | ("edit", name, ops)
-        self.craft: list = []       # (at, count, parts)
         self.drop_keys: set = set()
 
     @property
@@ -191,8 +190,7 @@ class ItemSpec:
         return os.path.join("items", self.family, self.group, self.section + ".itemasset")
 
     def empty(self):
-        return not (self.main_new or self.main_ops or self.icon or self.hud_new or self.hud_ops or self.sections or self.texts
-                    or self.craft)
+        return not (self.main_new or self.main_ops or self.icon or self.hud_new or self.hud_ops or self.sections or self.texts)
 
 
 _ID = re.compile(r"^[a-z_][a-z0-9_]{0,47}$")
@@ -272,8 +270,6 @@ def asset_table(spec: ItemSpec) -> dict:
         rows.append(r)
     if rows:
         t["sections"] = rows
-    if spec.craft:
-        t["craft"] = [luadata.Inline(at=at, count=count, parts=list(parts)) for at, count, parts in spec.craft]
     return t
 
 
@@ -282,7 +278,10 @@ def asset_table(spec: ItemSpec) -> dict:
 # ---- the game's reading of an asset (`xms_items.cpp`): what it refuses, and what it makes, in its order -----
 SECTION_NAME = re.compile(r"^[a-z0-9_.\-]{1,63}$")
 ALLOWED_TOP = {"item", "id", "section", "base", "abstract", "edit", "name", "short_name", "description", "icon",
-               "set", "unset", "add", "drop", "hud", "sections", "craft", "loot", "sold", "scene", "lists", "editor"}
+               "set", "unset", "add", "drop", "hud", "sections", "scene", "editor"}
+# what another file owns: an item that says it is refused by the editor's check, and the game never reads it
+FOREIGN_TOP = {"sold": "a trader file (.tradeasset)", "loot": "a loot table (.lootasset)",
+               "craft": "a recipes file (.recipeasset)", "lists": "a patch (.ltxp), or scene.set for a use scene's own keys"}
 
 
 def plain_name(name) -> bool:
@@ -326,7 +325,6 @@ class GamePlan:
         self.hud_parents_given = False
         self.hud_ops: list[tuple] = []
         self.sections: list[tuple] = []   # (make, name, parents, ops)
-        self.craft: list[tuple] = []      # (at, count, parts)
 
 
 def _changes(t, where):
@@ -476,22 +474,67 @@ def game_plan(t, module: str, file: str) -> GamePlan:
             if "base" in r and not make:
                 raise ValueError(f"[{name}] exists and keeps its parents: base belongs to a section a row makes")
             p.sections.append((make, name, _names(r.get("base"), f"the base of [{name}]"), _changes(r, f"[{name}]: ")))
-    for r in t.get("craft") or []:
-        if not isinstance(r, dict) or not isinstance(r.get("at"), str) or not plain_name(r["at"].lower()):
+    return p
+
+
+def _recipes(t) -> list[tuple]:
+    """`PlanTable` of a recipes file: `(at, makes, count, parts)`, or what the game refuses the file for."""
+    rows = t.get("recipes")
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise ValueError("recipes is a list of { makes, count, at, parts }")
+    out = []
+    for r in rows:
+        if not isinstance(r, dict) or not isinstance(r.get("makes"), str) or not plain_name(r["makes"].lower()):
+            raise ValueError("a recipe names what it makes: makes")
+        if not isinstance(r.get("at"), str) or not plain_name(r["at"].lower()):
             raise ValueError("a recipe names the tool or workbench it is made at: at")
         parts = _names(r.get("parts"), "parts")
         if not 1 <= len(parts) <= 4:
             raise ValueError("a recipe takes one to four parts")
         count = int(float(r["count"].text)) if isinstance(r.get("count"), luadata.Raw) else 1
-        p.craft.append((r["at"].lower(), count, parts))
-    return p
+        if not 1 <= count <= 1000:
+            raise ValueError("a recipe's count is a whole number from 1 to 1000")
+        out.append((r["at"].lower(), r["makes"].lower(), count, parts))
+    return out
+
+
+def check_recipes(t, path) -> list[str]:
+    """What the game refuses a recipes file for (the whole file), and the contract's keys."""
+    if not isinstance(t, dict):
+        return [f"{path}: a recipes file returns one table"]
+    bad = [f"{path}: '{k}' is no key of a recipes file" for k in t if k not in ("recipe", "recipes", "editor")]
+    for r in t.get("recipes") or []:
+        if isinstance(r, dict):
+            bad += [f"{path}: '{k}' is no key of a recipe" for k in r if k not in ("makes", "count", "at", "parts")]
+    try:
+        _recipes(t)
+    except ValueError as e:
+        bad.append(f"{path}: {e}")
+    return bad
+
+
+def apply_recipes(t, comp):
+    """`BuildTables` for a recipes file: its rows into `[xms_craft]`, numbered on from what the section holds."""
+    try:
+        rows = _recipes(t)
+    except ValueError:
+        return
+    sect = comp.c.sections.get("xms_craft")
+    nums = [int(k) for k in (sect.own if sect else {}) if k.isdigit()]
+    n = max(nums) + 1 if nums else 1
+    for at, makes, count, parts in rows:
+        comp.set("xms_craft", "%06d" % n, ", ".join([at, makes, str(count)] + parts))
+        n += 1
 
 
 def check_table(t, path) -> list[str]:
     """What the game refuses (the whole item), and the contract's top-level keys."""
     bad = []
     if isinstance(t, dict):
-        bad += [f"{path}: unknown key {k}" for k in t if k not in ALLOWED_TOP]
+        bad += [f"{path}: '{k}' is not an item's to say: it is {FOREIGN_TOP[k]}" for k in t if k in FOREIGN_TOP]
+        bad += [f"{path}: unknown key {k}" for k in t if k not in ALLOWED_TOP and k not in FOREIGN_TOP]
         if not (isinstance(t.get("item"), luadata.Raw) and t["item"].text == "1"):
             bad.append(f"{path}: item = 1 missing")
     try:
@@ -562,13 +605,6 @@ def _apply(comp, p: GamePlan):
             _apply_to(comp, norm(comp.c.resolve(p.section).get("hud")), [], p.hud_ops, p.file)
     for make, name, parents, ops in p.sections:
         _apply_to(comp, name, parents if make else [], ops, p.file)
-    if p.craft:
-        sect = comp.c.sections.get("xms_craft")
-        nums = [int(k) for k in (sect.own if sect else {}) if k.isdigit()]
-        n = max(nums) + 1 if nums else 1
-        for at, count, parts in p.craft:
-            comp.set("xms_craft", "%06d" % n, ", ".join([at, p.section, str(count)] + parts))
-            n += 1
 
 
 def apply_items(assets, comp, module):

@@ -370,6 +370,14 @@ A change of plan is a change of its document first.
   samples and geometry are baked, into containers the game reads for good. So a module built today keeps working
   on a later game, and a later game can read the same description better.
 - **The game knows modules and nothing else.** No code, script, config or document of the game names the editor: it is a program of its own, and a module may come from anywhere.
+- **One thing, one place - and the formats hold it** (`docs/ASSETS.md`, rule 9). A file says what ITS thing is
+  and nothing of another thing; a relation is written once, in the file of the side that owns it, and the other
+  side shows it as a fact with the file to open. So before a key or a surface is added the question is "whose
+  is it to say?", never "where is it convenient to type?": who sells an item is the trader's, who carries it
+  the loot table's, what makes it a recipe's - an item with `sold`, `loot`, `craft` or `lists` is refused by
+  the reader (`I432`), by the build, and never read by the game. No kind gets a key that writes a line of
+  "some other config": that is a patch (`.ltxp`), in the open. An author cannot get it wrong by accident,
+  because the wrong place does not exist.
 - A mod is a self-contained project in ITS OWN folder. Installed into the
   game it lives as a separate folder (mods/<name>); the game pulls its data
   from there itself. Nothing is copied or merged into `gamedata` or the game
@@ -1280,10 +1288,27 @@ A change of plan is a change of its document first.
   module's items resolve to.
 - **The module ships the `.itemasset` and the game makes the item** (`xms_items.cpp` in the game repo;
   MODDING.md, "A module's items"): the sections, the strings (`<section>_name`, `_short`, `_descr`), the HUD
-  section, the icon's keys, and the item's rows of the game's lists - craft recipes, death loot, traders'
-  stock, use scenes. The build makes one thing of an item: the pictures items name (`icon = "icons/ak.png"`)
-  packed into `gamedata\textures\ui\<module>_icons.dds`, with the shipped text rewritten to the game's own
-  form (`{ texture, x, y, w, h }`, cells of 50 px). The game's atlas is never touched.
+  section, the icon's keys and the use scene (`scene`: `like`, the named keys, `fit`, and `set` for the keys
+  of its own section a module's scripts read). The build makes one thing of an item: the pictures items name
+  (`icon = "icons/ak.png"`) packed into `gamedata\textures\ui\<module>_icons.dds`, with the shipped text
+  rewritten to the game's own form (`{ texture, x, y, w, h }`, cells of 50 px). The game's atlas is never
+  touched.
+- **An item says the item.** Who sells it, who carries it and what makes it are three kinds of their own
+  (`gz-items`' `tables.rs`; `docs/assets/TRADER.md`, `LOOT.md`, `RECIPES.md`, generated like the item's page;
+  the game's `xms_tables.cpp`, MODDING.md "A module's traders, loot and recipes"): a `.tradeasset` is what the
+  module puts on the shelf of ONE trader of the game (`trader`, `stock` rows: item, supplies, count, chance;
+  a count of 0 takes an item off it) - a character of the module keeps its shop in its `.npcasset` -, a
+  `.lootasset` what the dead carry (`drops`: item, count, chance, by community), a `.recipeasset` recipes
+  (`recipes`: makes, count, at, parts). The game reads them after the module's items, traders then loot
+  tables then recipes, each kind in path order; the roster composes them the same way, and their check is
+  `validate_table` (the codes are the items'). Mod > Economy (`economy`, `gz-ui-world`'s `economy.rs`: a page
+  per kind, the files left, the rows right, saved to the file as they are edited through
+  `Items::save_table`) edits them; `economy.view` drives the tab, `economy.list` answers every file; the
+  content browser's Add makes one (`file.create kind=trader | loot | recipes`). The item's card shows the rows
+  that name it as facts (Where It Is Found, `Roster::found`, `items.info`'s `found`) and opens that tab.
+- **A section has one file.** A row of an item's `sections` makes the item's own extra sections (sound mixins,
+  scope variants, upgrades) or changes one nobody else is about; a row about the section another item asset of
+  the module makes or changes is an error (`I433`): what changes an item is written in that item's file.
 - **A change says only what changes**: `set`, `unset`, `add` / `drop` for the members of a list, `hud` for the
   HUD section, `sections` for the sections the item brings or changes. That is what keeps two modules on one
   weapon working - neither carries the other's keys. A whole section copied from the game is what a classic
@@ -1324,7 +1349,8 @@ A change of plan is a change of its document first.
   picture at once and a motion row plays. The placement is the game's, ported: change both or neither. Models,
   motions and skinning are made on the pools; the comments say what the game does in words and name none of its
   functions (`check_words.py`).
-- QA: `tools/qa/test_items.py --project <project>` over MCP on a COPY; what the game makes of an item is the
+- QA: `tools/qa/test_items.py --project <project>` over MCP on a COPY (its phase E is the Economy tab and
+  the three table kinds); what the game makes of an item is the
   game's `tools/qa/items/Run-ItemsQa.ps1`, and a whole built module in a new game is its
   `tools/qa/module/Run-ModuleInGameQa.ps1 -Module <folder>`: one start, about two minutes - every first-person
   motion of the module's items played guarded, a few weapons held.

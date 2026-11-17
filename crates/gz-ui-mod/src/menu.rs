@@ -18,6 +18,7 @@ use crate::build::{build_running, build_target_text, can_build_into_game, job_st
 pub const MOD_SETTINGS: &str = "mod.settings";
 pub const CHARACTERS: &str = "mod.characters";
 pub const ITEMS: &str = "mod.items";
+pub const ECONOMY: &str = "mod.economy";
 pub const WORLD_RULES: &str = "mod.world_rules";
 pub const SCREENS: &str = "mod.screens";
 pub const PDA: &str = "mod.pda";
@@ -34,13 +35,14 @@ pub const CATALOG: &str = "mod.submit";
 
 /// Every row of the Mod menu: its action (or, for Bake Scene Layer, the submenu's name), its
 /// group (a separator stands between groups) and its order in the group.
-pub const MOD_MENU: [(&str, i32, i32); 14] = [
+pub const MOD_MENU: [(&str, i32, i32); 15] = [
     (MOD_SETTINGS, 0, 0),
     (CHARACTERS, 0, 1),
     (ITEMS, 0, 2),
-    (WORLD_RULES, 0, 3),
-    (SCREENS, 0, 4),
-    (PDA, 0, 5),
+    (ECONOMY, 0, 3),
+    (WORLD_RULES, 0, 4),
+    (SCREENS, 0, 5),
+    (PDA, 0, 6),
     (BUILD_INTO_GAME, 1, 0),
     (BUILD_TO_FOLDER, 1, 1),
     (EXPORT_FLAT, 1, 2),

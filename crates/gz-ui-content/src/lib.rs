@@ -109,6 +109,9 @@ pub fn payload_of(cat: &catalog::Catalog, path: &str, folder: bool) -> Asset {
                     K::CharacterTemplate => ("character_template", path.to_owned()),
                     K::Pda => ("pda", path.to_owned()),
                     K::Item => ("item", path.to_owned()),
+                    K::Trade => ("trader", path.to_owned()),
+                    K::Loot => ("loot", path.to_owned()),
+                    K::Recipes => ("recipes", path.to_owned()),
                     // a scene object names a model asset by its project path
                     K::Model => ("object", path.to_owned()),
                     K::Texture => ("texture", published()),

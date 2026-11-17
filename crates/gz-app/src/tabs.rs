@@ -48,6 +48,7 @@ pub fn is_tool(kind: &str) -> bool {
         kind,
         "characters"
             | "items"
+            | "economy"
             | "mod_settings"
             | "world_rules"
             | "screens"

@@ -17,6 +17,29 @@ pub const VERSION: u32 = 1;
 
 /// A value outside what its key takes.
 pub const BAD_VALUE: &str = "I427";
+/// A key that is another file's to say: a trader's stock, the death loot, a recipe, a line of
+/// any config.
+pub const FOREIGN: &str = "I432";
+
+/// The keys an item may not say, each with the file that owns what it meant.
+pub const FOREIGN_KEYS: [(&str, &str); 4] = [
+    (
+        "sold",
+        "who sells an item is the trader's to say: a trader file (.tradeasset) with a stock row of the item",
+    ),
+    (
+        "loot",
+        "who carries an item is the loot table's to say: a loot table (.lootasset) with a drop of the item",
+    ),
+    (
+        "craft",
+        "what makes an item is a recipe's to say: a recipes file (.recipeasset) with a recipe that makes the item",
+    ),
+    (
+        "lists",
+        "a line of another config is not an item's to say: a use scene's own keys are scene.set, anything else is a patch (.ltxp)",
+    ),
+];
 
 /// A problem of a file found while it is read, at the key it is about.
 #[derive(Clone, Debug, PartialEq)]
@@ -151,14 +174,6 @@ pub struct OwnedSection {
     pub changes: Changes,
 }
 
-/// A recipe that makes the item.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Craft {
-    pub at: String,
-    pub count: Option<u32>,
-    pub parts: Vec<String>,
-}
-
 /// How many the dead carry.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Count {
@@ -166,63 +181,19 @@ pub enum Count {
     Range(f64, f64),
 }
 
-/// Death loot.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Loot {
-    pub count: Option<Count>,
-    pub chance: Option<f64>,
-    pub by: Vec<(String, f64)>,
-}
-
-/// A row of a trader's stock.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Sold {
-    pub by: String,
-    pub supplies: Vec<String>,
-    pub count: Option<f64>,
-    pub chance: Option<f64>,
-}
-
-impl Sold {
-    /// The trader's config under `configs`: `misc\trade\<by>.ltx`, or the path a `by` ending in
-    /// `.ltx` is; `None` when it names no config under `configs`.
-    #[must_use]
-    pub fn file(&self) -> Option<String> {
-        let name = self.by.to_ascii_lowercase();
-        let path =
-            if name.len() > 4 && name.ends_with(".ltx") { name } else { format!("misc\\trade\\{name}.ltx") };
-        gz_ltx::patch::config_path(&path).filter(|p| !p.is_empty() && !p.contains(':') && plain_value(p))
-    }
-
-    /// The supplies sections, lower case; `supplies_1` when the row names none.
-    #[must_use]
-    pub fn sections(&self) -> Vec<String> {
-        if self.supplies.is_empty() {
-            vec!["supplies_1".to_owned()]
-        } else {
-            self.supplies.iter().map(|s| s.to_ascii_lowercase()).collect()
-        }
-    }
-}
-
 /// The use scene.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Scene {
     /// The scene of that item.
     Like(String),
-    /// The keys of `animations_settings.ltx`, over `like` when given, and its own HUD section.
-    Table { like: Option<String>, keys: Vec<(String, SetValue)>, hud: Option<Hud> },
-}
-
-/// A row of `lists`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ListRow {
-    pub file: Option<String>,
-    pub section: Option<String>,
-    pub key: Option<String>,
-    pub value: Option<SetValue>,
-    pub add: Option<String>,
-    pub drop: Option<String>,
+    /// The keys of `animations_settings.ltx` under the names an author writes (`keys`) and as the
+    /// scene's section holds them (`set`), over `like` when given, and its own HUD section.
+    Table {
+        like: Option<String>,
+        keys: Vec<(String, SetValue)>,
+        hud: Option<Hud>,
+        set: Vec<(String, SetValue)>,
+    },
 }
 
 /// What a file is.
@@ -256,11 +227,7 @@ pub struct Item {
     pub changes: Changes,
     pub hud: Option<Hud>,
     pub sections: Vec<OwnedSection>,
-    pub craft: Vec<Craft>,
-    pub loot: Option<Loot>,
-    pub sold: Vec<Sold>,
     pub scene: Option<Scene>,
-    pub lists: Vec<ListRow>,
     /// Kept as it is: the editor's notes.
     pub editor: Value,
 }
@@ -368,28 +335,28 @@ pub fn plain_value(value: &str) -> bool {
 
 /// What a read gathers: where it is in the file and the issues so far.
 #[derive(Default)]
-struct Cx {
-    path: Vec<Seg>,
-    issues: Vec<Issue>,
+pub(crate) struct Cx {
+    pub(crate) path: Vec<Seg>,
+    pub(crate) issues: Vec<Issue>,
 }
 
 impl Cx {
-    fn at(&self, key: &str) -> Vec<Seg> {
+    pub(crate) fn at(&self, key: &str) -> Vec<Seg> {
         let mut p = self.path.clone();
         p.push(Seg::key(key));
         p
     }
 
-    fn bad(&mut self, key: &str, message: impl Into<String>) {
+    pub(crate) fn bad(&mut self, key: &str, message: impl Into<String>) {
         let path = self.at(key);
         self.issues.push(Issue::error(BAD_VALUE, path, message));
     }
 
-    fn bad_at(&mut self, path: Vec<Seg>, message: impl Into<String>) {
+    pub(crate) fn bad_at(&mut self, path: Vec<Seg>, message: impl Into<String>) {
         self.issues.push(Issue::error(BAD_VALUE, path, message));
     }
 
-    fn within<R>(&mut self, segs: &[Seg], f: impl FnOnce(&mut Self) -> R) -> R {
+    pub(crate) fn within<R>(&mut self, segs: &[Seg], f: impl FnOnce(&mut Self) -> R) -> R {
         let depth = self.path.len();
         self.path.extend_from_slice(segs);
         let r = f(self);
@@ -397,7 +364,7 @@ impl Cx {
         r
     }
 
-    fn text(&mut self, v: &Value, key: &str) -> Option<String> {
+    pub(crate) fn text(&mut self, v: &Value, key: &str) -> Option<String> {
         let raw = v.get(key)?;
         match raw.as_str() {
             Some(s) => Some(s.to_owned()),
@@ -409,7 +376,7 @@ impl Cx {
     }
 
     /// A section a key names: a string a config can hold as a name.
-    fn name(&mut self, v: &Value, key: &str, what: &str) -> Option<String> {
+    pub(crate) fn name(&mut self, v: &Value, key: &str, what: &str) -> Option<String> {
         let s = self.text(v, key)?;
         if !plain_name(&s.to_ascii_lowercase()) {
             self.bad(key, format!("{what} names a section no config can hold"));
@@ -418,7 +385,7 @@ impl Cx {
         Some(s)
     }
 
-    fn boolean(&mut self, v: &Value, key: &str) -> Option<bool> {
+    pub(crate) fn boolean(&mut self, v: &Value, key: &str) -> Option<bool> {
         let raw = v.get(key)?;
         let b = raw.as_bool();
         if b.is_none() {
@@ -428,7 +395,7 @@ impl Cx {
     }
 
     /// Any number: what the game takes.
-    fn any_number(&mut self, v: &Value, key: &str) -> Option<f64> {
+    pub(crate) fn any_number(&mut self, v: &Value, key: &str) -> Option<f64> {
         let raw = v.get(key)?;
         match raw.as_number().filter(|n| n.is_finite()) {
             Some(n) => Some(n),
@@ -439,7 +406,7 @@ impl Cx {
         }
     }
 
-    fn integer(&mut self, v: &Value, fields: &[fields::Field], key: &str) -> Option<u32> {
+    pub(crate) fn integer(&mut self, v: &Value, fields: &[fields::Field], key: &str) -> Option<u32> {
         let n = self.any_number(v, key)?;
         let (min, max) = match fields::field(fields, key).map(|f| f.ty) {
             Some(fields::Ty::Integer { min, max }) => (min as f64, max as f64),
@@ -453,7 +420,7 @@ impl Cx {
     }
 
     /// A string or a list of strings.
-    fn names(&mut self, v: &Value, key: &str, what: &str) -> Vec<String> {
+    pub(crate) fn names(&mut self, v: &Value, key: &str, what: &str) -> Vec<String> {
         match v.get(key) {
             None => Vec::new(),
             Some(Value::String(s)) => vec![s.to_string()],
@@ -470,7 +437,7 @@ impl Cx {
     }
 
     /// Sections a key names: one or a list, each one a config can hold.
-    fn sections(&mut self, v: &Value, key: &str, what: &str) -> Vec<String> {
+    pub(crate) fn sections(&mut self, v: &Value, key: &str, what: &str) -> Vec<String> {
         let list = self.names(v, key, what);
         if list.iter().any(|s| !plain_name(&s.to_ascii_lowercase())) {
             self.bad(key, format!("{what} names a section no config can hold"));
@@ -480,7 +447,7 @@ impl Cx {
     }
 
     /// The rows of a list key; a key that is no list is an issue and reads as empty.
-    fn rows<'v>(&mut self, v: &'v Value, key: &str, what: &str) -> &'v [Value] {
+    pub(crate) fn rows<'v>(&mut self, v: &'v Value, key: &str, what: &str) -> &'v [Value] {
         match v.get(key) {
             None => &[],
             Some(raw) if raw.is_table() && raw.fields().is_empty() => raw.arr(),
@@ -491,7 +458,7 @@ impl Cx {
         }
     }
 
-    fn text_value(&mut self, v: &Value, key: &str) -> Value {
+    pub(crate) fn text_value(&mut self, v: &Value, key: &str) -> Value {
         match v.get(key) {
             None => Value::Nil,
             Some(s @ Value::String(_)) => s.clone(),
@@ -503,7 +470,7 @@ impl Cx {
         }
     }
 
-    fn keys(&mut self, v: &Value, key: &str) -> Vec<(String, SetValue)> {
+    pub(crate) fn keys(&mut self, v: &Value, key: &str) -> Vec<(String, SetValue)> {
         let Some(raw) = v.get(key) else { return Vec::new() };
         let Some(t) = raw.as_table().filter(|t| t.arr.is_empty()) else {
             self.bad(key, format!("{key} takes key = value"));
@@ -528,7 +495,7 @@ impl Cx {
         out
     }
 
-    fn key_names(&mut self, v: &Value, key: &str) -> Vec<String> {
+    pub(crate) fn key_names(&mut self, v: &Value, key: &str) -> Vec<String> {
         let list = self.names(v, key, &format!("{key}, a list of keys,"));
         for k in &list {
             if !plain_name(k) {
@@ -540,7 +507,7 @@ impl Cx {
     }
 
     /// `{ key = member or list }`: a member is a string, a number or a boolean.
-    fn members(&mut self, v: &Value, key: &str) -> Vec<(String, Vec<String>)> {
+    pub(crate) fn members(&mut self, v: &Value, key: &str) -> Vec<(String, Vec<String>)> {
         let Some(raw) = v.get(key) else { return Vec::new() };
         let Some(t) = raw.as_table().filter(|t| t.arr.is_empty()) else {
             self.bad(key, format!("{key} takes key = member or {{ members }}"));
@@ -574,7 +541,7 @@ impl Cx {
         out
     }
 
-    fn changes(&mut self, v: &Value) -> Changes {
+    pub(crate) fn changes(&mut self, v: &Value) -> Changes {
         Changes {
             set: self.keys(v, "set"),
             unset: self.key_names(v, "unset"),
@@ -583,11 +550,11 @@ impl Cx {
         }
     }
 
-    fn hud(&mut self, v: &Value) -> Hud {
+    pub(crate) fn hud(&mut self, v: &Value) -> Hud {
         Hud { base: self.sections(v, "base", "hud.base"), changes: self.changes(v) }
     }
 
-    fn icon(&mut self, v: &Value) -> Option<Icon> {
+    pub(crate) fn icon(&mut self, v: &Value) -> Option<Icon> {
         let raw = v.get("icon")?;
         if let Some(s) = raw.as_str() {
             return Some(Icon::Picture { file: s.to_owned(), w: None, h: None, plain: true });
@@ -619,75 +586,7 @@ impl Cx {
         })
     }
 
-    fn loot(&mut self, v: &Value) -> Option<Loot> {
-        let raw = v.get("loot")?;
-        if !raw.as_table().is_some_and(|t| t.arr.is_empty()) {
-            self.bad("loot", "loot is { count, chance, by }");
-            return None;
-        }
-        Some(self.within(&[Seg::key("loot")], |cx| {
-            let count = match raw.get("count") {
-                None => None,
-                Some(Value::Number(n)) => Some(Count::One(*n)),
-                Some(Value::Table(t))
-                    if t.fields.is_empty()
-                        && t.arr.len() == 2
-                        && t.arr.iter().all(|x| x.as_number().is_some()) =>
-                {
-                    let n = |i: usize| t.arr.get(i).and_then(Value::as_number).unwrap_or(0.0);
-                    Some(Count::Range(n(0), n(1)))
-                }
-                Some(_) => {
-                    cx.bad("count", "loot.count is a number or { min, max }");
-                    None
-                }
-            };
-            let chance = cx.any_number(raw, "chance");
-            let mut by = Vec::new();
-            match raw.get("by") {
-                None => {}
-                Some(Value::Table(t)) if t.arr.is_empty() => {
-                    for (k, x) in &t.fields {
-                        match x.as_number().filter(|_| plain_name(&k.to_ascii_lowercase())) {
-                            Some(n) => by.push((k.to_string(), n)),
-                            None => cx.bad_at(
-                                vec![Seg::key("loot"), Seg::key("by"), Seg::Key(k.clone())],
-                                "loot.by is { <community or community_rank> = chance }",
-                            ),
-                        }
-                    }
-                }
-                Some(_) => cx.bad("by", "loot.by is { <community or community_rank> = chance }"),
-            }
-            Loot { count, chance, by }
-        }))
-    }
-
-    fn sold_row(&mut self, row: &Value) -> Option<Sold> {
-        let by = match row.get("by").and_then(Value::as_str).filter(|s| !s.is_empty()) {
-            Some(s) => s.to_owned(),
-            None => {
-                self.issues.push(Issue::error(
-                    BAD_VALUE,
-                    self.at("by"),
-                    "a row of sold names the trader's config: by",
-                ));
-                return None;
-            }
-        };
-        let s = Sold {
-            supplies: self.sections(row, "supplies", "sold.supplies"),
-            count: self.any_number(row, "count"),
-            chance: self.any_number(row, "chance"),
-            by,
-        };
-        if s.file().is_none() {
-            self.bad("by", "sold.by is a trader's config, or a config's path under configs");
-        }
-        Some(s)
-    }
-
-    fn scene(&mut self, v: &Value) -> Option<Scene> {
+    pub(crate) fn scene(&mut self, v: &Value) -> Option<Scene> {
         let raw = v.get("scene")?;
         if let Some(s) = raw.as_str() {
             if !plain_name(&s.to_ascii_lowercase()) {
@@ -696,13 +595,16 @@ impl Cx {
             return Some(Scene::Like(s.to_owned()));
         }
         if !raw.is_table() {
-            self.bad("scene", "scene is the item whose scene it takes, or { like, sound, camera, time, helmet, anm, hud_anm, hud }");
+            self.bad(
+                "scene",
+                "scene is the item whose scene it takes, or { like, sound, camera, time, helmet, fit, anm, hud_anm, hud, set }",
+            );
             return None;
         }
         Some(self.within(&[Seg::key("scene")], |cx| {
             let like = cx.name(raw, "like", "scene.like");
             let mut keys = Vec::new();
-            for f in fields::SCENE.iter().filter(|f| !matches!(f.key, "like" | "hud")) {
+            for f in fields::SCENE.iter().filter(|f| !matches!(f.key, "like" | "hud" | "set")) {
                 if let Some(x) = raw.get(f.key) {
                     match SetValue::from_value(x).filter(|s| plain_value(&s.ltx())) {
                         Some(sv) => keys.push((f.key.to_owned(), sv)),
@@ -718,7 +620,8 @@ impl Cx {
                     None
                 }
             };
-            Scene::Table { like, keys, hud }
+            let set = cx.keys(raw, "set");
+            Scene::Table { like, keys, hud, set }
         }))
     }
 }
@@ -795,119 +698,16 @@ pub fn from_value(v: &Value) -> Result<(Item, Vec<Issue>), String> {
         });
         item.sections.extend(r);
     }
-    let rows = cx.rows(v, "craft", "craft is a list of { at, count, parts }").to_vec();
-    for (i, row) in rows.iter().enumerate() {
-        let r = cx.within(&[Seg::key("craft"), Seg::Index(i)], |cx| {
-            if !row.is_table() {
-                cx.issues.push(Issue::error(BAD_VALUE, cx.path.clone(), "a recipe is { at, count, parts }"));
-                return None;
-            }
-            let at = cx.name(row, "at", "a recipe's at");
-            if at.is_none() && row.get("at").is_none() {
-                cx.bad("at", "a recipe names the tool or workbench it is made at: at");
-            }
-            let parts = cx.sections(row, "parts", "a part of a recipe");
-            if parts.is_empty() || parts.len() > 4 {
-                cx.bad("parts", "a recipe takes one to four parts");
-            }
-            Some(Craft { at: at.unwrap_or_default(), count: cx.integer(row, fields::CRAFT, "count"), parts })
-        });
-        item.craft.extend(r);
-    }
-    item.loot = cx.loot(v);
-    match v.get("sold") {
-        None => {}
-        // one row may stand alone
-        Some(row @ Value::Table(t)) if !t.fields.is_empty() => {
-            let r = cx.within(&[Seg::key("sold")], |cx| cx.sold_row(row));
-            item.sold.extend(r);
-        }
-        Some(Value::Table(t)) => {
-            for (i, row) in t.arr.iter().enumerate() {
-                let r = cx.within(&[Seg::key("sold"), Seg::Index(i)], |cx| {
-                    if !row.is_table() {
-                        cx.issues.push(Issue::error(
-                            BAD_VALUE,
-                            cx.path.clone(),
-                            "a row of sold is { by, supplies, count, chance }",
-                        ));
-                        return None;
-                    }
-                    cx.sold_row(row)
-                });
-                item.sold.extend(r);
-            }
-        }
-        Some(_) => cx.bad("sold", "sold is a list of { by, supplies, count, chance }"),
-    }
     item.scene = cx.scene(v);
-    let rows = cx
-        .rows(
-            v,
-            "lists",
-            "lists is a list of { file, section, key, value } and { file, section, key, add | drop }",
-        )
-        .to_vec();
-    for (i, row) in rows.iter().enumerate() {
-        let r = cx.within(&[Seg::key("lists"), Seg::Index(i)], |cx| {
-            if !row.is_table() {
-                cx.issues.push(Issue::error(
-                    BAD_VALUE,
-                    cx.path.clone(),
-                    "a row of lists is { file, section, key, value }",
-                ));
-                return None;
-            }
-            let value = match row.get("value") {
-                None => None,
-                Some(x) => match SetValue::from_value(x).filter(|s| plain_value(&s.ltx())) {
-                    Some(sv) => Some(sv),
-                    None => {
-                        cx.bad("value", "a row of lists holds a value no config can carry");
-                        None
-                    }
-                },
-            };
-            let l = ListRow {
-                file: cx.text(row, "file"),
-                section: cx.name(row, "section", "a row of lists"),
-                key: cx.text(row, "key"),
-                value,
-                add: cx.text(row, "add"),
-                drop: cx.text(row, "drop"),
-            };
-            if l.file.as_deref().is_some_and(|f| {
-                gz_ltx::patch::config_path(f).is_none_or(|p| p.is_empty() || p.contains(':'))
-            }) {
-                cx.bad("file", "a row of lists names a config by its path under configs");
-            }
-            if l.section.is_none() && row.get("section").is_none() {
-                cx.bad("section", "a row of lists names its section");
-            }
-            if l.key.as_deref().is_some_and(|k| !plain_name(k)) {
-                cx.bad("key", "a row of lists names a key a config can hold");
-            }
-            let ways =
-                [row.get("value"), row.get("add"), row.get("drop")].iter().filter(|x| x.is_some()).count();
-            if ways > 1 {
-                cx.issues.push(Issue::error(
-                    BAD_VALUE,
-                    cx.path.clone(),
-                    "a row of lists sets a value, adds to a list or drops from one: one of them",
-                ));
-            }
-            for m in [&l.add, &l.drop].into_iter().flatten() {
-                if !plain_value(m) || m.contains(',') {
-                    cx.issues.push(Issue::error(
-                        BAD_VALUE,
-                        cx.path.clone(),
-                        "a row of lists holds a member no list can carry",
-                    ));
-                }
-            }
-            Some(l)
-        });
-        item.lists.extend(r);
+    // what another file owns is not an item's to say: refused by name, with where it belongs
+    for (key, owner) in FOREIGN_KEYS {
+        if v.get(key).is_some() {
+            cx.issues.push(Issue::error(
+                FOREIGN,
+                vec![Seg::key(key)],
+                format!("'{key}' is no key of an item, and the game does not read it: {owner}"),
+            ));
+        }
     }
     Ok((item, cx.issues))
 }
@@ -1056,69 +856,10 @@ pub fn to_value(item: &Item) -> Value {
             .collect();
         t.put("sections", Value::from(rows));
     }
-    if !item.craft.is_empty() {
-        let rows: Vec<Value> = item
-            .craft
-            .iter()
-            .map(|c| {
-                let mut r = Table::new();
-                r.put("at", c.at.as_str());
-                if let Some(n) = c.count {
-                    r.put("count", n);
-                }
-                r.put(
-                    "parts",
-                    Value::from(c.parts.iter().map(|p| Value::from(p.as_str())).collect::<Vec<_>>()),
-                );
-                Value::Table(r)
-            })
-            .collect();
-        t.put("craft", Value::from(rows));
-    }
-    if let Some(l) = &item.loot {
-        let mut r = Table::new();
-        match l.count {
-            None => {}
-            Some(Count::One(n)) => r.put("count", n),
-            Some(Count::Range(a, b)) => r.put("count", Value::from(vec![Value::from(a), Value::from(b)])),
-        }
-        if let Some(c) = l.chance {
-            r.put("chance", c);
-        }
-        if !l.by.is_empty() {
-            let mut by = Table::new();
-            for (k, c) in &l.by {
-                by.put(k, *c);
-            }
-            r.put("by", by);
-        }
-        t.put("loot", r);
-    }
-    if !item.sold.is_empty() {
-        let rows: Vec<Value> = item
-            .sold
-            .iter()
-            .map(|s| {
-                let mut r = Table::new();
-                r.put("by", s.by.as_str());
-                if !s.supplies.is_empty() {
-                    r.put("supplies", names_value(&s.supplies));
-                }
-                if let Some(n) = s.count {
-                    r.put("count", n);
-                }
-                if let Some(c) = s.chance {
-                    r.put("chance", c);
-                }
-                Value::Table(r)
-            })
-            .collect();
-        t.put("sold", Value::from(rows));
-    }
     match &item.scene {
         None => {}
         Some(Scene::Like(s)) => t.put("scene", s.as_str()),
-        Some(Scene::Table { like, keys, hud }) => {
+        Some(Scene::Table { like, keys, hud, set }) => {
             let mut r = Table::new();
             if let Some(l) = like {
                 r.put("like", l.as_str());
@@ -1129,32 +870,15 @@ pub fn to_value(item: &Item) -> Value {
             if let Some(h) = hud {
                 r.put("hud", hud_value(h));
             }
+            if !set.is_empty() {
+                let mut s = Table::new();
+                for (k, v) in set {
+                    s.put(k, v.to_value());
+                }
+                r.put("set", s);
+            }
             t.put("scene", r);
         }
-    }
-    if !item.lists.is_empty() {
-        let rows: Vec<Value> = item
-            .lists
-            .iter()
-            .map(|l| {
-                let mut r = Table::new();
-                for (k, v) in [("file", &l.file), ("section", &l.section), ("key", &l.key)] {
-                    if let Some(v) = v {
-                        r.put(k, v.as_str());
-                    }
-                }
-                if let Some(v) = &l.value {
-                    r.put("value", v.to_value());
-                }
-                for (k, v) in [("add", &l.add), ("drop", &l.drop)] {
-                    if let Some(v) = v {
-                        r.put(k, v.as_str());
-                    }
-                }
-                Value::Table(r)
-            })
-            .collect();
-        t.put("lists", Value::from(rows));
     }
     if !item.editor.is_nil() {
         t.put("editor", item.editor.clone());
@@ -1226,23 +950,15 @@ pub const KNOWN: &[(&str, &[&str])] = &[
             "drop",
             "hud",
             "sections",
-            "craft",
-            "loot",
-            "sold",
             "scene",
-            "lists",
             "editor",
         ],
     ),
     ("icon", &["texture", "x", "y", "w", "h", "file"]),
     ("hud", &["base", "set", "unset", "add", "drop"]),
     ("sections.*", &["name", "base", "set", "edit", "unset", "add", "drop"]),
-    ("craft.*", &["at", "count", "parts"]),
-    ("loot", &["count", "chance", "by"]),
-    ("sold.*", &["by", "supplies", "count", "chance"]),
-    ("scene", &["like", "sound", "camera", "time", "helmet", "anm", "hud_anm", "hud"]),
+    ("scene", &["like", "sound", "camera", "time", "helmet", "fit", "anm", "hud_anm", "hud", "set"]),
     ("scene.hud", &["base", "set", "unset", "add", "drop"]),
-    ("lists.*", &["file", "section", "key", "value", "add", "drop"]),
 ];
 
 /// How an item's values map onto its file: new keys in the reference's order.

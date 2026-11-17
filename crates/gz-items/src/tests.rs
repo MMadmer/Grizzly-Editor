@@ -11,11 +11,12 @@ use rustc_hash::FxHashMap;
 use crate::catalog::Catalog;
 use crate::compose::{ConfigFile, ModuleConfigs};
 use crate::model::{
-    Count, Icon, Kind, SetValue, diff_rules, from_value, load_text, template, to_value, write,
+    Icon, Kind, Scene, SetValue, diff_rules, from_value, load_text, template, to_value, write,
 };
 use crate::resolve::From;
 use crate::roster::Roster;
-use crate::service::issues_of;
+use crate::service::{issues_of, table_issues_of};
+use crate::tables::TableKind;
 use crate::validate::{Lookups, NoGame};
 
 // ---- fixtures ----------------------------------------------------------------------------------
@@ -58,9 +59,12 @@ fn game() -> Arc<Ltx> {
 }
 
 fn roster_in(root: &Path, files: &[(&str, &str)], cfg: &ModuleConfigs) -> Roster {
-    let files: Vec<(String, Result<String, String>)> =
-        files.iter().map(|(f, t)| ((*f).to_owned(), Ok((*t).to_owned()))).collect();
-    Roster::build(Rev(1), "we", files, game(), cfg, root, &crate::atlas::picture_size)
+    // the items and the table files, told by their extensions as the service tells them
+    let (tables, items): (Vec<_>, Vec<_>) = files
+        .iter()
+        .map(|(f, t)| ((*f).to_owned(), Ok::<String, String>((*t).to_owned())))
+        .partition(|(f, _)| TableKind::of_file(f).is_some());
+    Roster::build(Rev(1), "we", items, tables, game(), cfg, root, &crate::atlas::picture_size)
 }
 
 /// A picture of one colour, written where the test wants it.
@@ -166,12 +170,37 @@ const NEW: &str = r#"return {
   set = { cost = 1200, inv_weight = 0.4, fire_modes = { "single" } },
   hud = { base = "wpn_ak74_hud", set = { hands_position = { 0.02, -0.01, 0.1 } } },
   sections = { { name = "wpn_sil_diy_sounds", base = "wpn_base", set = { snd_shoot = "x" } } },
-  craft = { { at = "itm_repairkit", parts = { "bread", "nameless" } } },
-  loot = { count = { 0, 1 }, chance = 0.01, by = { bandit = 0.03 } },
-  sold = { { by = "trade_military", count = 2, chance = 0.5 } },
-  lists = { { file = [[plugins\itms.ltx]], section = "list", key = "items", add = "wpn_sil_diy" } },
 }
 "#;
+
+/// Who sells the new item, who carries it and what makes it: each in the file of its owner.
+const TRADER: &str = r#"return {
+  trade = 1,
+  trader = "trade_military",
+  stock = { { item = "wpn_sil_diy", count = 2, chance = 0.5 }, { item = "bread", count = 0 } },
+}
+"#;
+const LOOT: &str = r#"return {
+  loot = 1,
+  drops = { { item = "wpn_sil_diy", count = { 0, 1 }, chance = 0.01, by = { bandit = 0.03 } } },
+}
+"#;
+const RECIPES: &str = r#"return {
+  recipe = 1,
+  recipes = {
+    { makes = "wpn_sil_diy", at = "itm_repairkit", parts = { "bread", "nameless" } },
+    { makes = "wpn_sil_diy", at = "ITM_repairkit", count = 2, parts = { "bread" } },
+  },
+}
+"#;
+
+fn table_codes(roster: &Roster, file: &str, lookups: &dyn Lookups) -> Vec<(&'static str, String)> {
+    let i = roster.table_index(file).unwrap();
+    table_issues_of(roster, i, lookups)
+        .into_iter()
+        .map(|x| (x.code, gz_luadata::path::show(&x.path)))
+        .collect()
+}
 
 const CHANGE: &str = r#"return {
   item = 1,
@@ -206,13 +235,25 @@ fn a_new_item_reads_every_key_and_keeps_unset_unset() {
     assert_eq!(item.changes.get("cost"), Some(&SetValue::Number(1200.0)));
     assert_eq!(item.changes.get("fire_modes").map(SetValue::ltx).as_deref(), Some("single"));
     assert_eq!(item.hud.as_ref().unwrap().changes.get("hands_position").unwrap().ltx(), "0.02, -0.01, 0.1");
-    assert_eq!(item.craft[0].parts, ["bread", "nameless"]);
-    assert_eq!(item.loot.as_ref().unwrap().count, Some(Count::Range(0.0, 1.0)));
-    assert_eq!(item.sold[0].file().as_deref(), Some("misc\\trade\\trade_military.ltx"));
-    assert_eq!(item.sold[0].sections(), ["supplies_1"]);
     // unset stays unset
     assert!(item.is_abstract.is_none() && item.short_name.is_nil() && item.scene.is_none());
-    assert_eq!(item.sold[0].count, Some(2.0));
+    // a scene's keys: the ones an author names, and its section's own
+    let (drink, issues) = load_text(
+        "return { item = 1, base = \"bread\", scene = { like = \"vodka\", time = 5000, fit = \"cut\", set = { my_flag = true } } }",
+        "items/drink.itemasset",
+    )
+    .unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
+    let Some(Scene::Table { like, keys, set, hud }) = &drink.scene else { panic!("a scene") };
+    assert_eq!(like.as_deref(), Some("vodka"));
+    assert_eq!(
+        keys.iter().map(|(k, v)| (k.as_str(), v.ltx())).collect::<Vec<_>>(),
+        [("time", "5000".to_owned()), ("fit", "cut".to_owned())]
+    );
+    assert_eq!(set.as_slice(), [("my_flag".to_owned(), SetValue::Bool(true))]);
+    assert!(hud.is_none());
+    let (back, _) = load_text(&write(&drink), "items/drink.itemasset").unwrap();
+    assert_eq!(back, drink);
 
     let (change, _) = load_text(CHANGE, "items/ak.itemasset").unwrap();
     assert_eq!(change.kind(), Kind::Change);
@@ -246,14 +287,14 @@ fn the_icon_has_three_forms() {
 #[test]
 fn a_value_outside_what_its_key_takes_is_at_its_key() {
     let (_, issues) = load_text(
-        "return { item = 1, base = \"bread\", set = { a = { x = 1 } }, craft = { { at = \"x\", parts = { \"a\", \"b\", \"c\", \"d\", \"e\" } } }, icon = { x = \"left\" }, loot = { chance = 2 } }",
+        "return { item = 1, base = \"bread\", set = { a = { x = 1 } }, icon = { x = \"left\" }, scene = { time = { a = 1 } } }",
         "a.itemasset",
     )
     .unwrap();
     let at: Vec<String> = issues.iter().map(|i| gz_luadata::path::show(&i.path)).collect();
     assert!(issues.iter().all(|i| i.code == "I427"), "{issues:?}");
-    // a chance of 2 is the game's to take; a cell without its place is not
-    assert_eq!(at, ["set.a", "icon.x", "icon", "craft[0].parts"]);
+    // a cell without its place is no icon
+    assert_eq!(at, ["set.a", "icon.x", "icon", "scene.time"]);
     assert!(load_text("return { item = 2 }", "a.itemasset").unwrap_err().contains("newer Grizzly Editor"));
     assert!(load_text("return 5", "a.itemasset").is_err());
 }
@@ -317,14 +358,8 @@ fn a_new_item_and_a_change_resolve_in_the_games_order() {
     assert_eq!(hud.name, "wpn_sil_diy_hud");
     assert_eq!(row(hud, "item_visual").from, From::Base);
     assert_eq!(sil.sections[0].name, "wpn_sil_diy_sounds");
-    let files: Vec<&str> = sil.file_patches.iter().map(|p| p.file.as_str()).collect();
-    assert!(files.contains(&"misc\\death_generic.ltx") && files.contains(&"misc\\trade\\trade_military.ltx"));
-    assert!(
-        sil.file_patches
-            .iter()
-            .any(|p| p.section == "supplies_1" && p.key == "wpn_sil_diy" && p.value == "2, 0.5")
-    );
-    assert!(sil.file_patches.iter().any(|p| p.file == "plugins\\itms.ltx" && p.op == "add"));
+    // an item says nothing of another config: who sells it and who carries it are not its lines
+    assert!(sil.file_patches.is_empty(), "{:?}", sil.file_patches);
 
     let ak = r.resolution(r.find("items/ak.itemasset").unwrap(), Some(&catalog)).unwrap();
     assert_eq!(ak.kind, "change");
@@ -570,9 +605,22 @@ fn texts_icons_and_where_it_is_found() {
             "items/r.itemasset",
             "return { item = 1, section = \"r\", base = \"bread\", icon = { texture = [[ui\\ui_icon_equipment]], x = 40, y = 20, w = 2, h = 2 } }",
         ),
+        ("items/w.itemasset", "return { item = 1, section = \"w\", base = \"bread\" }"),
         (
-            "items/w.itemasset",
-            "return { item = 1, section = \"w\", base = \"bread\", craft = { { at = \"no_kit\", parts = { \"bread\", \"no_part\" } } }, sold = { { by = \"trade_nobody\" }, { by = \"trade_military\", supplies = \"supplies_9\" } }, loot = { by = { bandit = 0.1, stalker_veteran = 0.1, monolith = 0.1 } }, lists = { { file = \"no\\\\file.ltx\", section = \"x\" } } }",
+            "t/w.recipeasset",
+            "return { recipe = 1, recipes = { { makes = \"w\", at = \"no_kit\", parts = { \"bread\", \"no_part\" } }, { makes = \"no_item\", at = \"itm_repairkit\", parts = \"bread\" } } }",
+        ),
+        (
+            "t/nobody.tradeasset",
+            "return { trade = 1, trader = \"trade_nobody\", stock = { { item = \"w\" } } }",
+        ),
+        (
+            "t/military.tradeasset",
+            "return { trade = 1, trader = \"trade_military\", stock = { { item = \"w\", supplies = \"supplies_9\", chance = 2 }, { item = \"no_item\" } } }",
+        ),
+        (
+            "t/w.lootasset",
+            "return { loot = 1, drops = { { item = \"w\", by = { bandit = 0.1, stalker_veteran = 0.1, monolith = 0.1 } }, { item = \"bread\", chance = 0.5 } } }",
         ),
     ];
     let r = roster_in(dir.path(), &files, &ModuleConfigs::default());
@@ -593,20 +641,43 @@ fn texts_icons_and_where_it_is_found() {
     assert_eq!(r.plan.placed.len(), 1);
     assert_eq!((r.plan.placed[0].w, r.plan.placed[0].h), (2, 1));
     assert_eq!(check("items/r.itemasset").iter().map(|i| i.code).collect::<Vec<_>>(), ["I422"]);
-    let w = check("items/w.itemasset");
-    let w: Vec<(&str, String)> = w.iter().map(|i| (i.code, gz_luadata::path::show(&i.path))).collect();
+    // where it is found is the tables' to say, and their check's to judge
+    assert!(check("items/w.itemasset").is_empty());
+    let own = |c: &'static str, p: &str| (c, p.to_owned());
     assert_eq!(
-        w,
+        table_codes(&r, "t/w.recipeasset", &g),
+        [own("I423", "recipes[0].at"), own("I423", "recipes[0].parts"), own("I423", "recipes[1].makes")]
+    );
+    assert_eq!(table_codes(&r, "t/nobody.tradeasset", &g), [own("I424", "trader")]);
+    assert_eq!(
+        table_codes(&r, "t/military.tradeasset", &g),
+        [own("I424", "stock[0].supplies"), own("I412", "stock[0].chance"), own("I417", "stock[1].item")]
+    );
+    // the module's own item needs a count from some row; the game's bread has its own
+    assert_eq!(
+        table_codes(&r, "t/w.lootasset", &g),
+        [own("I430", "drops[0]"), own("I425", "drops[0].by.monolith")]
+    );
+    // without a game the configs and the communities are not looked up, and the check says so once
+    let unlinked = table_codes(&r, "t/nobody.tradeasset", &NoGame);
+    assert_eq!(unlinked, [own("I426", "")]);
+    // the rows that name an item, as the item's card shows them
+    let found = r.found("W");
+    let how: Vec<(&str, &str, usize)> = found.iter().map(|f| (f.how, f.file.as_str(), f.row)).collect();
+    assert_eq!(
+        how,
         [
-            ("I423", "craft[0].at".to_owned()),
-            ("I423", "craft[0].parts".to_owned()),
-            ("I424", "sold[0]".to_owned()),
-            ("I424", "sold[1]".to_owned()),
-            ("I424", "lists[0].file".to_owned()),
-            ("I425", "loot.by.monolith".to_owned()),
-            ("I430", "loot".to_owned()),
+            ("sold", "t/military.tradeasset", 0),
+            ("sold", "t/nobody.tradeasset", 0),
+            ("carried", "t/w.lootasset", 0),
+            ("made", "t/w.recipeasset", 0)
         ]
     );
+    assert_eq!((found[0].at.as_str(), found[0].detail.as_str()), ("trade_military", "1, 200%"));
+    assert_eq!(found[2].detail, "bandit 10%, monolith 10%, stalker_veteran 10%");
+    assert_eq!((found[3].at.as_str(), found[3].detail.as_str()), ("no_kit", "x 1: bread, no_part"));
+    let part = r.found("bread");
+    assert!(part.iter().any(|f| f.how == "part" && f.at == "w") && part.iter().any(|f| f.how == "carried"));
     // the picture's item resolves to the module's atlas
     let gi = r.resolution(r.find("g").unwrap(), None).unwrap();
     assert_eq!(gi.main.get("icons_texture").unwrap().value.as_deref(), Some("ui\\we_icons"));
@@ -688,11 +759,19 @@ fn the_build_refuses_on_the_first_error_and_ships_the_atlas() {
 fn the_game_makes_what_the_contract_says() {
     let text = r#"return { item = 1, section = "k", base = "wpn_ak74", name = "N", set = { inv_name = "st_x" },
         icon = { x = 1, y = 2 }, hud = { set = { anm_idle = "a" } },
-        craft = { { at = "itm_repairkit", parts = { "bread" } }, { at = "ITM_repairkit", count = 2, parts = { "bread", "nameless" } } },
-        scene = { like = "Vodka", sound = "s", hud = { base = "wpn_ak74_hud", set = { x = 1 } } },
-        loot = { chance = 0.5 }, sold = { by = "trade_military", count = 3 } }"#;
+        scene = { like = "Vodka", sound = "s", fit = "cut", set = { my_scene = true },
+                  hud = { base = "wpn_ak74_hud", set = { x = 1 } } } }"#;
     let r = roster(&[
         ("k.itemasset", text),
+        (
+            "t/k.recipeasset",
+            "return { recipe = 1, recipes = { { makes = \"K\", at = \"itm_repairkit\", parts = { \"bread\" } }, { makes = \"k\", at = \"ITM_repairkit\", count = 2, parts = { \"bread\", \"nameless\" } } } }",
+        ),
+        ("t/k.lootasset", "return { loot = 1, drops = { { item = \"k\", chance = 0.5 } } }"),
+        (
+            "t/k.tradeasset",
+            "return { trade = 1, trader = \"trade_military\", stock = { { item = \"k\", count = 3 }, { item = \"bread\", count = 0 } } }",
+        ),
         (
             "bad.itemasset",
             "return { item = 1, section = \"bad\", base = \"bread\", set = { [\"a b\"] = 1 } }",
@@ -723,14 +802,49 @@ fn the_game_makes_what_the_contract_says() {
         .collect();
     assert!(lines.contains(&("items\\items\\animations_settings.ltx", "k", "snd", "s")), "{lines:?}");
     assert!(lines.contains(&("items\\items\\animations_settings.ltx", "k", "anm", "item_ea_k")));
-    assert!(lines.contains(&("misc\\death_items_by_communities.ltx", "base", "k", "0.5")));
-    assert!(lines.contains(&("misc\\trade\\trade_military.ltx", "supplies_1", "k", "3, 1")));
-    assert!(!lines.iter().any(|l| l.1 == "item_count"));
+    assert!(lines.contains(&("items\\items\\animations_settings.ltx", "k", "fit", "cut")));
+    assert!(lines.contains(&("items\\items\\animations_settings.ltx", "k", "my_scene", "true")));
+    // the scene is all an item says of another config; the tables say the rest, each of its own
+    assert!(lines.iter().all(|l| l.0 == "items\\items\\animations_settings.ltx"), "{lines:?}");
+    let table = |file: &str| -> Vec<(String, String, String, String)> {
+        let i = r.table_index(file).unwrap();
+        r.composition.tables[i]
+            .file_patches
+            .iter()
+            .flat_map(|p| {
+                let mut section = String::new();
+                let mut out = Vec::new();
+                for d in &p.directives {
+                    match &d.op {
+                        gz_ltx::Op::Section { name, .. } => section.clone_from(name),
+                        gz_ltx::Op::Set { key, value } => {
+                            out.push((p.file.clone(), section.clone(), key.clone(), value.clone()));
+                        }
+                        gz_ltx::Op::Delete(key) => {
+                            out.push((p.file.clone(), section.clone(), key.clone(), "<gone>".into()));
+                        }
+                        _ => {}
+                    }
+                }
+                out
+            })
+            .collect()
+    };
+    let row = |f: &str, s: &str, k: &str, v: &str| (f.to_owned(), s.to_owned(), k.to_owned(), v.to_owned());
+    assert_eq!(table("t/k.lootasset"), [row("misc\\death_items_by_communities.ltx", "base", "k", "0.5")]);
+    assert_eq!(
+        table("t/k.tradeasset"),
+        [
+            row("misc\\trade\\trade_military.ltx", "supplies_1", "k", "3, 1"),
+            // a count of 0 takes the item off the shelf
+            row("misc\\trade\\trade_military.ltx", "supplies_1", "bread", "<gone>"),
+        ]
+    );
     let scene_hud = crate::resolve::view(&r.composition.ltx, "item_ea_k_hud", &r.composition, "", &[]);
     assert_eq!(scene_hud.parents, ["wpn_ak74_hud"]);
     assert_eq!(val(&scene_hud, "x").as_deref(), Some("1"));
-    // a death loot without a count never drops
-    assert!(codes(&r, "k.itemasset", &full_game()).contains(&"I430"));
+    // a drop of the module's own item without a count never drops
+    assert!(table_codes(&r, "t/k.lootasset", &full_game()).iter().any(|(c, _)| *c == "I430"));
     // any malformed part leaves the whole item out
     let bad = r.resolution(r.find("bad.itemasset").unwrap(), None).unwrap();
     assert!(bad.left_out && !bad.main.exists);
@@ -816,4 +930,109 @@ fn a_made_section_starts_from_what_the_item_makes_before_it() {
     assert_eq!(val("v_scope", "cost").as_deref(), Some("7"));
     assert_eq!(val("v_scope2", "scope_status").as_deref(), Some("1"));
     assert!(crate::resolve::view(&r.composition.ltx, "v_scope_hud", &r.composition, "", &[]).exists);
+}
+
+// ---- one thing, one place ------------------------------------------------------------------------
+
+#[test]
+fn what_another_file_owns_is_not_an_items_to_say() {
+    let text = "return { item = 1, section = \"w\", base = \"bread\", sold = { { by = \"trade_military\" } }, loot = { count = 1 }, craft = { { at = \"itm_repairkit\", parts = { \"bread\" } } }, lists = { { section = \"x\" } } }";
+    let (item, issues) = load_text(text, "items/w.itemasset").unwrap();
+    let found: Vec<(&str, String)> =
+        issues.iter().map(|i| (i.code, gz_luadata::path::show(&i.path))).collect();
+    assert_eq!(
+        found,
+        [
+            ("I432", "sold".to_owned()),
+            ("I432", "loot".to_owned()),
+            ("I432", "craft".to_owned()),
+            ("I432", "lists".to_owned())
+        ]
+    );
+    assert!(issues.iter().all(crate::model::Issue::is_error));
+    // each sentence names the file that owns what the key meant
+    assert!(issues[0].message.contains(".tradeasset") && issues[1].message.contains(".lootasset"));
+    assert!(issues[2].message.contains(".recipeasset") && issues[3].message.contains(".ltxp"));
+    // the keys are never read, and a save keeps the author's text: they are no part of the item
+    assert_eq!(to_value(&item).get("sold"), None);
+    // the build refuses the module with the first of them
+    let r = roster(&[("items/w.itemasset", text)]);
+    let errors = crate::build_errors(&r, &Catalog::parse(CATALOG), Path::new("D:\\nowhere"));
+    assert_eq!(errors[0].1.code, "I432");
+    // and nothing of it reaches a config
+    assert!(r.composition.file_patches.is_empty());
+    assert!(r.composition.ltx.section("xms_craft").is_none());
+}
+
+#[test]
+fn a_section_has_one_file() {
+    let g = full_game();
+    let r = roster(&[
+        ("items/ak.itemasset", CHANGE),
+        (
+            "items/sil.itemasset",
+            "return { item = 1, section = \"sil\", base = \"bread\", sections = { { edit = \"wpn_ak74\", set = { cost = 1 } }, { name = \"sil_extra\", base = \"bread\" }, { edit = \"wpn_ak74_kobra\", set = { cost = 2 } } } }",
+        ),
+    ]);
+    // the rifle is the item of another file of the module: what changes it is written there
+    let found = issues(&r, "items/sil.itemasset", &g);
+    let own: Vec<(&str, String)> = found.iter().map(|i| (i.code, gz_luadata::path::show(&i.path))).collect();
+    assert_eq!(own, [("I433", "sections[0]".to_owned())]);
+    assert!(found[0].message.contains("items/ak.itemasset") && found[0].is_error());
+    // a section nobody else is about - one it makes, a variant of the game's - stays the item's to change
+    assert!(issues(&r, "items/ak.itemasset", &g).is_empty());
+}
+
+#[test]
+fn the_tables_are_read_after_the_items_they_name() {
+    let g = full_game();
+    let r = roster(&[
+        ("items/sil.itemasset", NEW),
+        ("trade/military.tradeasset", TRADER),
+        ("loot/dead.lootasset", LOOT),
+        ("craft/bench.recipeasset", RECIPES),
+    ]);
+    // the game's order: traders, loot tables, recipes
+    let order: Vec<&str> = r.tables.iter().map(|t| t.table.file.as_str()).collect();
+    assert_eq!(order, ["trade/military.tradeasset", "loot/dead.lootasset", "craft/bench.recipeasset"]);
+    for f in order {
+        assert!(table_codes(&r, f, &g).is_empty(), "{f}: {:?}", table_codes(&r, f, &g));
+    }
+    assert!(issues(&r, "items/sil.itemasset", &g).is_empty());
+    // the recipes, numbered on from what [xms_craft] holds, in the order written
+    let craft = crate::resolve::view(&r.composition.ltx, "xms_craft", &r.composition, "", &[]);
+    let val = |k: &str| craft.get(k).and_then(|x| x.value.clone());
+    assert_eq!(val("000001").as_deref(), Some("itm_repairkit, wpn_sil_diy, 1, bread, nameless"));
+    assert_eq!(val("000002").as_deref(), Some("itm_repairkit, wpn_sil_diy, 2, bread"));
+    assert_eq!(craft.get("000001").map(|x| x.file.as_str()), Some("craft/bench.recipeasset"));
+    // the module's own patch still says more of the same lines, after the tables
+    let cfg = ModuleConfigs {
+        patches: vec![ConfigFile {
+            rel: "patch/we.ltxp".into(),
+            virt: String::new(),
+            text: "[xms_craft]\nmine = itm_repairkit, bread, 1, nameless\n".into(),
+        }],
+        ..ModuleConfigs::default()
+    };
+    let r2 = roster_in(Path::new("D:\\nowhere"), &[("craft/bench.recipeasset", RECIPES)], &cfg);
+    let craft = crate::resolve::view(&r2.composition.ltx, "xms_craft", &r2.composition, "", &[]);
+    assert!(craft.get("mine").is_some() && craft.get("000002").is_some());
+    // a file the game cannot read as its kind is left out whole, and refuses the build
+    let bad = roster(&[(
+        "t/bad.tradeasset",
+        "return { trade = 1, trader = \"trade_military\", stock = { { item = \"bread\" }, { count = 2 } } }",
+    )]);
+    assert!(bad.composition.tables[0].left_out && bad.composition.file_patches.is_empty());
+    assert_eq!(table_codes(&bad, "t/bad.tradeasset", &g), [("I427", "stock[1].item".to_owned())]);
+    let errors = crate::build_errors(&bad, &Catalog::parse(CATALOG), Path::new("D:\\nowhere"));
+    assert_eq!((errors[0].0.as_str(), errors[0].1.code), ("t/bad.tradeasset", "I427"));
+    // an edited table is checked as the module would be with it
+    let edited = r.with_table_edit(
+        "loot/dead.lootasset",
+        "return { loot = 1, drops = { { item = \"wpn_sil_diy\", chance = 0.2 } } }".into(),
+        Path::new("D:\\nowhere"),
+        &crate::atlas::picture_size,
+    );
+    assert_eq!(table_codes(&edited, "loot/dead.lootasset", &g), [("I430", "drops[0]".to_owned())]);
+    assert!(table_codes(&r, "loot/dead.lootasset", &g).is_empty(), "the roster it came from is untouched");
 }

@@ -160,13 +160,17 @@ pub enum TemplateKind {
     Character,
     Pda,
     Item,
+    Trader,
+    Loot,
+    Recipes,
     Model,
     Texture,
     Sound,
 }
 
 impl TemplateKind {
-    /// `quest`, `behaviour`, `character`, `pda`, `item`, `model`, `texture` or `sound`, any case.
+    /// `quest`, `behaviour`, `character`, `pda`, `item`, `trader`, `loot`, `recipes`, `model`,
+    /// `texture` or `sound`, any case.
     #[must_use]
     pub fn parse(kind: &str) -> Option<Self> {
         [
@@ -175,6 +179,9 @@ impl TemplateKind {
             Self::Character,
             Self::Pda,
             Self::Item,
+            Self::Trader,
+            Self::Loot,
+            Self::Recipes,
             Self::Model,
             Self::Texture,
             Self::Sound,
@@ -191,6 +198,9 @@ impl TemplateKind {
             Self::Character => "character",
             Self::Pda => "pda",
             Self::Item => "item",
+            Self::Trader => "trader",
+            Self::Loot => "loot",
+            Self::Recipes => "recipes",
             Self::Model => "model",
             Self::Texture => "texture",
             Self::Sound => "sound",
@@ -206,6 +216,9 @@ impl TemplateKind {
             Self::Character => ("NewCharacter", ".npcasset"),
             Self::Pda => ("NewPda", ".pdaasset"),
             Self::Item => ("NewItem", ".itemasset"),
+            Self::Trader => ("NewTrader", ".tradeasset"),
+            Self::Loot => ("NewLoot", ".lootasset"),
+            Self::Recipes => ("NewRecipes", ".recipeasset"),
             Self::Model => ("NewModel", ".meshasset"),
             Self::Texture => ("NewTexture", ".texasset"),
             Self::Sound => ("NewSound", ".sndasset"),
@@ -222,6 +235,9 @@ impl TemplateKind {
             Self::Character => "character",
             Self::Pda => "PDA interface",
             Self::Item => "item",
+            Self::Trader => "trader",
+            Self::Loot => "loot table",
+            Self::Recipes => "recipes",
             Self::Model => "model",
             Self::Texture => "texture",
             Self::Sound => "sound",
@@ -237,6 +253,9 @@ impl TemplateKind {
             Self::Character => "Too many unnamed characters here.",
             Self::Pda => "no free NewPda name in the folder",
             Self::Item => "Too many unnamed items here.",
+            Self::Trader => "Too many unnamed traders here.",
+            Self::Loot => "Too many unnamed loot tables here.",
+            Self::Recipes => "Too many unnamed recipe files here.",
             Self::Model => "Too many unnamed models here.",
             Self::Texture => "Too many unnamed textures here.",
             Self::Sound => "Too many unnamed sounds here.",

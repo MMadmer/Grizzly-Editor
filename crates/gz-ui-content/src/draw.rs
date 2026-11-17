@@ -385,6 +385,9 @@ fn add_menu(ui: &mut Ui, blocked: Option<&'static str>, pick: &mut Option<usize>
             Some("behaviour") => Icon::Behaviour,
             Some("character") => Icon::Character,
             Some("item") => Icon::Item,
+            Some("trader") => Icon::Trader,
+            Some("loot") => Icon::Loot,
+            Some("recipes") => Icon::Recipe,
             _ => Icon::PdaInterface,
         };
         if menu_item(

@@ -1170,6 +1170,12 @@ enum CreateKind {
     Character,
     Pda,
     Item,
+    /// What the module puts on the shelf of a trader of the game (`.tradeasset`).
+    Trader,
+    /// What the dead carry (`.lootasset`).
+    Loot,
+    /// Recipes (`.recipeasset`).
+    Recipes,
     Model,
     Texture,
     Sound,
@@ -1193,6 +1199,9 @@ async fn file_create(ed: Arc<Editor>, p: FileCreateParams, _origin: Origin) -> R
         CreateKind::Character => TemplateKind::Character,
         CreateKind::Pda => TemplateKind::Pda,
         CreateKind::Item => TemplateKind::Item,
+        CreateKind::Trader => TemplateKind::Trader,
+        CreateKind::Loot => TemplateKind::Loot,
+        CreateKind::Recipes => TemplateKind::Recipes,
         CreateKind::Model => TemplateKind::Model,
         CreateKind::Texture => TemplateKind::Texture,
         CreateKind::Sound => TemplateKind::Sound,

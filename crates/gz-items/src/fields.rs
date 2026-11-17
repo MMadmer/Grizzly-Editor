@@ -1,8 +1,10 @@
-//! The keys of an item asset: one table per level of the file.
+//! The keys of an item asset and of the three table kinds (a trader, a loot table, recipes): one
+//! table per level of a file.
 //!
-//! The reader ([`crate::model`]), the keys `gz-asset` knows, the diff rules and the reference
-//! (`docs/assets/ITEM.md`, made by [`crate::doc`]) all read these tables, so a key cannot mean
-//! one thing to the reader and another to its reference.
+//! The readers ([`crate::model`], [`crate::tables`]), the keys `gz-asset` knows, the diff rules and
+//! the references (`docs/assets/ITEM.md`, `TRADER.md`, `LOOT.md`, `RECIPES.md`, made by
+//! [`crate::doc`]) all read these tables, so a key cannot mean one thing to a reader and another
+//! to its reference.
 
 /// What a key holds.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,32 +186,13 @@ pub const TOP: &[Field] = &[
         "sections",
         Ty::List("a list of sections (below)"),
         "",
-        "Other sections the item owns or changes: `{ name, base, set }` makes one (the name as written), `{ edit, set, unset, add, drop }` changes one - sound mixins, scope variants, upgrade sections, a use scene's HUD.",
-    ),
-    f("craft", Ty::List("a list of recipes (below)"), "", "Recipes that make the item."),
-    f(
-        "loot",
-        Ty::Table("death loot (below)"),
-        "",
-        "What the dead carry: lines of the game's death loot - the count in `misc\\death_generic.ltx`, the chances in `misc\\death_items_by_communities.ltx`.",
-    ),
-    f(
-        "sold",
-        Ty::List("a list of stock rows (below), or one row alone"),
-        "",
-        "Stock of the game's traders. A module's own character keeps its stock in its `.npcasset`.",
+        "Other sections the item owns: `{ name, base, set }` makes one (the name as written), `{ edit, set, unset, add, drop }` changes one that is the item's - sound mixins, scope variants, upgrade sections. A section that is another item asset's is changed in that asset.",
     ),
     f(
         "scene",
         Ty::Scene,
         "",
         "The use animation: `\"vodka\"` uses the scene of that item; a table sets the keys of `items\\items\\animations_settings.ltx` (below), `[<section>]` there over `like`.",
-    ),
-    f(
-        "lists",
-        Ty::List("a list of lines (below)"),
-        "",
-        "Any other line the item needs somewhere: a key of any config, or a member of a list in one.",
     ),
     f("editor", Ty::Table("anything"), "", "The editor's notes. The game reads none of it."),
 ];
@@ -271,23 +254,80 @@ pub const SECTION: &[Field] = &[
     f("drop", Ty::Members, "", "Members taken out of a list (a change)."),
 ];
 
-pub const CRAFT: &[Field] = &[
+pub const SCENE: &[Field] = &[
+    f("like", Ty::Section, "", "The item whose scene this one starts from (`vodka`)."),
+    f("sound", Ty::String, "", "The scene's sound (`snd`)."),
+    f("camera", Ty::String, "", "The camera effect (`cam`)."),
+    f("time", Ty::Number { min: 0.0, max: 600_000.0 }, "", "How long the scene lasts, milliseconds (`tm`)."),
+    f("helmet", Ty::Value, "", "What a helmet does to it (`helm`), as `animations_settings.ltx` says it."),
     f(
-        "at",
-        Ty::Section,
-        "",
-        "The tool or the workbench the recipe is in: the section the craft window is opened with (`itm_repairkit_tier_1`).",
+        "fit",
+        Ty::String,
+        "the cycle is hurried",
+        "How a hands cycle longer than `time` fits the scene: `\"cut\"` keeps its own pace and ends it with the scene.",
     ),
-    f("count", Ty::Integer { min: 1, max: 1000 }, "1", "How many the recipe makes."),
+    f("anm", Ty::String, "", "The scene's motion."),
+    f("hud_anm", Ty::String, "", "The motion of the scene's HUD."),
     f(
-        "parts",
-        Ty::List("one to four sections"),
+        "hud",
+        Ty::Table("`{ base, set }`"),
         "",
-        "What it takes. The game writes the recipe as `[xms_craft] <n> = at, section, count, part, ...`.",
+        "The scene's own HUD section, `item_ea_<section>_hud` of the system config; `anm` left out is then `item_ea_<section>`.",
+    ),
+    f(
+        "set",
+        Ty::Keys,
+        "",
+        "Further keys of the scene's section, written as they are: what a module's own scripts read of a scene.",
     ),
 ];
 
+/// Every level of the file: its pattern of `gz-asset`'s known keys and its table.
+pub const LEVELS: &[(&str, &[Field])] =
+    &[("", TOP), ("icon", ICON), ("hud", HUD), ("sections.*", SECTION), ("scene", SCENE), ("scene.hud", HUD)];
+
+// ---- the tables: a trader, a loot table, recipes -------------------------------------------------
+
+const EDITOR: Field =
+    f("editor", Ty::Table("anything"), "", "The editor's notes. The game reads none of it.");
+
+pub const TRADE: &[Field] = &[
+    f("trade", Ty::Header, "", "The format version (1). A file of a newer version is refused by name."),
+    f(
+        "trader",
+        Ty::String,
+        "",
+        "The trader of the game the file is about: its config's name (`trade_military` is `misc\\trade\\trade_military.ltx`), or a path under `configs` ending in `.ltx`. A module's own character keeps its shop in its `.npcasset`.",
+    ),
+    f("stock", Ty::List("a list of stock rows (below)"), "", "What the module puts on the trader's shelf."),
+    EDITOR,
+];
+
+pub const STOCK: &[Field] = &[
+    f("item", Ty::Section, "", "The item: a section of the game or of the module."),
+    f(
+        "supplies",
+        Ty::Sections,
+        "\"supplies_1\"",
+        "The stock section of the trader's config the row goes into, or a list of them. A section that inherits another takes its rows.",
+    ),
+    f(
+        "count",
+        Ty::Number { min: 0.0, max: 1_000_000.0 },
+        "1",
+        "How many are on the shelf after a restock. 0 takes the item off the shelf.",
+    ),
+    f("chance", CHANCE, "1", "The chance they are."),
+];
+
 pub const LOOT: &[Field] = &[
+    f("loot", Ty::Header, "", "The format version (1). A file of a newer version is refused by name."),
+    f("drops", Ty::List("a list of drops (below)"), "", "What the dead carry."),
+    EDITOR,
+];
+
+pub const DROP: &[Field] = &[
+    f("item", Ty::Section, "", "The item: a section of the game or of the module."),
     f(
         "count",
         Ty::Count,
@@ -303,58 +343,30 @@ pub const LOOT: &[Field] = &[
     ),
 ];
 
-pub const SOLD: &[Field] = &[
+pub const RECIPES: &[Field] = &[
+    f("recipe", Ty::Header, "", "The format version (1). A file of a newer version is refused by name."),
+    f("recipes", Ty::List("a list of recipes (below)"), "", "The recipes."),
+    EDITOR,
+];
+
+pub const RECIPE: &[Field] = &[
+    f("makes", Ty::Section, "", "What the recipe makes: a section of the game or of the module."),
+    f("count", Ty::Integer { min: 1, max: 1000 }, "1", "How many it makes."),
     f(
-        "by",
-        Ty::String,
+        "at",
+        Ty::Section,
         "",
-        "The trader's config: `trade_military` (`misc\\trade\\trade_military.ltx`), or a path under `configs` ending in `.ltx`.",
+        "The tool or the workbench the recipe is in: the section the craft window is opened with (`itm_repairkit_tier_1`).",
     ),
-    f("supplies", Ty::Sections, "\"supplies_1\"", "The section of it, or a list of them."),
-    f("count", Ty::Number { min: 0.0, max: 1_000_000.0 }, "1", "How many are on the shelf."),
-    f("chance", CHANCE, "1", "The chance they are."),
-];
-
-pub const SCENE: &[Field] = &[
-    f("like", Ty::Section, "", "The item whose scene this one starts from (`vodka`)."),
-    f("sound", Ty::String, "", "The scene's sound (`snd`)."),
-    f("camera", Ty::String, "", "The camera effect (`cam`)."),
-    f("time", Ty::Number { min: 0.0, max: 600_000.0 }, "", "How long the scene lasts, milliseconds (`tm`)."),
-    f("helmet", Ty::Value, "", "What a helmet does to it (`helm`), as `animations_settings.ltx` says it."),
-    f("anm", Ty::String, "", "The scene's motion."),
-    f("hud_anm", Ty::String, "", "The motion of the scene's HUD."),
     f(
-        "hud",
-        Ty::Table("`{ base, set }`"),
+        "parts",
+        Ty::List("one to four sections"),
         "",
-        "The scene's own HUD section, `item_ea_<section>_hud` of the system config; `anm` left out is then `item_ea_<section>`.",
+        "What it takes. The game writes the recipe as `[xms_craft] <n> = at, makes, count, part, ...`.",
     ),
 ];
 
-pub const LIST: &[Field] = &[
-    f(
-        "file",
-        Ty::String,
-        "the system config",
-        "A config by its path under `configs` (`plugins\\itms_manager.ltx`).",
-    ),
-    f("section", Ty::Section, "", "The section of it the line goes into."),
-    f("key", Ty::String, "the item's section", "The key."),
-    f("value", Ty::Value, "a bare key", "`key = value`."),
-    f("add", Ty::String, "", "Instead of `value`: a member added to the list `key` holds."),
-    f("drop", Ty::String, "", "Instead of `value`: a member taken out of it."),
-];
-
-/// Every level of the file: its pattern of `gz-asset`'s known keys and its table.
-pub const LEVELS: &[(&str, &[Field])] = &[
-    ("", TOP),
-    ("icon", ICON),
-    ("hud", HUD),
-    ("sections.*", SECTION),
-    ("craft.*", CRAFT),
-    ("loot", LOOT),
-    ("sold.*", SOLD),
-    ("scene", SCENE),
-    ("scene.hud", HUD),
-    ("lists.*", LIST),
-];
+/// The levels of a trader file, a loot table and a recipes file.
+pub const TRADE_LEVELS: &[(&str, &[Field])] = &[("", TRADE), ("stock.*", STOCK)];
+pub const LOOT_LEVELS: &[(&str, &[Field])] = &[("", LOOT), ("drops.*", DROP)];
+pub const RECIPE_LEVELS: &[(&str, &[Field])] = &[("", RECIPES), ("recipes.*", RECIPE)];

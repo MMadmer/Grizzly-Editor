@@ -7,9 +7,16 @@
   L  items.list and items.info answer every item: file, kind, section, family, what each key resolves to
   T  the tab through items.view: it opens, lists the items under New and Changes, selects one; the form of a change of
      a weapon and of a new consumable carries the catalog's groups and rows (key, title, type, value, where it comes
-     from); an edit of a catalog key, of a text and an added loot row are saved as exactly that difference - the
-     author's comments and order kept; Revert drops an edit; + makes a new item from a game item and a change of one;
-     the Delete Item question comes up (dlg.delete_item) and goes again, and a deleted file leaves the list
+     from); an edit of a catalog key and of a text are saved as exactly that difference - the author's comments
+     and order kept; Revert drops an edit; + makes a new item from a game item and a change of one; the Delete Item
+     question comes up (dlg.delete_item) and goes again, and a deleted file leaves the list
+  E  one thing, one place: an item that says who sells it, who carries it or what makes it is refused by name (I432),
+     and so is a row of sections about another item asset's section (I433); file.create makes a trader, a loot table
+     and a recipes file, asset.kinds and asset.reference know them, their templates check clean and a broken one is
+     named; economy.list answers every file; the Economy tab (economy.view) shows a page, selects a file, makes one,
+     adds a row as exactly that line - the author's comment kept - and takes it away; the item's card shows the rows
+     that name it as facts (items.view found, items.info found); Delete... asks through dlg.delete_table; the
+     built module ships the three files as they are
   I  the icon: a picture beside the asset is what the form shows, and it is drawn; a cell of a texture the project holds is
      drawn too; the module built to a folder carries the atlas, the asset's shipped text names its cell, and the picture
      itself does not ship
@@ -20,7 +27,7 @@
   F  the frame: ui.audit finds nothing cut to nothing or escaping at 1707x912 / 1.5 and 1280x720 / 1.0, in English and in
      Russian (every text of the editor's own translated), in the dark and the light theme; perf.stalls is empty
 
-    python tools/qa/test_items.py --project <project> [--only K,L,T,I,H,F] [--shots <folder>]
+    python tools/qa/test_items.py --project <project> [--only K,L,T,E,I,H,F] [--shots <folder>]
 """
 from __future__ import annotations
 
@@ -217,7 +224,7 @@ def phase_t(shots: str | None) -> None:
     check(not v.get("dirty") and rows_of(v.get("form") or {}).get("inv_weight", {}).get("value") == "3.2"
           and text_of("items/qa_ak.itemasset") == after, "T Revert drops the edit, the file untouched", qa.short(v.get("dirty")))
 
-    # a new consumable: its texts and a loot row
+    # a new consumable: its texts
     v = view(select="items/qa_ration.itemasset")
     form = v.get("form") or {}
     check(form.get("kind") == "new" and (form.get("identity") or {}).get("base") == ["bread"] and form.get("groups"),
@@ -225,14 +232,14 @@ def phase_t(shots: str | None) -> None:
     texts = form.get("texts") or {}
     check(texts.get("name.eng", {}).get("value") == "Ration", "T its texts are the file's, a row per language", qa.short(texts))
     before = text_of("items/qa_ration.itemasset")
-    v = view(text={"name.eng": "Field Ration"}, loot={"count": [0, 2], "chance": 0.05, "by": {"bandit": 0.1}}, save=True)
+    v = view(text={"name.eng": "Field Ration"}, save=True)
     after = text_of("items/qa_ration.itemasset")
     check(v.get("ok") and '"Field Ration"' in after and "Ration\"" not in after.replace("Field Ration", ""),
           "T the text is saved in its language", after[:400])
-    check("loot" in after and "bandit" in after and "0.05" in after and "cost = 50" in after,
-          "T the loot row is added and the rest kept", after[:500])
-    found = ((v.get("form") or {}).get("found") or {}).get("loot") or {}
-    check(found.get("chance") == 0.05 and found.get("by"), "T Where It Is Found shows the loot", qa.short(found))
+    check("cost = 50" in after and "loot" not in after and "sold" not in after,
+          "T the rest is kept, and nothing of another file's is written into the item", after[:500])
+    check((v.get("form") or {}).get("found") == [], "T Where It Is Found is empty while no table names the item",
+          qa.short((v.get("form") or {}).get("found")))
     qa.shot(shots, "items_new")
 
     # + makes a new item from a game item and a change of one
@@ -268,6 +275,156 @@ def phase_t(shots: str | None) -> None:
     check(bool(v) and v.get("count") == 2, "T the deleted files leave the list", qa.short(v.get("items")))
     gone = view(select="items/qa_nobody.itemasset")
     check(not gone.get("ok") and "qa_nobody" in str(gone.get("error")), "T an item that is not there is refused by name", qa.short(gone))
+
+
+# ---- E: one thing, one place - the Economy tab and the three table kinds ---------------------------------------------
+
+LOOT_BY_HAND = """-- what the dead carry: mine
+return {
+  loot = 1,
+  drops = {
+    { item = "bread", chance = 0.2 }, -- the first row
+  },
+}
+"""
+
+
+def eview(**params) -> dict:
+    return cmd("economy.view", **params)
+
+
+def phase_e(module: str, shots: str | None) -> None:
+    ration = (cmd("items.info", item="items/qa_ration.itemasset").get("section") or module + "_qa_ration")
+    # an item that says what another file owns is refused by name, with where it belongs
+    foreign = "qa_items/qa_foreign.itemasset"
+    qa.write(path_of(foreign), 'return { item = 1, id = "qa_foreign", base = "bread", sold = { { by = "trade_military" } },\n'
+                               '  loot = { count = 1 }, craft = { { at = "bread", parts = { "bread" } } }, lists = { { section = "x" } } }\n')
+    a = cmd("asset.check", path=foreign)
+    named = [p for p in a.get("problems", []) if p.get("code") == "I432"]
+    texts = " ".join(str(p.get("message") or p.get("text")) for p in named)
+    check(len(named) == 4 and all(p.get("severity") == "error" for p in named) and ".tradeasset" in texts
+          and ".lootasset" in texts and ".recipeasset" in texts and ".ltxp" in texts,
+          "E an item's sold, loot, craft and lists are refused by name, each with the file that owns it", qa.short(a))
+    os.remove(path_of(foreign))
+    other = "qa_items/qa_other.itemasset"
+    qa.write(path_of(other), 'return { item = 1, id = "qa_other", base = "bread",\n'
+                             '  sections = { { edit = "wpn_ak74", set = { cost = 1 } } } }\n')
+    a = cmd("asset.check", path=other)
+    check("I433" in codes(a), "E a row of sections about another item asset's section is refused (I433)", qa.short(a))
+    os.remove(path_of(other))
+
+    # the three kinds: made, known, referenced, checked
+    made = {}
+    for kind, ext, key in (("trader", ".tradeasset", "| `trader` |"), ("loot", ".lootasset", "| `drops` |"),
+                           ("recipes", ".recipeasset", "| `makes` |")):
+        m = cmd("file.create", kind=kind, path="qa_tables")
+        rel = str(m.get("path", "")).replace("\\", "/")
+        check(m.get("ok") and rel.endswith(ext) and os.path.isfile(path_of(rel)), "E file.create kind=%s makes a %s file" % (kind, ext),
+              qa.short(m))
+        made[kind] = rel
+        ref = cmd("asset.reference", kind=kind)
+        check(ref.get("ok") and key in str(ref.get("text", "")), "E asset.reference kind=%s lists the keys" % kind, qa.short(ref))
+        good = cmd("asset.check", path=rel)
+        errors = [p for p in good.get("problems", []) if p.get("severity") == "error"]
+        check(good.get("ok") and not errors, "E the %s template checks without an error" % kind, qa.short(good))
+    names = json.dumps(cmd("asset.kinds"))
+    check(all(e in names for e in ("tradeasset", "lootasset", "recipeasset")), "E asset.kinds knows the three kinds", names[:300])
+    bad = "qa_tables/qa_bad.tradeasset"
+    qa.write(path_of(bad), 'return { trade = 1, stock = { { item = "bread" }, { count = 2 } } }\n')
+    a = cmd("asset.check", path=bad)
+    check(codes(a).count("I427") >= 2, "E a trader file without its trader and a row without its item are named (I427)", qa.short(a))
+    os.remove(path_of(bad))
+    for rel in made.values():
+        os.remove(path_of(rel))
+
+    # the data: every file with its rows
+    qa.write(path_of("loot/qa_dead.lootasset"), LOOT_BY_HAND)
+    listed = qa.until(lambda: (lambda a: a if a.get("files") else None)(cmd("economy.list")), 10) or {}
+    files = {f.get("file"): f for f in listed.get("files", [])}
+    dead = files.get("loot/qa_dead.lootasset", {})
+    check(dead.get("kind") == "loot table" and dead.get("total_rows") == 1 and (dead.get("rows") or [{}])[0].get("item") == "bread",
+          "E economy.list answers the loot table and its row", qa.short(dead))
+
+    # the tab: a page, a file, a row added as exactly that line, a row taken away
+    v = eview(select="loot/qa_dead.lootasset")
+    check(v.get("ok") and v.get("open") and v.get("page") == "loot" and v.get("selected") == "loot/qa_dead.lootasset",
+          "E economy.view opens the tab on the file's page", qa.short(v))
+    v = eview(add={"item": ration, "count": [0, 2], "chance": 0.05, "by": {"bandit": 0.1}})
+    after = text_of("loot/qa_dead.lootasset")
+    check(v.get("ok") and ration in after and "bandit" in after and "0.05" in after, "E a row added is written into the file", after[:500])
+    check("-- what the dead carry: mine" in after and "-- the first row" in after and 'item = "bread", chance = 0.2' in after,
+          "E and the author's comments and rows stay as they were", after[:500])
+    shown = ((v.get("shown") or {}).get("drops") or [])
+    check(len(shown) == 2 and shown[1].get("item") == ration, "E the tab shows the file with the new row", qa.short(shown))
+    qa.shot(shots, "economy_loot")
+    v = eview(remove=0)
+    after = text_of("loot/qa_dead.lootasset")
+    check(v.get("ok") and 'item = "bread"' not in after and ration in after, "E a row taken away leaves the file", after[:400])
+    gone = eview(remove=7)
+    check(not gone.get("ok") and "no row 7" in str(gone.get("error")), "E a row that is not there is refused", qa.short(gone))
+
+    v = eview(page="traders", new="trade_military")
+    trade = str(v.get("selected") or "")
+    check(v.get("ok") and trade.endswith(".tradeasset") and os.path.isfile(path_of(trade)) and v.get("page") == "traders",
+          "E the traders page makes a file for a trader of the game", qa.short(v))
+    v = eview(add={"item": ration, "count": 2, "chance": 0.5})
+    body = text_of(trade)
+    check(v.get("ok") and 'trader = "trade_military"' in body and ration in body, "E and its stock row is written", body[:400])
+    qa.shot(shots, "economy_traders")
+    v = eview(page="recipes", new=True)
+    craft = str(v.get("selected") or "")
+    v = eview(add={"makes": ration, "at": "bread", "parts": ["bread"]})
+    check(v.get("ok") and craft.endswith(".recipeasset") and "makes" in text_of(craft), "E the recipes page makes a file and a recipe",
+          qa.short(v))
+    bad = eview(add={"makes": ration, "at": "bread", "parts": ["a", "b", "c", "d", "e"]})
+    check(not bad.get("ok") and "four parts" in str(bad.get("error")), "E a row the file cannot hold is refused in a sentence",
+          qa.short(bad))
+    wrong = eview(page="nowhere")
+    check(not wrong.get("ok") and "traders, loot or recipes" in str(wrong.get("error")), "E an unknown page is refused, naming them",
+          qa.short(wrong))
+
+    # the item only shows it: the rows that name it, each with its file
+    info = qa.until(lambda: (lambda a: a if len(a.get("found") or []) >= 3 else None)(cmd("items.info", item="items/qa_ration.itemasset")),
+                    10) or {}
+    how = sorted((f.get("how"), f.get("file")) for f in info.get("found") or [])
+    check(how == sorted([("sold", trade), ("carried", "loot/qa_dead.lootasset"), ("made", craft)]),
+          "E items.info answers where the item is found, with the files that say it", qa.short(info.get("found")))
+    form = (view(select="items/qa_ration.itemasset").get("form") or {})
+    check(len(form.get("found") or []) == 3, "E the item's card shows the same facts", qa.short(form.get("found")))
+    qa.shot(shots, "items_found")
+    audit = cmd("ui.audit", id="items")
+    labels = {c.get("label") for c in audit.get("controls", [])}
+    check("Open Economy" in labels, "E and offers the Economy tab", qa.short(sorted(str(x) for x in labels)[:40]))
+
+    # Delete: the question names the file
+    eview(select=craft, ask_delete=True)
+    up = qa.until(lambda: "dlg.delete_table" in json.dumps(cmd("ui.dialog").get("dialogs")), 5)
+    check(up, "E Delete... asks through dlg.delete_table", qa.short(cmd("ui.dialog")))
+    qa.shot(shots, "economy_delete")
+    cmd("ui.dialog", action="close", id="dlg.delete_table")
+    check(os.path.isfile(path_of(craft)), "E and Cancel keeps the file")
+
+    # the frame, both languages
+    for lang in ("en", "ru"):
+        cmd("app.prefs", action="set", key="language", value=lang)
+        for page in ("traders", "loot", "recipes"):
+            eview(page=page)
+            a = cmd("ui.audit", id="economy")
+            cut = [t for t in a.get("truncated") or [] if not t.get("shown") and (t.get("rect") or [0, 0, 0])[2] > 0]
+            check(a.get("ok") and not cut and not a.get("escaped"), "E %s %s: nothing is cut to nothing, nothing escapes" % (lang, page),
+                  qa.short({"cut": cut[:3], "escaped": (a.get("escaped") or [])[:3]}))
+            if lang == "ru":
+                missing = [m.get("label") for m in a.get("untranslated") or []]
+                check(not missing, "E ru %s: every text of the editor's own reads in Russian" % page, qa.short(missing[:12]))
+                qa.shot(shots, "economy_ru_%s" % page)
+    cmd("app.prefs", action="set", key="language", value="en")
+    closed = cmd("ui.tab", action="close", doc="economy")
+    check(closed.get("ok") and eview().get("open") is False, "E the tab closes, and economy.view says so", qa.short(closed))
+    TABLES[:] = [trade, "loot/qa_dead.lootasset", craft]
+
+
+# what phase E left in the project: the built module ships them
+TABLES: list[str] = []
 
 
 # ---- I: the icon ------------------------------------------------------------------------------------------------
@@ -307,6 +464,10 @@ def phase_i(module: str) -> None:
         check("ui\\\\%s_icons" % module in body or ("%s_icons" % module) in body and "x =" in body,
               "I the shipped text names its cell of the atlas", body[:300])
         check(not os.path.exists(os.path.join(root, "items", "icons", "qa_ration.tga")), "I and the picture itself does not ship")
+        for rel in TABLES:
+            check(open(os.path.join(root, rel.replace("/", os.sep)), encoding="utf-8").read() == text_of(rel)
+                  if os.path.isfile(os.path.join(root, rel.replace("/", os.sep))) else False,
+                  "I the module ships %s as it is" % rel)
     finally:
         qa.remove_tree(out)
 
@@ -436,13 +597,13 @@ def run(ctx: qa.Run) -> None:
         # the checks count items: an author's project may bring items of its own
         for b, _, fs in os.walk(ctx.project):
             for f in fs:
-                if f.lower().endswith(".itemasset"):
+                if f.lower().endswith((".itemasset", ".tradeasset", ".lootasset", ".recipeasset")):
                     os.remove(os.path.join(b, f))
         qa.run_phases(
-            {"K": phase_k, "L": phase_l, "T": lambda: phase_t(ctx.shots), "I": lambda: phase_i(module),
-             "H": lambda: phase_h(ctx.shots), "F": lambda: phase_f(ctx.shots)},
+            {"K": phase_k, "L": phase_l, "T": lambda: phase_t(ctx.shots), "E": lambda: phase_e(module, ctx.shots),
+             "I": lambda: phase_i(module), "H": lambda: phase_h(ctx.shots), "F": lambda: phase_f(ctx.shots)},
             ctx.only,
-            {"T": "L", "I": "L", "H": "L", "F": "L"},
+            {"T": "L", "E": "L", "I": "L", "H": "L", "F": "L"},
         )
         qa.stalls()
     finally:
@@ -450,7 +611,7 @@ def run(ctx: qa.Run) -> None:
 
 
 def main() -> int:
-    return qa.suite("ITEMS", run, doc=__doc__, phases="KLTIHF")
+    return qa.suite("ITEMS", run, doc=__doc__, phases="KLTEIHF")
 
 
 if __name__ == "__main__":

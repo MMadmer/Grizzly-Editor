@@ -89,6 +89,8 @@ def write(cv):
     rows = [("`items\\`", f"{nitems['new']} new items and {nitems['changed']} changes of the game's items, one `.itemasset` each, "
                           "with the HUD section and the mixins each owns"),
             ("`icons\\`", f"{sum(1 for t in cv.asset_tables.values() if 'icon' in t)} pictures the mod painted itself, named by the items"),
+            ("`craft\\`", (f"{len(cv.craft_rows)} recipes the mod added to the game's craft script, in one recipes file "
+                           f"(`{os.path.basename(cv.recipe_file)}`)") if cv.recipe_file else "no recipe of the mod's own"),
             ("`patch\\*.ltxp`", f"{len(cv.patches)} files of sections no item owns ({patch_dirs} lines), "
                                 f"{len(cv.file_blocks)} files of `#file` lines for {file_targets} configs scripts open by name" +
                                 (f", one of `#file` lines for {len(cv.sysfile_blocks)} files of the system config a script "
@@ -175,7 +177,7 @@ def write(cv):
         L.append(f"- {len(md.kept)} motion files on a game path were left as they are: " +
                  ", ".join(f"`{f}` ({why})" for f, why in sorted(md.kept.items())) + ".")
     if cv.recipes:
-        L.append("- Craft recipes the mod added to `ui_itm_craft.script` are the items' `craft`: " +
+        L.append(f"- Craft recipes the mod added to `ui_itm_craft.script` are the module's recipes file `{cv.recipe_file}`: " +
                  ", ".join(f"`{r}` at `{at}`" for r, rows in sorted(cv.recipes.items()) for at, _, _ in rows) + ".")
     L += ["- An item asset sits in `items\\<family>\\<group>\\`: the family is the item class's (Dead Air's scopes are of "
           "the food class, so they are under `eatable`); the group is the shortest start of the section's name that is "
@@ -186,7 +188,7 @@ def write(cv):
     rows = []
     for rel, st in rep["scripts"]:
         if rel == "scripts\\ui_itm_craft.script" and cv.craft_whole:
-            rows.append((f"`{rel}`", "replaces a game script", "nothing left: its change is the recipes, now the items' `craft`"))
+            rows.append((f"`{rel}`", "replaces a game script", "nothing left: its change is the recipes, now the module's recipes file"))
         elif st == "new":
             rows.append((f"`{rel}`", "new", "a module script (`port\\" + rel + "`)"))
         elif rel in rep["rollback_only"]:

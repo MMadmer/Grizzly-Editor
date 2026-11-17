@@ -1,5 +1,6 @@
-//! The Characters, Items and World Rules tabs (docs/UI_DESIGN.md, section 6, "Characters",
-//! "Items" and "World Rules"; CLAUDE.md, "Characters" and "The mode's world").
+//! The Characters, Items, Economy and World Rules tabs (docs/UI_DESIGN.md, section 6,
+//! "Characters", "Items", "Economy" and "World Rules"; CLAUDE.md, "Characters", "Items" and "The
+//! mode's world").
 //!
 //!
 //! - **Characters** ([`characters`]): the `characters` singleton tab - a list of 260 pt with a
@@ -17,6 +18,10 @@
 //!   make the file at once, Delete... asks through `dlg.delete_item`. What the item resolves to
 //!   and its problems are worked out on the pools for the item as it is edited
 //!   (`Items::check_edit`); the lists the Characters tab lacks are [`item_lists`].
+//! - **Economy** ([`economy`]): the `economy` singleton tab - the module's traders, loot tables
+//!   and recipes, a page each: the files of the kind, the rows of the one selected, saved to the
+//!   file as they are edited (`Items::save_table`). Who sells an item, who carries it and what
+//!   makes it is said there and nowhere else; the Items tab shows it as a fact and opens this one.
 //! - **World Rules** ([`world`]): the `world_rules` singleton tab, saved to `mod.ltx` as it is
 //!   edited through `world.set`: Original Game, Player Start and Starting Kit on the surface,
 //!   Applies On, Playable Area and Transitions under one folded More; a problems bar and drawer
@@ -27,8 +32,8 @@
 //!   the frames only look at; a list that is still loading shows busy.
 //! - [`item_picker`] - the one item picker both tabs use (a kit row, a stock row, the mode's
 //!   start kit).
-//! - [`register`] - `characters.view`, `items.view`, `world.view`; [`install`] - the two tabs and their Mod menu
-//!   rows (at `gz_ui_mod::mod_menu_slot`).
+//! - [`register`] - `characters.view`, `items.view`, `economy.view`, `world.view`; [`install`] -
+//!   the tabs and their Mod menu rows (at `gz_ui_mod::mod_menu_slot`).
 //!
 //! What comes from a list is picked with the kit's `Combo` and `PickList` ([`picker::list_picker`],
 //! [`picker::row_combo`]). Widgets the kit lacks, local to this crate:
@@ -49,6 +54,8 @@
 mod call;
 mod char_form;
 pub mod characters;
+pub mod economy;
+mod economy_view_cmd;
 mod item_form;
 mod item_hands;
 pub mod item_lists;
@@ -74,6 +81,7 @@ pub fn install(b: &mut ShellBuilder) {
     b.translation(include_str!("items.ru.lua"));
     characters::install(b);
     items::install(b);
+    economy::install(b);
     world::install(b);
     b.action(
         Action::new(gz_ui_mod::menu::CHARACTERS, "Characters", "Mod", "ui.tab")
@@ -88,6 +96,12 @@ pub fn install(b: &mut ShellBuilder) {
             .enabled(gz_ui_mod::menu::with_project),
     );
     b.action(
+        Action::new(gz_ui_mod::menu::ECONOMY, "Economy", "Mod", "ui.tab")
+            .icon(Icon::Trader)
+            .args(|_| args(&[("action", "open"), ("kind", economy::TAB)]))
+            .enabled(gz_ui_mod::menu::with_project),
+    );
+    b.action(
         Action::new(gz_ui_mod::menu::WORLD_RULES, "World Rules", "Mod", "ui.tab")
             .icon(Icon::World)
             .args(|_| args(&[("action", "open"), ("kind", world::TAB)]))
@@ -95,13 +109,15 @@ pub fn install(b: &mut ShellBuilder) {
     );
     gz_ui_mod::menu::row(b, gz_ui_mod::menu::CHARACTERS, None);
     gz_ui_mod::menu::row(b, gz_ui_mod::menu::ITEMS, None);
+    gz_ui_mod::menu::row(b, gz_ui_mod::menu::ECONOMY, None);
     gz_ui_mod::menu::row(b, gz_ui_mod::menu::WORLD_RULES, None);
 }
 
-/// The commands of this package: `characters.view`, `items.view`, `world.view`.
+/// The commands of this package: `characters.view`, `items.view`, `economy.view`, `world.view`.
 pub fn register(reg: &mut Registry) {
     view_cmd::register(reg);
     item_view_cmd::register(reg);
+    economy_view_cmd::register(reg);
 }
 
 #[cfg(test)]
@@ -222,13 +238,6 @@ mod i18n_tests {
             ("I421", "the icon picture is not there: qa.png (beside the asset)".into()),
             ("I421", "the icon picture cannot be read: qa.png: unreadable".into()),
             ("I422", "the rectangle 10, 2, 2 x 1 cells reaches past the texture 'ui\\qa' (512 x 512 px, 10 x 10 cells)".into()),
-            ("I423", "the recipe's tool 'qa_tool' is no section of the game or of the module".into()),
-            ("I423", "the recipe's part 'qa_part' is no section of the game or of the module".into()),
-            ("I424", "the trader's config 'qa_trader' is neither the game's nor the project's (configs\\misc\\trade\\qa_trader.ltx)".into()),
-            ("I424", "the trader's config configs\\misc\\trade\\qa.ltx has no section [supplies_qa]".into()),
-            ("I424", "the config configs\\items\\qa.ltx is neither the game's nor the project's".into()),
-            ("I425", "'qa_band' is no community of the game, nor a community and one of its ranks".into()),
-            ("I426", "no game is linked: the models, sounds, textures, particle effects, string ids, communities and traders' files the item names were not looked up".into()),
             ("I427", format!("'{key}' takes a string")),
             ("I427", "'abstract' takes true or false".into()),
             ("I427", format!("'{key}' takes a number")),
@@ -237,12 +246,8 @@ mod i18n_tests {
             ("I427", "base names a section no config can hold".into()),
             ("I427", "hud.base names a section no config can hold".into()),
             ("I427", "the base names a section no config can hold".into()),
-            ("I427", "a recipe's at names a section no config can hold".into()),
-            ("I427", "a part of a recipe names a section no config can hold".into()),
-            ("I427", "a row of lists names a section no config can hold".into()),
             ("I427", "base is a string or a list of them".into()),
             ("I427", "the base is a string or a list of them".into()),
-            ("I427", "a part of a recipe is a string or a list of them".into()),
             ("I427", "unset, a list of keys, is a string or a list of them".into()),
             ("I427", "name is a string or { language = text }".into()),
             ("I427", "set takes key = value".into()),
@@ -254,15 +259,7 @@ mod i18n_tests {
             ("I427", "icon is { texture, x, y, w, h }, in cells, or a picture beside the asset".into()),
             ("I427", "icon.texture names a texture".into()),
             ("I427", "icon is { texture, x, y, w, h }, in cells: x and y are its place".into()),
-            ("I427", "loot is { count, chance, by }".into()),
-            ("I427", "loot.count is a number or { min, max }".into()),
-            ("I427", "loot.by is { <community or community_rank> = chance }".into()),
-            ("I427", "a row of sold names the trader's config: by".into()),
-            ("I427", "sold.by is a trader's config, or a config's path under configs".into()),
-            ("I427", "a row of sold is { by, supplies, count, chance }".into()),
-            ("I427", "sold is a list of { by, supplies, count, chance }".into()),
             ("I427", "scene.like names the item whose scene it takes".into()),
-            ("I427", "scene is the item whose scene it takes, or { like, sound, camera, time, helmet, anm, hud_anm, hud }".into()),
             ("I427", "scene.sound is a value no config can carry".into()),
             ("I427", "scene.hud is { base, set, unset, add, drop }".into()),
             ("I427", "hud of a change changes the section the item's hud names: base belongs to a new item's hud".into()),
@@ -270,23 +267,56 @@ mod i18n_tests {
             ("I427", "sections is a list of { name, base, set } and { edit, set }".into()),
             ("I427", "a row of sections has a name (a section it makes) or edit (one it changes)".into()),
             ("I427", "[wpn_ak74_hud] exists and keeps its parents: base belongs to a section a row makes".into()),
-            ("I427", "craft is a list of { at, count, parts }".into()),
-            ("I427", "a recipe is { at, count, parts }".into()),
-            ("I427", "a recipe names the tool or workbench it is made at: at".into()),
-            ("I427", "a recipe takes one to four parts".into()),
-            ("I427", "lists is a list of { file, section, key, value } and { file, section, key, add | drop }".into()),
-            ("I427", "a row of lists is { file, section, key, value }".into()),
-            ("I427", "a row of lists holds a value no config can carry".into()),
-            ("I427", "a row of lists names a config by its path under configs".into()),
-            ("I427", "a row of lists names its section".into()),
-            ("I427", "a row of lists names a key a config can hold".into()),
-            ("I427", "a row of lists sets a value, adds to a list or drops from one: one of them".into()),
-            ("I427", "a row of lists holds a member no list can carry".into()),
             ("I427", "made by a newer Grizzly Editor (item = 2; this one reads up to 1): update the editor to open it".into()),
             ("I428", "the module's config configs\\items\\qa.ltx does not compose, so what the items resolve to may differ: line 4: no section".into()),
             ("I429", format!("the HUD section [{h}] has no base, and the item's bases name no HUD section: it holds only what hud.set says (hud.base names one)")),
-            ("I430", "the death loot has no count (loot.count): the death manager never spawns an item without one".into()),
             ("I431", "[qa_bread] has a use scene already: 'like' is what a new scene starts from, and this one keeps its own".into()),
+            ("I426", "no game is linked: the models, sounds, textures, particle effects and string ids the item names were not looked up".into()),
+            ("I427", "scene is the item whose scene it takes, or { like, sound, camera, time, helmet, fit, anm, hud_anm, hud, set }".into()),
+            ("I432", "'sold' is no key of an item, and the game does not read it: who sells an item is the trader's to say: a trader file (.tradeasset) with a stock row of the item".into()),
+            ("I432", "'loot' is no key of an item, and the game does not read it: who carries an item is the loot table's to say: a loot table (.lootasset) with a drop of the item".into()),
+            ("I432", "'craft' is no key of an item, and the game does not read it: what makes an item is a recipe's to say: a recipes file (.recipeasset) with a recipe that makes the item".into()),
+            ("I432", "'lists' is no key of an item, and the game does not read it: a line of another config is not an item's to say: a use scene's own keys are scene.set, anything else is a patch (.ltxp)".into()),
+            ("I433", "[wpn_qa] is the item of items/qa.itemasset: what changes it is written there, in its own file".into()),
+            // a trader, a loot table, recipes: what the Economy tab shows of their check
+            ("I400", "a trader file returns one table".into()),
+            ("I400", "a loot table file returns one table".into()),
+            ("I400", "a recipes file returns one table".into()),
+            ("I400", "made by a newer Grizzly Editor (trade = 2; this one reads up to 1): update the editor to open it".into()),
+            ("I412", "a chance of 1.5: a chance is from 0 to 1".into()),
+            ("I417", "'qa_item' is no section of the game or of the module: there is no such item".into()),
+            ("I423", "the recipe's result 'qa_item' is no section of the game or of the module".into()),
+            ("I423", "the recipe's tool 'qa_tool' is no section of the game or of the module".into()),
+            ("I423", "the recipe's part 'qa_part' is no section of the game or of the module".into()),
+            ("I424", "the trader 'qa_trader' is neither the game's nor the project's: there is no configs\\misc\\trade\\qa_trader.ltx".into()),
+            ("I424", "the trader's config configs\\misc\\trade\\qa.ltx has no stock section [supplies_qa]".into()),
+            ("I425", "'qa_band' is no community of the game, nor a community and one of its ranks".into()),
+            ("I426", "no game is linked: the traders' configs and the communities the file names were not looked up".into()),
+            ("I427", "a trader file names the trader: trader".into()),
+            ("I427", "trader is a trader's config (trade_military), or a config's path under configs".into()),
+            ("I427", "stock is a list of { item, supplies, count, chance }".into()),
+            ("I427", "drops is a list of { item, count, chance, by }".into()),
+            ("I427", "recipes is a list of { makes, count, at, parts }".into()),
+            ("I427", "a row of stock is a table".into()),
+            ("I427", "a row of drops is a table".into()),
+            ("I427", "a row of recipes is a table".into()),
+            ("I427", "a row of stock names its item: item".into()),
+            ("I427", "a row of drops names its item: item".into()),
+            ("I427", "a recipe names what it makes: makes".into()),
+            ("I427", "a recipe names the tool or workbench it is made at: at".into()),
+            ("I427", "a recipe takes one to four parts".into()),
+            ("I427", "the item of a stock row names a section no config can hold".into()),
+            ("I427", "the item of a drop names a section no config can hold".into()),
+            ("I427", "what a recipe makes names a section no config can hold".into()),
+            ("I427", "a recipe's at names a section no config can hold".into()),
+            ("I427", "a part of a recipe names a section no config can hold".into()),
+            ("I427", "a part of a recipe is a string or a list of them".into()),
+            ("I427", "stock.supplies names a section no config can hold".into()),
+            ("I427", "stock.supplies is a string or a list of them".into()),
+            ("I427", "stock.count is a number not below 0 (0 takes the item off the shelf)".into()),
+            ("I427", "drops.count is a number or { min, max }".into()),
+            ("I427", "drops.by is { <community or community_rank> = chance }".into()),
+            ("I430", "no drop of 'qa_item' has a count: the death manager never spawns an item without one".into()),
         ];
         // three plain English words of the sentence in a row: a part of it left in English
         let english = |en: &str, tr: &str| {

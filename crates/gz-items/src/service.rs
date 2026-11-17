@@ -23,10 +23,25 @@ use crate::compose::{ConfigFile, ModuleConfigs};
 use crate::model::{self, Issue, Item};
 use crate::resolve::Resolution;
 use crate::roster::Roster;
-use crate::validate::{self, Cx, Lookups, NoGame};
+use crate::tables::{self, TableFile, TableKind};
+use crate::validate::{self, Cx, Lookups, NoGame, TableCx};
 
-/// The extensions whose changes the roster hears about: the items, the configs, the pictures.
-const WATCHED: [&str; 9] = ["itemasset", "ltx", "ltxp", "png", "tga", "jpg", "jpeg", "bmp", "dds"];
+/// The extensions whose changes the roster hears about: the items, the tables, the configs, the
+/// pictures.
+const WATCHED: [&str; 12] = [
+    "itemasset",
+    "tradeasset",
+    "lootasset",
+    "recipeasset",
+    "ltx",
+    "ltxp",
+    "png",
+    "tga",
+    "jpg",
+    "jpeg",
+    "bmp",
+    "dds",
+];
 
 /// The catalog the editor read, and from where.
 #[derive(Clone, Debug, Default)]
@@ -60,9 +75,12 @@ pub struct Items {
     changes: Arc<RevCounter>,
 }
 
-/// The files a roster reads, project-relative: the items, the module's configs, its patches.
+/// The files a roster reads, project-relative: the items, the tables, the module's configs, its
+/// patches.
 struct Files {
     items: Vec<RelPath>,
+    /// The traders, the loot tables and the recipes.
+    tables: Vec<RelPath>,
     /// `(project path, path under configs)`.
     configs: Vec<(RelPath, String)>,
     patches: Vec<RelPath>,
@@ -113,6 +131,11 @@ impl Items {
         let shipped = |r: &RelPath| !gz_mod::outside_build(rules, r.as_str());
         let items: Vec<RelPath> =
             tree.files_with_extension("itemasset").into_iter().filter(shipped).collect();
+        let tables: Vec<RelPath> = TableKind::ALL
+            .into_iter()
+            .flat_map(|k| tree.files_with_extension(k.extension().trim_start_matches('.')))
+            .filter(shipped)
+            .collect();
         let mut configs: Vec<(RelPath, String)> = Vec::new();
         let is_ltx = |r: &RelPath| r.as_str().to_ascii_lowercase().ends_with(".ltx");
         if let Ok(under) = RelPath::new("gamedata/configs") {
@@ -161,7 +184,7 @@ impl Items {
             })
             .filter(shipped)
             .collect();
-        Files { items, configs, patches }
+        Files { items, tables, configs, patches }
     }
 
     /// The stamp of the files: the watcher's count of their changes and their list, or - without
@@ -175,7 +198,12 @@ impl Items {
         if live {
             h = fnv(h, &self.changes.get().0.to_le_bytes());
         }
-        let all = files.items.iter().chain(files.configs.iter().map(|(r, _)| r)).chain(&files.patches);
+        let all = files
+            .items
+            .iter()
+            .chain(&files.tables)
+            .chain(files.configs.iter().map(|(r, _)| r))
+            .chain(&files.patches);
         for rel in all {
             h = fnv(h, rel.key().as_bytes());
             if live {
@@ -229,6 +257,8 @@ impl Items {
                     exec.par_io(files.items.clone(), |rel| (rel.as_str().to_owned(), read(&rel)));
                 // the order the game takes them in: of two changes of one key the later path wins
                 items.sort_by_cached_key(|(f, _)| gz_base::text::game_order_key(f));
+                let table_files: Vec<(String, Result<String, String>)> =
+                    exec.par_io(files.tables.clone(), |rel| (rel.as_str().to_owned(), read(&rel)));
                 let text_of = |rel: &RelPath| -> Option<String> {
                     gz_editor::fsx::read_opt(&rel.to_fs(&root))
                         .ok()
@@ -259,7 +289,16 @@ impl Items {
                 }
                 cfg.xms.sort_by_cached_key(|f| gz_base::text::game_order_key(&f.rel));
                 cfg.patches.sort_by_cached_key(|p| gz_base::text::game_order_key(&p.rel));
-                Roster::build(stamp, &module, items, game, &cfg, &root, &crate::atlas::picture_size)
+                Roster::build(
+                    stamp,
+                    &module,
+                    items,
+                    table_files,
+                    game,
+                    &cfg,
+                    &root,
+                    &crate::atlas::picture_size,
+                )
             })
             .await
     }
@@ -398,6 +437,63 @@ impl Items {
         Some(self.exec.io(move || issues_of(&roster, i, &catalog.catalog, &*lookups, &root)).await)
     }
 
+    /// Every problem of a table file of the roster - a trader, a loot table, recipes -,
+    /// positioned by path: the reader's and the check's, the game looked up.
+    pub async fn table_problems(&self, editor: &Arc<Editor>, file: &str) -> Option<Vec<Issue>> {
+        let roster = self.fresh_roster(editor).await;
+        let i = roster.table_index(file)?;
+        let lookups = self.lookups(editor).await;
+        Some(self.exec.io(move || table_issues_of(&roster, i, &*lookups)).await)
+    }
+
+    /// The problems of every table file of a roster, by entry.
+    pub async fn all_table_problems(&self, editor: &Arc<Editor>, roster: Arc<Roster>) -> Vec<Vec<Issue>> {
+        let lookups = self.lookups(editor).await;
+        self.exec
+            .io(move || (0..roster.tables.len()).map(|i| table_issues_of(&roster, i, &*lookups)).collect())
+            .await
+    }
+
+    /// Saves an edited table file: the difference between the file as it was read (`before`) and
+    /// as it is now, written into the file's own text - comments, layout and keys the editor does
+    /// not know stay. A file that does not exist yet is written canonically. Answers the file,
+    /// project-relative.
+    pub async fn save_table(
+        &self,
+        editor: &Editor,
+        before: Option<&TableFile>,
+        after: &TableFile,
+    ) -> Result<String, CmdError> {
+        let file = after.file.as_str();
+        let kind = after.kind();
+        if TableKind::of_file(file) != Some(kind) {
+            return Err(CmdError::invalid(format!(
+                "{file}: a {} is a {} file",
+                kind.name(),
+                kind.extension()
+            )));
+        }
+        let rel = RelPath::new(file).map_err(|e| CmdError::invalid(format!("{file}: {e}")))?;
+        let abs = rel.to_fs(&self.root);
+        let exists = self.exec.io(move || abs.is_file()).await;
+        if exists {
+            let mut f = gz_asset::read(editor, &rel).await?;
+            let old = match before {
+                Some(b) => tables::to_value(b),
+                None => tables::from_value(kind, &f.doc.value())
+                    .map(|(t, _)| tables::to_value(&t))
+                    .map_err(CmdError::invalid)?,
+            };
+            f.apply(&old, &tables::to_value(after))?;
+            gz_asset::write(editor, &mut f).await?;
+        } else {
+            gz_asset::write_text(editor, &rel, tables::write(after)).await?;
+        }
+        self.project.tree.refresh().await;
+        self.changes.bump();
+        Ok(rel.as_str().to_owned())
+    }
+
     /// What an item a form edits resolves to and every problem of it, as the build would see the
     /// module with the item written into its file (`item.file`, a file of the roster or a new
     /// one): that one file read and the composition made again on the CPU pool, what the game is
@@ -493,14 +589,33 @@ pub fn issues_of(
     out
 }
 
-/// The problems the build refuses a module for: the first error of any item, the game not
-/// looked up (what a build needs is in the module). Blocking.
+/// The problems of table entry `i`: the reader's, then the check's. Blocking.
+#[must_use]
+pub fn table_issues_of(roster: &Roster, i: usize, lookups: &dyn Lookups) -> Vec<Issue> {
+    let Some(t) = roster.tables.get(i) else { return Vec::new() };
+    let mut out = t.issues.clone();
+    if !t.readable || out.iter().any(Issue::is_error) {
+        return out;
+    }
+    let counted = roster.counted();
+    let cx = TableCx { lookups, game: Some(&roster.game), counted: &counted };
+    out.extend(validate::validate_table(&t.table, &roster.composition, &cx));
+    out
+}
+
+/// The problems the build refuses a module for: the first error of any item or table file, the
+/// game not looked up (what a build needs is in the module). Blocking.
 #[must_use]
 pub fn build_errors(roster: &Roster, catalog: &Catalog, root: &Path) -> Vec<(String, Issue)> {
     let mut out = Vec::new();
     for (i, e) in roster.entries.iter().enumerate() {
         for issue in issues_of(roster, i, catalog, &NoGame, root).into_iter().filter(Issue::is_error) {
             out.push((e.item.file.clone(), issue));
+        }
+    }
+    for (i, t) in roster.tables.iter().enumerate() {
+        for issue in table_issues_of(roster, i, &NoGame).into_iter().filter(Issue::is_error) {
+            out.push((t.table.file.clone(), issue));
         }
     }
     out

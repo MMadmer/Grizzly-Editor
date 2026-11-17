@@ -1,10 +1,11 @@
-//! The module's items laid over the linked game's configs, in the game's order
+//! The module's items and tables laid over the linked game's configs, in the game's order
 //! (`docs/assets/ITEM.md`, "Order"): the game's tree with the module's files that replace a game config, then
 //! the items - new sections first (a base that is another item of the module before the item
-//! made from it, else in path order), then the changes in path order -, then the module's
-//! `configs\xms\*.ltx`, then its `patch\*.ltxp`. Every change reaches what inherits
-//! (`gz-ltx`'s `tree.rs`). What an item says of another config file (`loot`, `sold`, `lists`) is a
-//! `#file` patch of that file ([`FilePatch`]), as the game makes it.
+//! made from it, else in path order), then the changes in path order -, then the module's traders,
+//! loot tables and recipes (each kind in path order), then the module's `configs\xms\*.ltx`, then
+//! its `patch\*.ltxp`. Every change reaches what inherits (`gz-ltx`'s `tree.rs`). An item's use
+//! scene and a table's rows are `#file` patches of the configs they are about ([`FilePatch`]), as
+//! the game makes them.
 //!
 //! The files of the tree are named so their origin can be told: the game's as the game names
 //! them (`configs\...`), a module's config as `@` and its path in the game (`@configs\xms\...`),
@@ -15,7 +16,8 @@ use gz_luadata::{Limits, LuaDoc, Seg};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::atlas::Plan;
-use crate::model::{Changes, Count, Icon, Issue, Item, Kind, Scene, SetValue, valid_section};
+use crate::model::{Changes, Count, Icon, Issue, Item, Kind, Scene, valid_section};
+use crate::tables::{Rows, TableFile, trader_file};
 
 /// The death loot's counts: `[item_count]`.
 pub const DEATH_COUNTS: &str = "misc\\death_generic.ltx";
@@ -92,12 +94,23 @@ pub struct Applied {
     pub issues: Vec<Issue>,
 }
 
+/// What the composition did with one table file.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppliedTable {
+    /// What it says of other config files.
+    pub file_patches: Vec<FilePatch>,
+    /// The game leaves it out: its own shape is not one the game reads.
+    pub left_out: bool,
+}
+
 /// The game's tree with the module laid over it.
 #[derive(Clone, Debug, Default)]
 pub struct Composition {
     pub ltx: Ltx,
     /// Per item of the roster, in its order.
     pub applied: Vec<Applied>,
+    /// Per table file of the roster, in its order.
+    pub tables: Vec<AppliedTable>,
     /// The module's `#file` patches (its `.ltxp` files') and the items', in order.
     pub file_patches: Vec<FilePatch>,
     /// A module config that does not compose: `(file, why)`.
@@ -118,7 +131,7 @@ impl Composition {
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".itemasset") {
             (Origin::Item, name)
-        } else if lower.ends_with(".ltxp") {
+        } else if lower.ends_with(".ltxp") || gz_project::asset_kind::TableKind::of_file(&lower).is_some() {
             (Origin::Module, name)
         } else {
             (Origin::Game, name)
@@ -222,8 +235,7 @@ struct ItemPlan {
     hud_parents: Vec<String>,
     hud_ops: Vec<Directive>,
     sections: Vec<SectionPlan>,
-    /// `(at, count, parts)`.
-    craft: Vec<(String, u32, Vec<String>)>,
+    /// The use scene: blocks of the scenes' config and, for its HUD, of the system config.
     lists: Vec<ListBlock>,
 }
 
@@ -244,7 +256,6 @@ fn plan_item(item: &Item, module: &str, plan: &Plan, lines: &Lines) -> Result<It
         hud_parents: Vec::new(),
         hud_ops: Vec::new(),
         sections: Vec::new(),
-        craft: Vec::new(),
         lists: Vec::new(),
     };
     match item.kind() {
@@ -371,11 +382,8 @@ fn plan_item(item: &Item, module: &str, plan: &Plan, lines: &Lines) -> Result<It
         changes(&mut ops, &s.changes, &at, lines);
         p.sections.push(SectionPlan { make, name, parents: lower(&s.base), ops, at });
     }
-    for c in &item.craft {
-        p.craft.push((c.at.to_ascii_lowercase(), c.count.unwrap_or(1), lower(&c.parts)));
-    }
 
-    // the lines of other configs: the death loot, the traders' stock, the use scene, the lines
+    // the use scene: lines of the scenes' config
     let block = |file: &str, sec: &str, parents: Option<Vec<String>>, line: u32| ListBlock {
         file: file.to_owned(),
         section: sec.to_owned(),
@@ -384,45 +392,13 @@ fn plan_item(item: &Item, module: &str, plan: &Plan, lines: &Lines) -> Result<It
         line,
     };
     let set = |key: &str, value: String, line: u32| d(Op::Set { key: key.to_owned(), value }, line);
-    if let Some(l) = &item.loot {
-        let line = lines.at(&[Seg::key("loot")]);
-        let count = match l.count {
-            None => None,
-            Some(Count::One(n)) => Some(number(n)),
-            Some(Count::Range(a, b)) => Some(format!("{}, {}", number(a), number(b))),
-        };
-        if let Some(c) = count {
-            let mut b = block(DEATH_COUNTS, "item_count", None, line);
-            b.ops.push(set(&section, c, line));
-            p.lists.push(b);
-        }
-        // every community and rank inherits [base]
-        if let Some(c) = l.chance {
-            let mut b = block(DEATH_CHANCES, "base", None, line);
-            b.ops.push(set(&section, number(c), line));
-            p.lists.push(b);
-        }
-        for (who, c) in &l.by {
-            let mut b = block(DEATH_CHANCES, &who.to_ascii_lowercase(), None, line);
-            b.ops.push(set(&section, number(*c), line));
-            p.lists.push(b);
-        }
-    }
-    for (i, s) in item.sold.iter().enumerate() {
-        let line = lines.at(&[Seg::key("sold"), Seg::Index(i)]);
-        let Some(file) = s.file() else { continue };
-        let value = format!("{}, {}", number(s.count.unwrap_or(1.0)), number(s.chance.unwrap_or(1.0)));
-        for sup in s.sections() {
-            let mut b = block(&file, &sup, None, line);
-            b.ops.push(set(&section, value.clone(), line));
-            p.lists.push(b);
-        }
-    }
     if let Some(scene) = &item.scene {
         let line = lines.at(&[Seg::key("scene")]);
-        let (like, keys, hud) = match scene {
-            Scene::Like(l) => (Some(l.clone()), &[][..], None),
-            Scene::Table { like, keys, hud } => (like.clone(), keys.as_slice(), hud.as_ref()),
+        let (like, keys, hud, own) = match scene {
+            Scene::Like(l) => (Some(l.clone()), &[][..], None, &[][..]),
+            Scene::Table { like, keys, hud, set } => {
+                (like.clone(), keys.as_slice(), hud.as_ref(), set.as_slice())
+            }
         };
         let mut b = block(SCENES, &section, like.map(|l| vec![l.to_ascii_lowercase()]), line);
         // the keys the game's scene script reads, under the names an author writes
@@ -431,12 +407,20 @@ fn plan_item(item: &Item, module: &str, plan: &Plan, lines: &Lines) -> Result<It
             ("camera", "cam"),
             ("time", "tm"),
             ("helmet", "helm"),
+            ("fit", "fit"),
             ("anm", "anm"),
             ("hud_anm", "hud_anm"),
         ] {
             if let Some((_, v)) = keys.iter().find(|(k, _)| k == from) {
                 b.ops.push(set(to, v.ltx(), line));
             }
+        }
+        // the scene's other keys, as its section holds them
+        for (k, v) in own {
+            b.ops.push(d(
+                Op::Set { key: k.clone(), value: v.ltx() },
+                lines.at(&[Seg::key("scene"), Seg::key("set"), Seg::key(k)]),
+            ));
         }
         if let Some(h) = hud {
             if !keys.iter().any(|(k, _)| k == "anm") {
@@ -451,25 +435,6 @@ fn plan_item(item: &Item, module: &str, plan: &Plan, lines: &Lines) -> Result<It
         } else {
             p.lists.push(b);
         }
-    }
-    for (i, l) in item.lists.iter().enumerate() {
-        let line = lines.at(&[Seg::key("lists"), Seg::Index(i)]);
-        let Some(target) = l.section.as_deref() else { continue };
-        let file = l.file.as_deref().and_then(gz_ltx::patch::config_path).unwrap_or_default();
-        let mut b = block(&file, &target.to_ascii_lowercase(), None, line);
-        let key = l.key.clone().unwrap_or_else(|| section.clone());
-        b.ops.push(d(
-            match (&l.add, &l.drop) {
-                (Some(m), _) => Op::Append { key, value: m.clone() },
-                (None, Some(m)) => Op::Remove { key, value: m.clone() },
-                // no value is a bare key
-                (None, None) => {
-                    Op::Set { key, value: l.value.as_ref().map(SetValue::ltx).unwrap_or_default() }
-                }
-            },
-            line,
-        ));
-        p.lists.push(b);
     }
     Ok(p)
 }
@@ -611,10 +576,14 @@ fn apply_to(
     b.apply(source, &list, 1);
 }
 
+/// A recipe as the composition takes it: `(at, makes, count, parts, line)`.
+type RecipeLine = (String, String, u32, Vec<String>, u32);
+
 /// `[xms_craft] <n> = at, result, count, part, ...`: `n` goes on after the highest number the
 /// section holds, padded so that the keys' order as text is the order the recipes came in.
-fn add_recipes(b: &mut Builder, source: &str, p: &ItemPlan, line: u32) {
-    if p.craft.is_empty() {
+/// `recipes` are `(at, makes, count, parts, line)`.
+fn add_recipes(b: &mut Builder, source: &str, recipes: &[RecipeLine]) {
+    if recipes.is_empty() {
         return;
     }
     let mut next: u64 = 1;
@@ -626,16 +595,83 @@ fn add_recipes(b: &mut Builder, source: &str, p: &ItemPlan, line: u32) {
         }
     }
     let mut ops = Vec::new();
-    for (at, count, parts) in &p.craft {
-        let mut value = format!("{at}, {}, {count}", p.section);
+    for (at, makes, count, parts, line) in recipes {
+        let mut value = format!("{at}, {makes}, {count}");
         for part in parts {
             value.push_str(", ");
             value.push_str(part);
         }
-        ops.push(d(Op::Set { key: format!("{next:06}"), value }, line));
+        ops.push(d(Op::Set { key: format!("{next:06}"), value }, *line));
         next += 1;
     }
+    let line = recipes.first().map_or(0, |r| r.4);
     apply_to(b, source, "xms_craft", None, &ops, line);
+}
+
+/// What the game makes of a table file (`PlanTable`): its blocks of other configs and its
+/// recipes. `lines` are the file's own.
+fn plan_table(table: &TableFile, lines: &Lines) -> (Vec<ListBlock>, Vec<RecipeLine>) {
+    let mut blocks = Vec::new();
+    let mut recipes = Vec::new();
+    let mut push = |file: &str, section: &str, op: Op, line: u32| {
+        blocks.push(ListBlock {
+            file: file.to_owned(),
+            section: section.to_owned(),
+            parents: None,
+            ops: vec![d(op, line)],
+            line,
+        });
+    };
+    let set = |key: &str, value: String| Op::Set { key: key.to_owned(), value };
+    match &table.rows {
+        Rows::Trade { trader, stock } => {
+            let Some(file) = trader_file(trader) else { return (blocks, recipes) };
+            for (i, s) in stock.iter().enumerate() {
+                let line = lines.at(&[Seg::key("stock"), Seg::Index(i)]);
+                let item = s.item.to_ascii_lowercase();
+                let value =
+                    format!("{}, {}", number(s.count.unwrap_or(1.0)), number(s.chance.unwrap_or(1.0)));
+                for sup in s.sections() {
+                    // a count of 0 takes the item off the shelf
+                    let op = if s.removes() { Op::Delete(item.clone()) } else { set(&item, value.clone()) };
+                    push(&file, &sup, op, line);
+                }
+            }
+        }
+        Rows::Loot(drops) => {
+            for (i, l) in drops.iter().enumerate() {
+                let line = lines.at(&[Seg::key("drops"), Seg::Index(i)]);
+                let item = l.item.to_ascii_lowercase();
+                let count = match l.count {
+                    None => None,
+                    Some(Count::One(n)) => Some(number(n)),
+                    Some(Count::Range(a, b)) => Some(format!("{}, {}", number(a), number(b))),
+                };
+                if let Some(c) = count {
+                    push(DEATH_COUNTS, "item_count", set(&item, c), line);
+                }
+                // every community and rank inherits [base]
+                if let Some(c) = l.chance {
+                    push(DEATH_CHANCES, "base", set(&item, number(c)), line);
+                }
+                for (who, c) in &l.by {
+                    push(DEATH_CHANCES, &who.to_ascii_lowercase(), set(&item, number(*c)), line);
+                }
+            }
+        }
+        Rows::Recipes(list) => {
+            for (i, c) in list.iter().enumerate() {
+                recipes.push((
+                    c.at.to_ascii_lowercase(),
+                    c.makes.to_ascii_lowercase(),
+                    c.count.unwrap_or(1),
+                    lower(&c.parts),
+                    lines.at(&[Seg::key("recipes"), Seg::Index(i)]),
+                ));
+            }
+        }
+    }
+    (blocks, recipes)
 }
 
 /// The item applied as the game applies it (`apply`): what it made and changed.
@@ -690,13 +726,23 @@ fn apply_plan(b: &mut Builder, item: &Item, p: &ItemPlan, lines: &Lines, a: &mut
         );
         a.owned.push(s.name.clone());
     }
-    add_recipes(b, source, p, lines.at(&[Seg::key("craft")]));
+}
+
+/// The table files of a module as the composition takes them: in the game's order (traders,
+/// loot tables, recipes, each kind by path), with their files' lines and whether the game
+/// refuses their shape.
+#[derive(Clone, Copy, Default)]
+pub struct Tables<'a> {
+    pub files: &'a [TableFile],
+    pub lines: &'a [std::sync::Arc<Lines>],
+    pub malformed: &'a [bool],
 }
 
 /// Lays the module over `game` in the game's order. `items` in path order, `lines` their files'
 /// own (the lines values are written at), `malformed` the items whose own shape the game
-/// refuses (the reader's errors), `plan` the icon atlas.
+/// refuses (the reader's errors), `plan` the icon atlas, `tables` the module's table files.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn compose(
     game: &Ltx,
     cfg: &ModuleConfigs,
@@ -705,8 +751,13 @@ pub fn compose(
     malformed: &[bool],
     module: &str,
     plan: &Plan,
+    tables: Tables<'_>,
 ) -> Composition {
-    let mut out = Composition { applied: vec![Applied::default(); items.len()], ..Composition::default() };
+    let mut out = Composition {
+        applied: vec![Applied::default(); items.len()],
+        tables: vec![AppliedTable::default(); tables.files.len()],
+        ..Composition::default()
+    };
     let mut b = Builder::from_ltx(game, Dialect::Editor);
     b.set_merge(true);
     let every = || cfg.all.iter().chain(&cfg.xms).chain(&cfg.replaced);
@@ -814,21 +865,46 @@ pub fn compose(
         }
     }
 
-    // the items' lines: the system config's applied now, the other configs' kept for whoever reads them
-    for (i, blk) in lists {
-        let source = items.get(i).map(|it| it.file.clone()).unwrap_or_default();
+    // a block of lines: the system config's applied now, another config's kept for whoever reads it
+    let route = |b: &mut Builder, source: &str, blk: ListBlock| -> Option<FilePatch> {
         let mut ds =
             vec![d(Op::Section { name: blk.section.clone(), parents: blk.parents.clone() }, blk.line)];
         ds.extend(blk.ops);
         if blk.file.is_empty() || b.reads(&blk.file) {
-            b.apply(&source, &ds, 1);
+            b.apply(source, &ds, 1);
         }
-        if !blk.file.is_empty() {
-            let fp = FilePatch { file: blk.file, source, layer: 1, directives: ds };
+        (!blk.file.is_empty()).then(|| FilePatch {
+            file: blk.file,
+            source: source.to_owned(),
+            layer: 1,
+            directives: ds,
+        })
+    };
+    // the items' use scenes
+    for (i, blk) in lists {
+        let source = items.get(i).map(|it| it.file.clone()).unwrap_or_default();
+        if let Some(fp) = route(&mut b, &source, blk) {
             if let Some(a) = out.applied.get_mut(i) {
                 a.file_patches.push(fp.clone());
             }
             out.file_patches.push(fp);
+        }
+    }
+    // then the tables, which may name the items the module made: a trader's shelf, the death loot,
+    // the recipes
+    for (i, table) in tables.files.iter().enumerate() {
+        let (Some(a), Some(l)) = (out.tables.get_mut(i), tables.lines.get(i)) else { continue };
+        if tables.malformed.get(i).copied().unwrap_or(true) {
+            a.left_out = true;
+            continue;
+        }
+        let (blocks, recipes) = plan_table(table, l);
+        add_recipes(&mut b, &table.file, &recipes);
+        for blk in blocks {
+            if let Some(fp) = route(&mut b, &table.file, blk) {
+                a.file_patches.push(fp.clone());
+                out.file_patches.push(fp);
+            }
         }
     }
 

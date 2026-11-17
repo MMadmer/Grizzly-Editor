@@ -1,9 +1,11 @@
-//! The reference of the item kind, made from the tables the reader uses: `docs/assets/ITEM.md`
-//! is [`reference`], and `asset.reference kind=item` answers it with the linked game's catalog
-//! after it ([`catalog_reference`]).
+//! The references of the item kind and of the three table kinds, made from the tables the
+//! readers use: `docs/assets/ITEM.md` is [`reference`], and `asset.reference kind=item` answers
+//! it with the linked game's catalog after it ([`catalog_reference`]); `TRADER.md`, `LOOT.md`
+//! and `RECIPES.md` are [`table_reference`].
 
 use crate::catalog::Catalog;
-use crate::fields::{CRAFT, Field, HUD, ICON, LIST, LOOT, SCENE, SECTION, SOLD, TOP};
+use crate::fields::{DROP, Field, HUD, ICON, LOOT, RECIPE, RECIPES, SCENE, SECTION, STOCK, TOP, TRADE};
+use crate::tables::TableKind;
 
 fn esc(s: &str) -> String {
     s.replace('|', "\\|")
@@ -26,9 +28,14 @@ fn table(out: &mut String, fields: &[Field]) {
 const INTRO: &str = "\
 One file anywhere in the module is one item of the inventory - a weapon, a tool, a consumable, an outfit, a plain \
 thing: a NEW one, or a CHANGE of one that exists (the game's, or another module's). The module ships the file as \
-it is; the game reads it when its configs come up and makes the sections, the strings and the list entries itself. \
+it is; the game reads it when its configs come up and makes the sections, the strings and the use scene itself. \
 It is plain data like every asset (`docs/ASSETS.md`): `return { ... }` of literals, a key the game does not read \
-is passed by, a key the editor does not know is kept through every save and noted once.\n\n";
+is passed by, a key the editor does not know is kept through every save and noted once.\n\n\
+**An item says what the item is, and nothing of another thing** (`docs/ASSETS.md`, \"One thing, one place\"). Who \
+sells it is the trader's to say (`TRADER.md`), who carries it the loot table's (`LOOT.md`), what makes it a \
+recipe's (`RECIPES.md`): each is a file of its own, and the item shows it only as a fact - `items.info` answers \
+`found`, the Items tab lists it under Where It Is Found with the file that says it. `sold`, `loot`, `craft` and \
+`lists` are no keys of an item: the check refuses them by name (`I432`) and the game never reads them.\n\n";
 
 const EXAMPLES: &str = "\
 ```lua\n\
@@ -45,9 +52,7 @@ return {\n\
   sections = {\n\
     { name = \"wpn_sil_diy_sounds\", base = \"base_sounds\", set = { snd_shoot = [[weapons\\sil\\diy_shot]] } },\n\
   },\n\
-  craft = { { at = \"itm_repairkit_tier_1\", parts = { \"jar\", \"textile_patch_m\", \"rope\", \"flashlight_broken\" } } },\n\
-  loot  = { count = { 0, 1 }, chance = 0.01, by = { bandit = 0.03 } },\n\
-  sold  = { { by = \"trade_military\", count = 1, chance = 0.5 } },\n\
+  scene = { like = \"vodka\", time = 7200, fit = \"cut\" },\n\
 }\n\
 ```\n\n\
 ```lua\n\
@@ -77,18 +82,19 @@ Of a new item: `[<section>]:<base>` with `set` (a list joined by `, `), `unset`,
 joined by `,`); the strings - `<section>_name`, `<section>_short` and `<section>_descr` with `inv_name`, \
 `inv_name_short` (the name's id when `short_name` is left out) and `description`, over what `set` says; \
 `icons_texture` and `inv_grid_*` of the icon; `<section>_hud` from `hud`, over the HUD section the bases name \
-when `hud` names no base; the `sections`; the recipes (`[xms_craft] <n> = at, section, count, part, ...`, `n` a \
-zero-padded number after the highest there); then the lines of other configs: the death loot, the traders' \
-stock, the use scene (`items\\items\\animations_settings.ltx`: `sound` is `snd`, `camera` `cam`, `time` `tm`, \
-`helmet` `helm`), `lists`. A template (`abstract = true`) is its section and nothing else. Of a change: the same \
-keys on the section it edits, its HUD section changed through the section's own `hud` key. **Any malformed part \
-refuses the whole item**: a key no config can hold, a value with a line break, a recipe of five parts.\n\n\
+when `hud` names no base; the `sections`; then the use scene, lines of `items\\items\\animations_settings.ltx`: \
+`sound` is `snd`, `camera` `cam`, `time` `tm`, `helmet` `helm`, `fit` `fit`, and the keys of `scene.set` as they \
+are. A template (`abstract = true`) is its section and nothing else. Of a change: the same keys on the section \
+it edits, its HUD section changed through the section's own `hud` key. **Any malformed part refuses the whole \
+item**: a key no config can hold, a value with a line break.\n\n\
 ## Order\n\n\
 A module's characters, then its items - the new sections first (an item made from another item of the module \
 after that one, else in the order of their paths), then the changes in the order of their paths -, then its \
-`configs\\xms\\*.ltx`, then its `patch\\*.ltxp`: what the module's own overlays and patches say of an item still \
-counts. A section an item makes that the module's overlay defines again is merged, the later one winning - its \
-own sections, and the ones made for the rows it adds (`[xms_craft]`, a scene's HUD section, a section of `lists`). \
+traders, loot tables and recipes, then its `configs\\xms\\*.ltx`, then its `patch\\*.ltxp`: what the module's own \
+overlays and patches say of an item still counts. A section an item makes that the module's overlay defines \
+again is merged, the later one winning - its own sections and a scene's HUD section. **A section has one file**: \
+a row of `sections` that makes or changes the section another item asset of the module is about is refused \
+(`I433`) - what changes an item is written in that item's file. \
 Every change reaches the sections that inherit the changed key and do not set it themselves: \
 `add = { ammo_class = ... }` on `wpn_ak74` reaches `wpn_ak74_kobra`. The order of paths is the game's: the paths \
 compared byte by byte as the game reads them, ASCII letters lower-cased and `/` between folders - \
@@ -143,15 +149,141 @@ first one.\n\n\
 | `I420` | warning | A text with characters the game's code page (cp1251) lacks. |\n\
 | `I421` | error | An icon picture that is not there, lies outside the project or is no picture. |\n\
 | `I422` | warning | An icon rectangle outside its texture. |\n\
-| `I423` | warning | A recipe's tool or part that is not there. |\n\
-| `I424` | warning | A config a row names that is not there, or lacks the section. |\n\
-| `I425` | warning | A death loot community that is not there. |\n\
 | `I426` | note | No game is linked: what only the game knows was not looked up. |\n\
 | `I427` | error | A value outside what its key takes, or a part the game cannot read: the whole item is left out. |\n\
 | `I428` | warning | A config of the module that does not compose. |\n\
 | `I429` | warning | A new item's HUD section without a base, whose bases name no HUD section either. |\n\
-| `I430` | warning | A new item's death loot without a count: the death manager never spawns it. |\n\
-| `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |\n";
+| `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |\n\
+| `I432` | error | A key that is another file's to say: `sold` (a trader's), `loot` (a loot table's), `craft` (a recipe's), `lists` (a patch's). |\n\
+| `I433` | error | A row of `sections` that makes or changes the section of another item asset of the module. |\n";
+
+const TABLE_CODES: &str = "\
+## Problems\n\n\
+`asset.check` names every problem at its row; the build refuses a module with an error, with the first one. The \
+game takes a file whole or not at all: an error of its shape leaves the whole file out.\n\n\
+| Code | Severity | What |\n|---|---|---|\n\
+| `I400` | error | The file does not read. |\n\
+| `I412` | warning | A chance outside 0 to 1. |\n\
+| `I417` | warning | An item a row names that is no section of the game or of the module. |\n\
+| `I423` | warning | A recipe's result, tool or part that is not there. |\n\
+| `I424` | warning | A trader whose config is not there, or lacks the stock section a row names. |\n\
+| `I425` | warning | A death loot community that is not there. |\n\
+| `I426` | note | No game is linked: what only the game knows was not looked up. |\n\
+| `I427` | error | A value outside what its key takes, or a row the game cannot read. |\n\
+| `I430` | warning | A drop of an item the module makes with no count in any loot table: the death manager never spawns it. |\n";
+
+const OWNERSHIP: &str = "\
+**A file says what its thing is, and nothing of another thing** (`docs/ASSETS.md`, \"One thing, one place\"): the \
+rows are written here, in the file of the side that owns them, and never in an item (`ITEM.md`). The item shows \
+them as a fact - `items.info` answers `found`, the Items tab lists them under Where It Is Found with this file to \
+open. Mod > Economy edits the three kinds side by side and saves as it is edited; `economy.list` answers every \
+file with its rows and problems. The module ships the file as it is and the game reads it after the module's \
+items, so a row may name an item the module makes.\n\n";
+
+/// The reference of a table kind, as Markdown.
+#[must_use]
+pub fn table_reference(kind: TableKind) -> String {
+    let mut out = String::new();
+    let (title, what, top, row, row_title, example, more) = match kind {
+        TableKind::Trade => (
+            "# Traders (`.tradeasset`)",
+            "One file anywhere in the module is what the module puts on the shelf of ONE trader of the game. Several \
+files may speak of one trader; they are read in the order of their paths, a later row of the same item and stock \
+section winning. A character of the module is no such trader: its shop is `trade` of its own `.npcasset` \
+(`CHARACTER.md`).",
+            TRADE,
+            STOCK,
+            "A row of `stock`",
+            "\
+```lua\n\
+return {\n\
+  trade = 1,\n\
+  trader = \"trade_military\",       -- misc\\trade\\trade_military.ltx\n\
+  stock = {\n\
+    { item = \"wpn_sil_diy\", count = 1, chance = 0.5 },                         -- [supplies_1] wpn_sil_diy = 1, 0.5\n\
+    { item = \"ammo_9x39_ap\", supplies = { \"supplies_2\", \"supplies_3\" }, count = 40 },\n\
+    { item = \"vodka\", count = 0 },                                             -- taken off the shelf\n\
+  },\n\
+}\n\
+```\n\n",
+            "\
+## What the game makes\n\n\
+A row is a line of the trader's config: `[<supplies>] <item> = <count>, <chance>` for each stock section it names, \
+`supplies_1` when it names none; a count of 0 takes the line away. They are patches of that config, as a `.ltxp` \
+`#file` makes them: a line of a stock section reaches the sections that inherit it (the game's traders stock \
+their later levels over the first), and a config the game writes is read as written. What a trader pays and asks \
+for an item, and which goods category of `misc\\trade\\trade_presets.ltx` an item is in, no trader file says: \
+that is a patch of those configs (`patch\\*.ltxp`).\n\n",
+        ),
+        TableKind::Loot => (
+            "# Loot tables (`.lootasset`)",
+            "One file anywhere in the module is a table of what the dead carry: an item, how many, and the chance - for \
+everybody and for a community or a community and a rank. A module may keep one table or several.",
+            LOOT,
+            DROP,
+            "A row of `drops`",
+            "\
+```lua\n\
+return {\n\
+  loot = 1,\n\
+  drops = {\n\
+    { item = \"wpn_sil_diy\", count = { 0, 1 }, chance = 0.01, by = { bandit = 0.03, stalker_veteran = 0.02 } },\n\
+  },\n\
+}\n\
+```\n\n",
+            "\
+## What the game makes\n\n\
+`count` is the item's line of `misc\\death_generic.ltx [item_count]` (`{ min, max }` as `min, max`); `chance` its \
+line of `misc\\death_items_by_communities.ltx [base]`, which every community and rank inherits; each `by` entry \
+its line of that community's own section. They are patches of those configs, as a `.ltxp` `#file` makes them. An \
+item of the game has its count already; one the module makes needs a row that gives it one, or the death manager \
+never spawns it (`I430`).\n\n",
+        ),
+        TableKind::Recipes => (
+            "# Recipes (`.recipeasset`)",
+            "One file anywhere in the module is a list of recipes: what is made, at which tool or workbench, from one \
+to four parts. A module may keep one file or several.",
+            RECIPES,
+            RECIPE,
+            "A row of `recipes`",
+            "\
+```lua\n\
+return {\n\
+  recipe = 1,\n\
+  recipes = {\n\
+    { makes = \"wpn_sil_diy\", at = \"itm_repairkit_tier_1\", parts = { \"jar\", \"textile_patch_m\", \"rope\", \"flashlight_broken\" } },\n\
+    { makes = \"ammo_9x18_fmj\", count = 40, at = \"verstak_ammo\", parts = { \"ammo_bad\", \"ammo_bad\" } },\n\
+  },\n\
+}\n\
+```\n\n",
+            "\
+## What the game makes\n\n\
+One line a recipe in the system config's `[xms_craft]`: `<n> = <at>, <makes>, <count>, <part>, ...`, `n` a \
+zero-padded number after the highest the section holds, so the recipes are listed in the order they are written, \
+after the craft window's own. `at` is the section the craft window is opened with: a tool (`itm_repairkit_tier_1`, \
+`itm_drugkit`) or a workbench. A result whose section holds `ammo_` is made as that many rounds, in boxes.\n\n",
+        ),
+    };
+    out.push_str(title);
+    out.push_str("\n\n");
+    out.push_str(
+        "This page is generated from the editor's own tables of the kind's keys (`crates/gz-items/src/fields.rs`): \
+the reader, the check and this reference are one list. A test of `gz-items` fails when this file is not what the \
+tables say.\n\n",
+    );
+    out.push_str(what);
+    out.push_str(" It is plain data like every asset (`docs/ASSETS.md`).\n\n");
+    out.push_str(OWNERSHIP);
+    out.push_str(example);
+    out.push_str(more);
+    out.push_str("## The keys\n\n");
+    table(&mut out, top);
+    out.push_str(&format!("\n## {row_title}\n\n"));
+    table(&mut out, row);
+    out.push('\n');
+    out.push_str(TABLE_CODES);
+    out
+}
 
 /// The reference of the item kind, as Markdown.
 #[must_use]
@@ -174,16 +306,8 @@ tables say.\n\n",
     table(&mut out, HUD);
     out.push_str("\n## A row of `sections`\n\n");
     table(&mut out, SECTION);
-    out.push_str("\n## A row of `craft`\n\n");
-    table(&mut out, CRAFT);
-    out.push_str("\n## `loot`\n\n");
-    table(&mut out, LOOT);
-    out.push_str("\n## A row of `sold`\n\n");
-    table(&mut out, SOLD);
     out.push_str("\n## `scene` as a table\n\n");
     table(&mut out, SCENE);
-    out.push_str("\n## A row of `lists`\n\n");
-    table(&mut out, LIST);
     out.push('\n');
     out.push_str(CODES);
     out
@@ -260,19 +384,26 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/assets/ITEM.md")
     }
 
-    /// `GRIZZLY_WRITE_REFERENCE=1 bash tools/rust/cg.sh test -p gz-items reference` writes it.
+    /// `GRIZZLY_WRITE_REFERENCE=1 bash tools/rust/cg.sh test -p gz-items reference` writes them.
     #[test]
     fn the_reference_document_is_what_the_tables_say() {
-        let path = file();
-        if std::env::var("GRIZZLY_WRITE_REFERENCE").is_ok_and(|v| v == "1") {
-            std::fs::write(&path, reference()).unwrap_or_default();
+        let docs = [
+            (file(), reference()),
+            (file().with_file_name("TRADER.md"), table_reference(TableKind::Trade)),
+            (file().with_file_name("LOOT.md"), table_reference(TableKind::Loot)),
+            (file().with_file_name("RECIPES.md"), table_reference(TableKind::Recipes)),
+        ];
+        for (path, text) in docs {
+            if std::env::var("GRIZZLY_WRITE_REFERENCE").is_ok_and(|v| v == "1") {
+                std::fs::write(&path, &text).unwrap_or_default();
+            }
+            let written = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+            assert!(
+                written == text,
+                "{} is not what the tables say: run the test with GRIZZLY_WRITE_REFERENCE=1",
+                path.display()
+            );
         }
-        let written = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
-        assert!(
-            written == reference(),
-            "{} is not what the tables say: run the test with GRIZZLY_WRITE_REFERENCE=1",
-            path.display()
-        );
     }
 
     #[test]
@@ -281,6 +412,18 @@ mod tests {
         for (_, fields) in LEVELS {
             for f in *fields {
                 assert!(!f.help.is_empty() && text.contains(&format!("| `{}` |", f.key)), "{}", f.key);
+            }
+        }
+        for kind in TableKind::ALL {
+            let text = table_reference(kind);
+            for (_, fields) in crate::tables::levels(kind) {
+                for f in *fields {
+                    assert!(
+                        !f.help.is_empty() && text.contains(&format!("| `{}` |", f.key)),
+                        "{kind:?} {}",
+                        f.key
+                    );
+                }
             }
         }
     }

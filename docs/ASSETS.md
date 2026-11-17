@@ -39,8 +39,9 @@ and the editor already edits it without losing a byte it does not change.
 
 ## 2. The rules every kind keeps
 
-1. **A header key names the kind and the version**: `nq = 1`, `beh = 1`, `npc = 1`, `pda = 1`, `scene = 1`,
-   `group = 1`, `mesh = 1`, `tex = 1`, `snd = 1`, `grizzly = 1` (the project). The extension is the kind; the
+1. **A header key names the kind and the version**: `nq = 1`, `beh = 1`, `npc = 1`, `pda = 1`, `item = 1`,
+   `trade = 1`, `loot = 1`, `recipe = 1`, `scene = 1`, `group = 1`, `mesh = 1`, `tex = 1`, `snd = 1`,
+   `grizzly = 1` (the project). The extension is the kind; the
    header has to agree with it.
 2. **Read every version up to the current one; refuse a newer one, saying so.** A file of an older version is
    migrated in memory when it is read (a chain of small steps, one per version, in the kind's crate) and written
@@ -60,6 +61,16 @@ and the editor already edits it without losing a byte it does not change.
    search-and-replace has a unique anchor (the `id` / `name`) and a diff shows exactly what changed.
 8. **Editor-only data** lives where the game ignores it: `pos` and `comment` on a node, an `editor = { ... }` table
    at the top (quests, behaviour graphs, characters). The game reads none of it.
+9. **One thing, one place.** A file says what ITS thing is and nothing of another thing; a relation between two
+   things is written once, in the file of the side that owns it, and the other side only shows it as a fact with
+   the file to open. An item says what the item is - never who sells it (the trader's shelf: a trader file, or
+   the shop of a character of the module), who carries it (a loot table) or what makes it (a recipe). A track
+   names its sound and carries none of the sound's marks. No kind has a key that writes "a line of some other
+   config": that is what a patch (`patch\*.ltxp`) is for, in the open. The formats enforce it - the reader of a
+   kind refuses a key that is another kind's to say, by name and with where it belongs (an item's `sold`,
+   `loot`, `craft`, `lists`: `I432`; a row of an item's `sections` about another item asset's section: `I433`),
+   the build refuses the module, and the game never reads such a key. A new kind, or a new key of one, is held
+   to the same question first: whose is it to say?
 
 ## 3. How the editor writes: nothing it did not change
 
@@ -118,6 +129,9 @@ once. MCP is for what files cannot do - looking at the editor, driving its UI, t
 | Character | `*.npcasset` | `npc` | the game, the editor | `docs/assets/CHARACTER.md` |
 | PDA interface | `*.pdaasset` | `pda` | the game, the editor | `docs/pda/PDA_FORMAT.md` |
 | Item | `*.itemasset` | `item` | the game, the editor | `docs/assets/ITEM.md` |
+| Trader | `*.tradeasset` | `trade` | the game, the editor | `docs/assets/TRADER.md` |
+| Loot table | `*.lootasset` | `loot` | the game, the editor | `docs/assets/LOOT.md` |
+| Recipes | `*.recipeasset` | `recipe` | the game, the editor | `docs/assets/RECIPES.md` |
 | Scene | `*.scene` + its folder | `scene` | the editor | `docs/assets/SCENE.md` |
 | Object group | `*.group` | `group` | the editor | `docs/assets/SCENE.md` |
 | Model | `*.meshasset` | `mesh` | the game (a dynamic model), the editor | `docs/assets/MODEL.md` |

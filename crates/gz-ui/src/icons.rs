@@ -172,6 +172,9 @@ pub enum Icon {
     SpawnNpc,
     Dialog,
     Item,
+    Trader,
+    Loot,
+    Recipe,
     PdaMsg,
     World,
     Relation,
@@ -369,6 +372,9 @@ impl Icon {
         Icon::SpawnNpc,
         Icon::Dialog,
         Icon::Item,
+        Icon::Trader,
+        Icon::Loot,
+        Icon::Recipe,
         Icon::PdaMsg,
         Icon::World,
         Icon::Relation,
@@ -568,6 +574,9 @@ impl Icon {
             Icon::SpawnNpc => "spawn_npc",
             Icon::Dialog => "dialog",
             Icon::Item => "item",
+            Icon::Trader => "trader",
+            Icon::Loot => "loot",
+            Icon::Recipe => "recipe",
             Icon::PdaMsg => "pda_msg",
             Icon::World => "world",
             Icon::Relation => "relation",
@@ -727,7 +736,7 @@ mod tests {
             assert!(seen.insert(icon.name()), "{} twice", icon.name());
             assert_eq!(Icon::from_name(icon.name()), Some(icon));
         }
-        assert_eq!(Icon::ALL.len(), 192);
+        assert_eq!(Icon::ALL.len(), 195);
         assert!(!Icon::ALL.contains(&Icon::None));
         assert_eq!(Icon::from_name("no_such_icon"), None);
     }

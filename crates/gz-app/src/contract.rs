@@ -49,7 +49,7 @@ pub const DIALOGS: [(&str, &str); 7] = [
 ];
 
 /// The kinds of major tab.
-pub const DOCUMENT_KINDS: [&str; 17] = [
+pub const DOCUMENT_KINDS: [&str; 18] = [
     "level",
     "quest",
     "beh",
@@ -59,6 +59,7 @@ pub const DOCUMENT_KINDS: [&str; 17] = [
     "sound",
     "characters",
     "items",
+    "economy",
     "mod_settings",
     "world_rules",
     "screens",
@@ -71,7 +72,7 @@ pub const DOCUMENT_KINDS: [&str; 17] = [
 
 /// Kit dialogs a row, a document or a question raises; none opens over `ui.dialog`, each closes
 /// with it, as Esc.
-pub const KIT_DIALOGS: [&str; 30] = [
+pub const KIT_DIALOGS: [&str; 31] = [
     "dlg.disable_game_updates",
     "dlg.choose",
     "dlg.edit_text",
@@ -97,6 +98,7 @@ pub const KIT_DIALOGS: [&str; 30] = [
     "dlg.replace_release",
     "dlg.delete_character",
     "dlg.delete_item",
+    "dlg.delete_table",
     "dlg.empty_world",
     "dlg.edit_release",
     "dlg.catalog_withdraw",

@@ -160,6 +160,32 @@ pub(crate) fn section_icon(ltx: &gz_ltx::Ltx, section: &str) -> Option<IconSourc
     cell_icon(&|k: &str| s.get(k).and_then(|it| it.value.as_deref()).map(str::to_owned))
 }
 
+/// The icon of the item a section is, as a row that names it draws it: the picture of the
+/// module's own item asset, else the cell the section's lines name in the module as composed.
+pub(crate) fn roster_icon(
+    editor: &Editor,
+    root: &std::path::Path,
+    roster: &Roster,
+    section: &str,
+) -> Option<IconSource> {
+    let key = section.trim().to_ascii_lowercase();
+    let ltx = &roster.composition.ltx;
+    let get = |k: &str| {
+        ltx.section(&key).and_then(|s| s.get(k)).and_then(|it| it.value.as_deref()).map(str::to_owned)
+    };
+    let own = roster
+        .composition
+        .applied
+        .iter()
+        .position(|a| a.section.eq_ignore_ascii_case(&key))
+        .and_then(|i| roster.entries.get(i))
+        .filter(|e| e.readable && matches!(e.item.icon, Some(ItemIcon::Picture { .. })));
+    match own {
+        Some(e) => item_icon(editor, root, &e.item, &get),
+        None => cell_icon(&get),
+    }
+}
+
 /// The write time of a file of the project, as the file tree has it.
 pub(crate) fn stamp_of(editor: &Editor, path: &std::path::Path) -> u64 {
     let Ok((session, project)) = Project::of(editor) else { return 0 };
@@ -364,6 +390,8 @@ pub(crate) enum Action {
     OpenModel(String),
     OpenTexture(String),
     Play(String),
+    /// The Economy tab on a file of the module's traders, loot tables or recipes; empty: the tab.
+    OpenEconomy(String),
 }
 
 /// The Items tab.
@@ -1101,6 +1129,7 @@ impl ItemsDoc {
                 Action::OpenModel(visual) => open_model(&self.editor, &visual),
                 Action::OpenTexture(name) => open_texture(&self.editor, &name),
                 Action::Play(name) => play(&self.editor, &name),
+                Action::OpenEconomy(file) => crate::economy::open(&self.editor, &file),
             }
         }
     }

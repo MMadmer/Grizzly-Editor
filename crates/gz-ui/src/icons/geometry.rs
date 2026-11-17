@@ -1446,6 +1446,29 @@ fn build(icon: Icon, b: &mut B<'_>) {
             b.l(&[u(0.58), u(0.55), u(0.97), u(0.55)]);
             b.quiet(false).r(u(0.42), u(0.47), u(0.58), u(0.63), 0.03 * 14.0);
         }
+        // a trader is a stall: its awning, its posts and the counter things are sold over
+        Icon::Trader => {
+            b.z(&[1.5, 6.5, 3.5, 2.5, 12.5, 2.5, 14.5, 6.5]);
+            b.l(&[3.0, 6.5, 3.0, 13.5]);
+            b.l(&[13.0, 6.5, 13.0, 13.5]);
+            b.l(&[3.0, 10.0, 13.0, 10.0]);
+            b.quiet(true).l(&[8.0, 2.5, 8.0, 6.5]);
+            b.quiet(false);
+        }
+        // loot is a tied sack: what is taken from the dead
+        Icon::Loot => {
+            b.e(8.0, 10.0, 5.25, 4.0);
+            b.l(&[6.0, 6.25, 4.75, 2.75]);
+            b.l(&[10.0, 6.25, 11.25, 2.75]);
+            b.l(&[5.75, 6.25, 10.25, 6.25]);
+        }
+        // a recipe is parts that become a thing: two parts, an arrow, the result
+        Icon::Recipe => {
+            b.r(1.5, 2.5, 5.5, 6.5, 0.75);
+            b.r(1.5, 9.5, 5.5, 13.5, 0.75);
+            b.arrow(6.75, 8.0, 9.75, 8.0, 1.75);
+            b.r(10.5, 5.5, 14.5, 10.5, 0.75);
+        }
         Icon::PdaMsg => {
             b.r(1.5, 3.0, 14.5, 13.0, 1.5);
             b.l(&[1.5, 4.75, 8.0, 9.0, 14.5, 4.75]);

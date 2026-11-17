@@ -17,12 +17,15 @@ use crate::rules;
 pub const FILE: &str = "AGENTS.md";
 
 /// The kinds the page counts: extension, what the author calls several.
-const KINDS: [(&str, &str); 11] = [
+const KINDS: [(&str, &str); 14] = [
     (".nqasset", "Quests"),
     (".behasset", "Behaviour graphs"),
     (".npcasset", "Characters"),
     (".pdaasset", "PDA interfaces"),
     (".itemasset", "Items"),
+    (".tradeasset", "Traders"),
+    (".lootasset", "Loot tables"),
+    (".recipeasset", "Recipes"),
     (".scene", "Scenes"),
     (".level", "Scenes in the X-Ray SDK format"),
     (".group", "Object groups"),
@@ -141,6 +144,12 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line("does not know are kept, comments survive every save, things are named by `id`, never by position.");
     line("An inventory item - a new one or a change of a game item - is an `.itemasset` (`item = 1`):");
     line("`Grizzly-Cmd.exe reference item` lists its keys and the linked game's catalog of item keys.");
+    line(
+        "A file says its own thing: who sells an item, who carries it and what makes it are a `.tradeasset`,",
+    );
+    line(
+        "a `.lootasset` and a `.recipeasset`, never keys of the item (`reference trader`, `loot`, `recipes`).",
+    );
     line("");
     line(
         "`mod.ltx` is LTX, not Lua: `Grizzly-Cmd.exe reference manifest` lists every section and key. A module",
@@ -216,7 +225,8 @@ mod tests {
         }
         let text = text(root, "Night.grizzly", "7c1e6c1e-5c0f-4f6e-9f43-2d5b1c9a0e11");
         let lines = text.lines().count();
-        assert!((20..=42).contains(&lines), "{lines} lines:\n{text}");
+        assert!((20..=44).contains(&lines), "{lines} lines:\n{text}");
+        assert!(text.contains(".tradeasset") && text.contains("reference trader"), "{text}");
         assert!(text.starts_with("# Night Watch\n"), "{text}");
         assert!(text.contains("module `night`"), "{text}");
         assert!(text.contains("- Quests: 2 in `quests/`."), "{text}");

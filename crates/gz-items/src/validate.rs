@@ -10,12 +10,20 @@
 //! | `I420` | warning | A text with characters the game's code page lacks. |
 //! | `I421` | error | An icon picture that is not there, lies outside the project or is no picture. |
 //! | `I422` | warning | An icon rectangle outside its texture. |
-//! | `I423` | warning | A recipe's tool or part that is not there. |
-//! | `I424` | warning | A config a row names that is not there, or lacks the section. |
-//! | `I425` | warning | A death loot community that is not there. |
 //! | `I426` | note | No game is linked: what only the game knows was not looked up. |
-//! | `I430` | warning | A new item's death loot without a count: the death manager never spawns it. |
 //! | `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |
+//! | `I433` | error | A row of `sections` that makes or changes the section of another item asset. |
+//!
+//! And of a table file - a trader, a loot table, recipes ([`validate_table`]):
+//!
+//! | Code | Severity | What |
+//! |---|---|---|
+//! | `I412` | warning | A chance outside 0 to 1. |
+//! | `I417` | warning | An item a row names that is no section of the game or of the module. |
+//! | `I423` | warning | A recipe's result, tool or part that is not there. |
+//! | `I424` | warning | A trader whose config is not there, or lacks the stock section. |
+//! | `I425` | warning | A death loot community that is not there. |
+//! | `I430` | warning | A drop of an item the module makes without a count: the death manager never spawns it. |
 
 use std::path::Path;
 
@@ -24,6 +32,7 @@ use gz_luadata::Seg;
 use crate::catalog::{self, Catalog, KeyType, check_value, named};
 use crate::compose::{Applied, Composition};
 use crate::model::{Changes, Icon, Issue, Item, Kind, Scene};
+use crate::tables::{Rows, TableFile, trader_file};
 
 pub use crate::compose::{BAD_ID, BAD_SECTION, BOTH, NEITHER};
 pub const TWICE: &str = "I406";
@@ -45,6 +54,7 @@ pub const NO_COMMUNITY: &str = "I425";
 pub const UNLINKED: &str = "I426";
 pub const NEVER_DROPS: &str = "I430";
 pub const LIKE_IGNORED: &str = "I431";
+pub const NOT_YOURS: &str = "I433";
 
 /// What only the linked game and the project know. Blocking to ask (a model's motions are read
 /// on first need): check on the IO pool.
@@ -295,7 +305,7 @@ pub fn validate(item: &Item, applied: &Applied, comp: &Composition, cx: &Cx<'_>)
             UNLINKED,
             gz_base::Severity::Note,
             Vec::new(),
-            "no game is linked: the models, sounds, textures, particle effects, string ids, communities and traders' files the item names were not looked up",
+            "no game is linked: the models, sounds, textures, particle effects and string ids the item names were not looked up",
         ));
     }
     if applied.left_out || matches!(item.kind(), Kind::Neither | Kind::Both) {
@@ -412,76 +422,6 @@ pub fn validate(item: &Item, applied: &Applied, comp: &Composition, cx: &Cx<'_>)
         _ => {}
     }
 
-    // where it is found
-    for (i, c) in item.craft.iter().enumerate() {
-        let row = [Seg::key("craft"), Seg::Index(i)];
-        let has = |s: &str| comp.ltx.section(&s.trim().to_ascii_lowercase()).is_some();
-        if !c.at.trim().is_empty() && !has(&c.at) {
-            let mut p = row.to_vec();
-            p.push(Seg::key("at"));
-            out.push(Issue::warning(
-                NO_PART,
-                p,
-                format!("the recipe's tool '{}' is no section of the game or of the module", c.at),
-            ));
-        }
-        for part in c.parts.iter().filter(|p| !has(p)) {
-            let mut p = row.to_vec();
-            p.push(Seg::key("parts"));
-            out.push(Issue::warning(
-                NO_PART,
-                p,
-                format!("the recipe's part '{part}' is no section of the game or of the module"),
-            ));
-        }
-    }
-    if cx.lookups.linked() {
-        for (i, s) in item.sold.iter().enumerate() {
-            let row = vec![Seg::key("sold"), Seg::Index(i)];
-            let Some(file) = s.file() else { continue };
-            match cx.lookups.config_sections(&file) {
-                None => out.push(Issue::warning(
-                    NO_CONFIG,
-                    row,
-                    format!(
-                        "the trader's config '{}' is neither the game's nor the project's (configs\\{file})",
-                        s.by
-                    ),
-                )),
-                Some(mut have) => {
-                    have.extend(patched_sections(comp, &file, &item.file));
-                    for sup in s.sections().iter().filter(|x| !have.iter().any(|h| h.eq_ignore_ascii_case(x)))
-                    {
-                        out.push(Issue::warning(
-                            NO_CONFIG,
-                            row.clone(),
-                            format!("the trader's config configs\\{file} has no section [{sup}]"),
-                        ));
-                    }
-                }
-            }
-        }
-        for (i, l) in item.lists.iter().enumerate() {
-            let Some(f) = l.file.as_deref().filter(|f| !f.trim().is_empty()) else { continue };
-            let file = gz_ltx::config_key(f);
-            if cx.lookups.config_sections(&file).is_none() {
-                out.push(Issue::warning(
-                    NO_CONFIG,
-                    vec![Seg::key("lists"), Seg::Index(i), Seg::key("file")],
-                    format!("the config configs\\{file} is neither the game's nor the project's"),
-                ));
-            }
-        }
-        if let Some(l) = &item.loot {
-            for (who, _) in l.by.iter().filter(|(w, _)| !cx.lookups.community(w)) {
-                out.push(Issue::warning(
-                    NO_COMMUNITY,
-                    vec![Seg::key("loot"), Seg::key("by"), Seg::key(who)],
-                    format!("'{who}' is no community of the game, nor a community and one of its ranks"),
-                ));
-            }
-        }
-    }
     // a scene starts from the scene of another item: a section of the scenes' config
     if let Some(Scene::Like(like) | Scene::Table { like: Some(like), .. }) = &item.scene
         && cx.lookups.linked()
@@ -512,30 +452,166 @@ pub fn validate(item: &Item, applied: &Applied, comp: &Composition, cx: &Cx<'_>)
             ));
         }
     }
-    if let Some(l) = &item.loot {
-        if l.count.is_none() && item.kind() == Kind::New {
-            out.push(Issue::warning(
-                NEVER_DROPS,
-                at(&["loot"]),
-                "the death loot has no count (loot.count): the death manager never spawns an item without one",
-            ));
-        }
-        let chances = l
-            .chance
-            .map(|c| (at(&["loot", "chance"]), c))
-            .into_iter()
-            .chain(l.by.iter().map(|(w, c)| (vec![Seg::key("loot"), Seg::key("by"), Seg::key(w)], *c)));
-        for (path, c) in chances.filter(|(_, c)| !(0.0..=1.0).contains(c)) {
-            out.push(Issue::warning(BAD_TYPE, path, format!("a chance of {c}: a chance is from 0 to 1")));
+    // a scene's own keys go to the game through its code page too
+    if let Some(Scene::Table { set, .. }) = &item.scene {
+        for (k, v) in set {
+            if !gz_base::text::fits_cp1251(k) || !gz_base::text::fits_cp1251(&v.ltx()) {
+                out.push(Issue::warning(
+                    CODE_PAGE,
+                    vec![Seg::key("scene"), Seg::key("set"), Seg::key(k)],
+                    format!(
+                        "'{k}' has characters the game's code page (cp1251) lacks: the game reads '?' there"
+                    ),
+                ));
+            }
         }
     }
-    for (i, s) in item.sold.iter().enumerate() {
-        if let Some(c) = s.chance.filter(|c| !(0.0..=1.0).contains(c)) {
+    out
+}
+
+/// What the check of a table file reads besides the file.
+pub struct TableCx<'a> {
+    pub lookups: &'a dyn Lookups,
+    /// The game's tree without the module: an item of it is the game's.
+    pub game: Option<&'a gz_ltx::Ltx>,
+    /// The items the module's loot tables give a count (lower case), by any of their rows.
+    pub counted: &'a rustc_hash::FxHashSet<String>,
+}
+
+/// The problems of one table file; `comp` is the module composed with it. Its own shape is the
+/// reader's (`I427`).
+#[must_use]
+pub fn validate_table(table: &TableFile, comp: &Composition, cx: &TableCx<'_>) -> Vec<Issue> {
+    let mut out = Vec::new();
+    let has = |s: &str| comp.ltx.section(&s.trim().to_ascii_lowercase()).is_some();
+    let linked = cx.lookups.linked();
+    if !linked {
+        out.push(Issue::new(
+            UNLINKED,
+            gz_base::Severity::Note,
+            Vec::new(),
+            "no game is linked: the traders' configs and the communities the file names were not looked up",
+        ));
+    }
+    let chance = |out: &mut Vec<Issue>, path: Vec<Seg>, c: f64| {
+        if !(0.0..=1.0).contains(&c) {
+            out.push(Issue::warning(BAD_TYPE, path, format!("a chance of {c}: a chance is from 0 to 1")));
+        }
+    };
+    let unknown_item = |out: &mut Vec<Issue>, path: Vec<Seg>, item: &str| {
+        if !item.trim().is_empty() && !has(item) {
             out.push(Issue::warning(
-                BAD_TYPE,
-                vec![Seg::key("sold"), Seg::Index(i), Seg::key("chance")],
-                format!("a chance of {c}: a chance is from 0 to 1"),
+                NO_SECTION,
+                path,
+                format!("'{item}' is no section of the game or of the module: there is no such item"),
             ));
+        }
+    };
+    match &table.rows {
+        Rows::Trade { trader, stock } => {
+            let file = trader_file(trader);
+            // the stock sections the trader's config has, with those the module's other files add
+            let have = match (&file, linked) {
+                (Some(f), true) => match cx.lookups.config_sections(f) {
+                    None => {
+                        out.push(Issue::warning(
+                            NO_CONFIG,
+                            at(&["trader"]),
+                            format!("the trader '{trader}' is neither the game's nor the project's: there is no configs\\{f}"),
+                        ));
+                        None
+                    }
+                    Some(mut have) => {
+                        have.extend(patched_sections(comp, f, &table.file));
+                        Some(have)
+                    }
+                },
+                _ => None,
+            };
+            for (i, s) in stock.iter().enumerate() {
+                let row = vec![Seg::key("stock"), Seg::Index(i)];
+                let key = |k: &str| {
+                    let mut p = row.clone();
+                    p.push(Seg::key(k));
+                    p
+                };
+                unknown_item(&mut out, key("item"), &s.item);
+                if let (Some(have), Some(f)) = (&have, &file) {
+                    for sup in s.sections().iter().filter(|x| !have.iter().any(|h| h.eq_ignore_ascii_case(x)))
+                    {
+                        let place = if s.supplies.is_empty() { row.clone() } else { key("supplies") };
+                        out.push(Issue::warning(
+                            NO_CONFIG,
+                            place,
+                            format!("the trader's config configs\\{f} has no stock section [{sup}]"),
+                        ));
+                    }
+                }
+                if let Some(c) = s.chance {
+                    chance(&mut out, key("chance"), c);
+                }
+            }
+        }
+        Rows::Loot(drops) => {
+            for (i, l) in drops.iter().enumerate() {
+                let row = vec![Seg::key("drops"), Seg::Index(i)];
+                let key = |k: &str| {
+                    let mut p = row.clone();
+                    p.push(Seg::key(k));
+                    p
+                };
+                unknown_item(&mut out, key("item"), &l.item);
+                let item = l.item.trim().to_ascii_lowercase();
+                // the game's own items have their counts; one the module makes needs a row that gives it
+                let games = cx.game.is_some_and(|g| g.section(&item).is_some());
+                if has(&item) && !games && !cx.counted.contains(&item) {
+                    out.push(Issue::warning(
+                        NEVER_DROPS,
+                        row.clone(),
+                        format!("no drop of '{item}' has a count: the death manager never spawns an item without one"),
+                    ));
+                }
+                if let Some(c) = l.chance {
+                    chance(&mut out, key("chance"), c);
+                }
+                for (who, c) in &l.by {
+                    let mut p = key("by");
+                    p.push(Seg::key(who));
+                    if linked && !cx.lookups.community(who) {
+                        out.push(Issue::warning(
+                            NO_COMMUNITY,
+                            p.clone(),
+                            format!(
+                                "'{who}' is no community of the game, nor a community and one of its ranks"
+                            ),
+                        ));
+                    }
+                    chance(&mut out, p, *c);
+                }
+            }
+        }
+        Rows::Recipes(list) => {
+            for (i, c) in list.iter().enumerate() {
+                let row = [Seg::key("recipes"), Seg::Index(i)];
+                let mut miss = |key: &str, what: &str, name: &str| {
+                    if !name.trim().is_empty() && !has(name) {
+                        let mut p = row.to_vec();
+                        p.push(Seg::key(key));
+                        out.push(Issue::warning(
+                            NO_PART,
+                            p,
+                            format!(
+                                "the recipe's {what} '{name}' is no section of the game or of the module"
+                            ),
+                        ));
+                    }
+                };
+                miss("makes", "result", &c.makes);
+                miss("at", "tool", &c.at);
+                for part in &c.parts {
+                    miss("parts", "part", part);
+                }
+            }
         }
     }
     out

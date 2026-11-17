@@ -6,7 +6,7 @@
 //! as [`Edit`]s and applied after the grid is drawn.
 
 use egui::{Align, Align2, Color32, CornerRadius, Id, Layout, Rect, Sense, Ui, UiBuilder, Vec2, pos2};
-use gz_items::{Count, Craft, Icon as ItemIcon, KeyType, Loot, OwnedSection, Scene, SetValue, Sold};
+use gz_items::{Icon as ItemIcon, KeyType, OwnedSection, Scene, SetValue};
 use gz_ui::grid::{Grid, chips, switch, text_block};
 use gz_ui::list::list;
 use gz_ui::text::{self, Clip};
@@ -19,7 +19,7 @@ use gz_ui::{
 use crate::item_model::{self, OtherRow, Own, Place, Row};
 use crate::items::{Action, IconSource, ItemsDoc, Pick, first_name, game_keys, is_picture, list_name};
 use crate::local::{local_add_field, local_dirty_dot, local_value_combo, local_value_text};
-use crate::picker::{item_picker, list_picker};
+use crate::picker::list_picker;
 
 const ROLE: &str = "item";
 /// The grid of In the Hands' own rows.
@@ -61,7 +61,7 @@ pub(crate) enum Edit {
         member: String,
         now: Vec<String>,
     },
-    /// Any other change of the item (its identity, texts, icon, where it is found ...).
+    /// Any other change of the item (its identity, texts, icon, use scene ...).
     Item(Box<dyn FnOnce(&mut gz_items::Item)>),
     /// A text field, by `TEXTS`.
     Text(usize, String),
@@ -106,59 +106,72 @@ fn text_key(row: &Row) -> bool {
         && [game_keys::NAME, game_keys::SHORT, game_keys::DESCRIPTION].contains(&row.key.as_str())
 }
 
+/// Paints an item's icon fitted into `rect`, keeping its proportions; the kind's glyph while there
+/// is none (or it is still read). Returns the rectangle it took. The Items and the Economy tab
+/// draw an item the same way.
+pub(crate) fn paint_item_icon(
+    ui: &Ui,
+    rect: Rect,
+    src: Option<&IconSource>,
+    editor: &std::sync::Arc<gz_editor::Editor>,
+    pictures: Option<&std::sync::Arc<crate::item_lists::Pictures>>,
+    sheets: Option<&std::sync::Arc<crate::item_lists::IconSheets>>,
+) -> Rect {
+    let p = palette(ui.ctx());
+    let glyph = |ui: &Ui| {
+        icons::draw(
+            ui.painter(),
+            Icon::Item,
+            Rect::from_center_size(
+                rect.center(),
+                Vec2::splat(rect.height().min(metrics::GLYPH_ROW * 2.0) * 0.8),
+            ),
+            p.text_secondary,
+        );
+        rect
+    };
+    let fit = |w: f32, h: f32| -> Rect {
+        let s = (rect.width() / w.max(1.0)).min(rect.height() / h.max(1.0));
+        Rect::from_center_size(rect.center(), Vec2::new(w * s, h * s))
+    };
+    match src {
+        Some(IconSource::Picture { path, stamp }) => {
+            match pictures.and_then(|pics| pics.get(editor, path, *stamp)) {
+                Some((tex, size)) => {
+                    let r = fit(size[0] as f32, size[1] as f32);
+                    ui.painter().image(
+                        tex,
+                        r,
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                    r
+                }
+                None => glyph(ui),
+            }
+        }
+        Some(IconSource::Cell { sheet, x, y, w, h }) => {
+            let px = [*x as f32 * CELL, *y as f32 * CELL, *w as f32 * CELL, *h as f32 * CELL];
+            // the project's own texture first, then the game's
+            match sheets.and_then(|s| s.cell(editor, sheet, px)) {
+                Some((tex, uv)) => {
+                    let r = fit(*w as f32, *h as f32);
+                    ui.painter().image(tex, r, uv, Color32::WHITE);
+                    r
+                }
+                None => glyph(ui),
+            }
+        }
+        None => glyph(ui),
+    }
+}
+
 impl ItemsDoc {
     // ---- icons ----------------------------------------------------------------------------------
 
-    /// Paints an icon fitted into `rect`, keeping its proportions; the kind's glyph while there
-    /// is none (or it is still read). Returns the rectangle it took.
+    /// Paints an icon fitted into `rect`: [`paint_item_icon`] with the tab's pictures and sheets.
     pub(crate) fn paint_icon(&self, ui: &Ui, rect: Rect, src: Option<&IconSource>) -> Rect {
-        let p = palette(ui.ctx());
-        let glyph = |ui: &Ui| {
-            icons::draw(
-                ui.painter(),
-                Icon::Item,
-                Rect::from_center_size(
-                    rect.center(),
-                    Vec2::splat(rect.height().min(metrics::GLYPH_ROW * 2.0) * 0.8),
-                ),
-                p.text_secondary,
-            );
-            rect
-        };
-        let fit = |w: f32, h: f32| -> Rect {
-            let s = (rect.width() / w.max(1.0)).min(rect.height() / h.max(1.0));
-            Rect::from_center_size(rect.center(), Vec2::new(w * s, h * s))
-        };
-        match src {
-            Some(IconSource::Picture { path, stamp }) => {
-                match self.pictures.as_ref().and_then(|pics| pics.get(&self.editor, path, *stamp)) {
-                    Some((tex, size)) => {
-                        let r = fit(size[0] as f32, size[1] as f32);
-                        ui.painter().image(
-                            tex,
-                            r,
-                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                        r
-                    }
-                    None => glyph(ui),
-                }
-            }
-            Some(IconSource::Cell { sheet, x, y, w, h }) => {
-                let px = [*x as f32 * CELL, *y as f32 * CELL, *w as f32 * CELL, *h as f32 * CELL];
-                // the project's own texture first, then the game's
-                match self.icon_sheets.as_ref().and_then(|s| s.cell(&self.editor, sheet, px)) {
-                    Some((tex, uv)) => {
-                        let r = fit(*w as f32, *h as f32);
-                        ui.painter().image(tex, r, uv, Color32::WHITE);
-                        r
-                    }
-                    None => glyph(ui),
-                }
-            }
-            None => glyph(ui),
-        }
+        paint_item_icon(ui, rect, src, &self.editor, self.pictures.as_ref(), self.icon_sheets.as_ref())
     }
 
     /// Whether the edited item's icon stands drawn: its picture or its sheet is read (the first
@@ -1175,271 +1188,76 @@ impl ItemsDoc {
 
     // ---- Where It Is Found ----------------------------------------------------------------------
 
+    /// Who sells the item, who carries it and what makes it: facts the module's traders, loot
+    /// tables and recipes say, each in its own file. The item says none of it - a row opens the
+    /// file that does.
     fn found_section(&self, g: &mut Grid<'_>, edits: &mut Vec<Edit>) {
-        let loot = self.edit.loot.clone().unwrap_or_default();
-        let any = self.edit.loot.is_some() || !self.edit.sold.is_empty() || !self.edit.craft.is_empty();
-        g.section("Where It Is Found", any, None, |g| {
-            // Loot: how many the dead carry and the chances
-            let (lo, hi) = match loot.count {
-                Some(Count::One(n)) => (Some(n), Some(n)),
-                Some(Count::Range(a, b)) => (Some(a), Some(b)),
-                None => (None, None),
-            };
-            let fmt = |v: Option<f64>| v.map(gz_luadata::number_to_text);
-            if let Some((typed_lo, typed_hi)) = g.row("Loot Count", "How many the dead carry when they carry it: from - to. Empty: the death manager never spawns it.", PropFlags::NONE, 0, |ui| {
-                let w = em(5.0);
-                let (a, _) = local_value_text(ui, "item.loot.from", fmt(lo).as_deref(), Tx::EMPTY, w);
-                let _ = text::label(ui, "to", Font::Body, palette(ui.ctx()).text_secondary, Clip::End);
-                let (b, _) = local_value_text(ui, "item.loot.to", fmt(hi).as_deref(), Tx::EMPTY, w);
-                (a, b)
-            }) && (typed_lo.is_some() || typed_hi.is_some())
-            {
-                let parse = |t: &Option<String>, was: Option<f64>| match t {
-                    Some(s) => gz_ui::grid::parse_number(s),
-                    None => was,
+        let section = self.edit.game_section(&self.module);
+        let found = self.loaded.as_ref().map(|l| l.roster.found(&section)).unwrap_or_default();
+        let badge = (!found.is_empty()).then(|| Tx::raw(found.len().to_string()));
+        g.section("Where It Is Found", !found.is_empty(), badge, |g| {
+            for f in &found {
+                let (label, help, who) = match f.how {
+                    "sold" => (
+                        "Sold By",
+                        "A trader of the game stocks it: the trader's file says how many and how often.",
+                        self.trader_label(&f.at),
+                    ),
+                    "carried" => (
+                        "Carried by the Dead",
+                        "A loot table says how many the dead carry and the chance, for everybody and by community.",
+                        Tx::EMPTY,
+                    ),
+                    "made" => (
+                        "Made At",
+                        "A recipe makes it at this tool or workbench, from the parts named.",
+                        self.member_label(&f.at),
+                    ),
+                    _ => ("Part Of", "A recipe takes it as a part of what it makes.", self.member_label(&f.at)),
                 };
-                let (a, b) = (parse(&typed_lo, lo), parse(&typed_hi, hi));
-                edits.push(Edit::Item(Box::new(move |it| {
-                    let l = it.loot.get_or_insert_with(Loot::default);
-                    l.count = match (a, b) {
-                        (Some(a), Some(b)) if (a - b).abs() < f64::EPSILON => Some(Count::One(a)),
-                        (Some(a), Some(b)) => Some(Count::Range(a, b)),
-                        (Some(a), None) | (None, Some(a)) => Some(Count::One(a)),
-                        (None, None) => None,
+                g.row(label, help, PropFlags::NONE, 0, |ui| {
+                    let p = palette(ui.ctx());
+                    let detail = if f.detail == gz_items::roster::OFF_SHELF {
+                        Tx::from("Taken off the shelf").text(ui.ctx())
+                    } else {
+                        f.detail.clone()
                     };
-                    tidy_loot(it);
-                })));
-            }
-            let chance = loot.chance.map(gz_luadata::number_to_text);
-            if let Some((Some(typed), _)) = g.row("Loot Chance", "The chance every community and rank has, 0 to 1.", PropFlags::NONE, 0, |ui| {
-                local_value_text(ui, "item.loot.chance", chance.as_deref(), Tx::EMPTY, em(6.0))
-            }) {
-                let v = gz_ui::grid::parse_number(&typed);
-                edits.push(Edit::Item(Box::new(move |it| {
-                    it.loot.get_or_insert_with(Loot::default).chance = v;
-                    tidy_loot(it);
-                })));
-            }
-            self.messages(g, &Place::Part { name: "loot".into(), row: None });
-            g.block(|ui| {
-                self.loot_rows(ui, &loot, edits);
-                ui.add_space(6.0);
-                self.sold_rows(ui, edits);
-                ui.add_space(6.0);
-                self.craft_rows(ui, edits);
-            });
-            for part in ["sold", "craft"] {
-                for (pl, tone, line) in &self.places {
-                    if matches!(pl, Place::Part { name, .. } if name == part) {
-                        g.message(*tone, Tx::ui(line.as_str()));
-                    }
+                    let who = who.text(ui.ctx());
+                    let line = match (who.is_empty(), detail.is_empty()) {
+                        (false, false) => format!("{who}  -  {detail}"),
+                        (false, true) => who,
+                        _ => detail,
+                    };
+                    let _ = text::label(ui, Tx::raw(line), Font::Body, p.text, Clip::End)
+                        .tip(Tx::raw(f.file.clone()));
+                });
+                if g.trailing(Icon::Open, "Open the file that says it") {
+                    edits.push(Edit::Act(Action::OpenEconomy(f.file.clone())));
                 }
             }
+            if found.is_empty() {
+                g.message(
+                    Tone::Muted,
+                    "No trader, loot table or recipe of the module names this item. Each says it in a file of its own.",
+                );
+            }
+            g.block(|ui| {
+                let open = gz_ui::Button::new("Open Economy")
+                    .icon(Icon::Trader)
+                    .tip("The module's traders, loot tables and recipes: who sells an item, who carries it and what makes it")
+                    .show(ui);
+                if open.clicked() {
+                    edits.push(Edit::Act(Action::OpenEconomy(String::new())));
+                }
+            });
         });
     }
 
-    fn loot_rows(&self, ui: &mut Ui, loot: &Loot, edits: &mut Vec<Edit>) {
-        let columns = [Col::new("Community", em(16.0)), Col::new("Chance", em(6.0))];
-        let mut picked: Option<(usize, String)> = None;
-        let mut chance: Option<(usize, Option<f64>)> = None;
-        let result = ItemRows::new("item.loot.by", &columns, loot.by.len())
-            .add_label("Add Community")
-            .empty_text("No community of its own: what the dead carry is the chance above.")
-            .show(ui, |ui, row, col| {
-                let Some((who, c)) = loot.by.get(row) else { return };
-                if col == 0 {
-                    let mut v = who.clone();
-                    if list_picker(
-                        ui,
-                        &format!("item.loot.by.{row}"),
-                        &mut v,
-                        &self.lists.communities,
-                        &self.lists.stalker_communities,
-                        None,
-                        !self.lists.loaded,
-                    ) {
-                        picked = Some((row, v));
-                    }
-                } else if let (Some(t), _) = local_value_text(
-                    ui,
-                    &format!("item.loot.by.{row}.chance"),
-                    Some(&gz_luadata::number_to_text(*c)),
-                    Tx::EMPTY,
-                    ui.available_width(),
-                ) {
-                    chance = Some((row, gz_ui::grid::parse_number(&t)));
-                }
-            });
-        if let Some((i, who)) = picked {
-            edits.push(Edit::Item(Box::new(move |it| {
-                if let Some(r) = it.loot.as_mut().and_then(|l| l.by.get_mut(i)) {
-                    r.0 = who;
-                }
-            })));
-        }
-        if let Some((i, Some(c))) = chance {
-            edits.push(Edit::Item(Box::new(move |it| {
-                if let Some(r) = it.loot.as_mut().and_then(|l| l.by.get_mut(i)) {
-                    r.1 = c;
-                }
-            })));
-        }
-        if let Some(i) = result.removed {
-            edits.push(Edit::Item(Box::new(move |it| {
-                if let Some(l) = it.loot.as_mut()
-                    && i < l.by.len()
-                {
-                    l.by.remove(i);
-                }
-                tidy_loot(it);
-            })));
-        }
-        if result.added {
-            let first = self
-                .lists
-                .stalker_communities
-                .entries
-                .first()
-                .map_or_else(|| "stalker".to_owned(), |e| e.id.clone());
-            edits.push(Edit::Item(Box::new(move |it| {
-                it.loot.get_or_insert_with(Loot::default).by.push((first, 0.01))
-            })));
-        }
-    }
-
-    fn sold_rows(&self, ui: &mut Ui, edits: &mut Vec<Edit>) {
-        let columns = [Col::new("Trader", em(16.0)), Col::new("Count", em(5.0)), Col::new("Chance", em(5.0))];
-        let rows = &self.edit.sold;
-        let mut set: Option<(usize, usize, String)> = None;
-        let traders = &self.item_lists.traders;
-        let result = ItemRows::new("item.sold", &columns, rows.len())
-            .add_label("Add Trader")
-            .empty_text("No trader sells it.")
-            .show(ui, |ui, row, col| {
-                let Some(r) = rows.get(row) else { return };
-                match col {
-                    0 => {
-                        let mut v = r.by.clone();
-                        if list_picker(
-                            ui,
-                            &format!("item.sold.{row}"),
-                            &mut v,
-                            traders,
-                            traders,
-                            None,
-                            !self.item_lists.loaded,
-                        ) {
-                            set = Some((row, 0, v));
-                        }
-                    }
-                    1 | 2 => {
-                        let v = if col == 1 { r.count } else { r.chance };
-                        if let (Some(t), _) = local_value_text(
-                            ui,
-                            &format!("item.sold.{row}.{col}"),
-                            v.map(gz_luadata::number_to_text).as_deref(),
-                            Tx::raw("1"),
-                            ui.available_width(),
-                        ) {
-                            set = Some((row, col, t));
-                        }
-                    }
-                    _ => {}
-                }
-            });
-        if let Some((i, col, v)) = set {
-            edits.push(Edit::Item(Box::new(move |it| {
-                if let Some(r) = it.sold.get_mut(i) {
-                    match col {
-                        0 => r.by = v,
-                        1 => r.count = gz_ui::grid::parse_number(&v),
-                        _ => r.chance = gz_ui::grid::parse_number(&v),
-                    }
-                }
-            })));
-        }
-        if let Some(i) = result.removed {
-            edits.push(Edit::Item(Box::new(move |it| {
-                if i < it.sold.len() {
-                    it.sold.remove(i);
-                }
-            })));
-        }
-        if result.added {
-            let first = traders.entries.first().map_or_else(String::new, |e| e.id.clone());
-            edits.push(Edit::Item(Box::new(move |it| it.sold.push(Sold { by: first, ..Sold::default() }))));
-        }
-    }
-
-    fn craft_rows(&self, ui: &mut Ui, edits: &mut Vec<Edit>) {
-        let columns = [
-            Col::new("Made At", em(9.0)),
-            Col::new("Part", em(7.0)),
-            Col::new("Part", em(7.0)),
-            Col::new("Part", em(7.0)),
-            Col::new("Part", em(7.0)),
-            Col::new("Count", em(4.0)),
-        ];
-        let rows = &self.edit.craft;
-        let mut set: Option<(usize, usize, String)> = None;
-        let result = ItemRows::new("item.craft", &columns, rows.len())
-            .add_label("Add Recipe")
-            .empty_text("No recipe makes it.")
-            .show(ui, |ui, row, col| {
-                let Some(r) = rows.get(row) else { return };
-                let salt = format!("item.craft.{row}.{col}");
-                match col {
-                    0 => {
-                        let mut v = r.at.clone();
-                        if item_picker(ui, &salt, &mut v, &self.lists, Some(Tx::from("Pick a tool..."))) {
-                            set = Some((row, col, v));
-                        }
-                    }
-                    1..=4 => {
-                        let mut v = r.parts.get(col - 1).cloned().unwrap_or_default();
-                        if item_picker(ui, &salt, &mut v, &self.lists, Some(Tx::from("None"))) {
-                            set = Some((row, col, v));
-                        }
-                    }
-                    _ => {
-                        if let (Some(t), _) = local_value_text(
-                            ui,
-                            &salt,
-                            r.count.map(|c| c.to_string()).as_deref(),
-                            Tx::raw("1"),
-                            ui.available_width(),
-                        ) {
-                            set = Some((row, col, t));
-                        }
-                    }
-                }
-            });
-        if let Some((i, col, v)) = set {
-            edits.push(Edit::Item(Box::new(move |it| {
-                let Some(r) = it.craft.get_mut(i) else { return };
-                match col {
-                    0 => r.at = v,
-                    1..=4 => {
-                        let at = col - 1;
-                        while r.parts.len() <= at {
-                            r.parts.push(String::new());
-                        }
-                        r.parts[at] = v;
-                        r.parts.retain(|p| !p.is_empty());
-                    }
-                    _ => r.count = v.trim().parse::<u32>().ok(),
-                }
-            })));
-        }
-        if let Some(i) = result.removed {
-            edits.push(Edit::Item(Box::new(move |it| {
-                if i < it.craft.len() {
-                    it.craft.remove(i);
-                }
-            })));
-        }
-        if result.added {
-            edits.push(Edit::Item(Box::new(|it| it.craft.push(Craft::default()))));
+    /// A trader as a fact names it: the name the list of traders gives its config.
+    fn trader_label(&self, trader: &str) -> Tx<'static> {
+        match self.item_lists.traders.get(trader).filter(|e| !e.name.is_empty()) {
+            Some(e) => crate::lists::Indexed::label_tx(e),
+            None => Tx::raw(trader.to_owned()),
         }
     }
 
@@ -1455,6 +1273,7 @@ impl ItemsDoc {
             Some(Scene::Table { like, keys, .. }) => (like.clone().unwrap_or_default(), keys.clone()),
             None => (String::new(), Vec::new()),
         };
+        let fit = keys.iter().find(|(k, _)| k == "fit").map(|(_, v)| v.ltx()).unwrap_or_default();
         g.section("Use Scene", self.edit.scene.is_some(), None, |g| {
             let mut v = like.clone();
             if g.row(
@@ -1511,6 +1330,29 @@ impl ItemsDoc {
                             });
                         edits.push(Edit::Item(Box::new(move |it| set_scene(it, None, Some((key, value))))));
                     }
+                }
+                // how a hands motion longer than the scene fits it: one of two words
+                let cut = fit.eq_ignore_ascii_case("cut");
+                let words = [Tx::from(FIT_HURRY), Tx::from(FIT_CUT)];
+                if let Some(Some(picked)) = g.row(
+                    "Long Motion",
+                    "A hands motion longer than the scene: hurried to fit it, or kept at its own pace and cut where the scene ends.",
+                    PropFlags::NONE,
+                    0,
+                    |ui| {
+                        crate::picker::row_combo(
+                            ui,
+                            "item.scene.fit",
+                            Tx::from(if cut { FIT_CUT } else { FIT_HURRY }),
+                            false,
+                            &words,
+                            Some(usize::from(cut)),
+                        )
+                    },
+                ) && (picked == 1) != cut
+                {
+                    let value = (picked == 1).then(|| SetValue::Text("cut".to_owned()));
+                    edits.push(Edit::Item(Box::new(move |it| set_scene(it, None, Some(("fit", value))))));
                 }
             });
         });
@@ -1946,12 +1788,9 @@ fn changes_of<'a>(it: &'a mut gz_items::Item, scope: &str) -> &'a mut gz_items::
     }
 }
 
-/// A loot that says nothing is no loot.
-fn tidy_loot(it: &mut gz_items::Item) {
-    if it.loot.as_ref().is_some_and(|l| l.count.is_none() && l.chance.is_none() && l.by.is_empty()) {
-        it.loot = None;
-    }
-}
+/// The two ways a long hands motion fits its scene, as the Use Scene's row offers them.
+const FIT_HURRY: &str = "Hurried";
+const FIT_CUT: &str = "Cut Short";
 
 fn section_at(it: &mut gz_items::Item, i: usize) -> &mut OwnedSection {
     if i >= it.sections.len() {
@@ -1978,10 +1817,10 @@ fn edit_pair(set: &mut [(String, SetValue)], row: usize, col: usize, typed: Stri
 
 /// The use scene with `like` (when given) and a key set or taken away.
 fn set_scene(it: &mut gz_items::Item, like: Option<String>, key: Option<(&'static str, Option<SetValue>)>) {
-    let (mut l, mut keys, hud) = match it.scene.take() {
-        Some(Scene::Like(s)) => (Some(s), Vec::new(), None),
-        Some(Scene::Table { like, keys, hud }) => (like, keys, hud),
-        None => (None, Vec::new(), None),
+    let (mut l, mut keys, hud, set) = match it.scene.take() {
+        Some(Scene::Like(s)) => (Some(s), Vec::new(), None, Vec::new()),
+        Some(Scene::Table { like, keys, hud, set }) => (like, keys, hud, set),
+        None => (None, Vec::new(), None, Vec::new()),
     };
     if let Some(v) = like {
         l = (!v.is_empty()).then_some(v);
@@ -1992,10 +1831,10 @@ fn set_scene(it: &mut gz_items::Item, like: Option<String>, key: Option<(&'stati
             keys.push((k.to_owned(), v));
         }
     }
-    it.scene = match (l, keys.is_empty() && hud.is_none()) {
+    it.scene = match (l, keys.is_empty() && hud.is_none() && set.is_empty()) {
         (None, true) => None,
         (Some(s), true) => Some(Scene::Like(s)),
-        (like, _) => Some(Scene::Table { like, keys, hud }),
+        (like, _) => Some(Scene::Table { like, keys, hud, set }),
     };
 }
 
@@ -2023,10 +1862,22 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_loot_goes() {
-        let mut it = gz_items::Item { loot: Some(Loot::default()), ..gz_items::Item::default() };
-        tidy_loot(&mut it);
-        assert!(it.loot.is_none());
+    fn a_pair_typed_keeps_a_key_a_config_can_hold() {
+        // a scene keeps the keys of its own section through an edit of another key
+        let mut it = gz_items::Item {
+            scene: Some(Scene::Table {
+                like: None,
+                keys: Vec::new(),
+                hud: None,
+                set: vec![("my_flag".to_owned(), SetValue::Bool(true))],
+            }),
+            ..gz_items::Item::default()
+        };
+        set_scene(&mut it, None, Some(("fit", Some(SetValue::Text("cut".into())))));
+        set_scene(&mut it, None, Some(("fit", None)));
+        assert!(
+            matches!(&it.scene, Some(Scene::Table { set, keys, .. }) if set.len() == 1 && keys.is_empty())
+        );
         let mut set = vec![("a".to_owned(), SetValue::Text("x".into()))];
         edit_pair(&mut set, 0, 1, "12".into());
         assert_eq!(set[0].1, SetValue::Number(12.0));

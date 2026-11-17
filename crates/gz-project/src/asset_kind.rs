@@ -18,6 +18,11 @@ pub enum AssetKind {
     Pda,
     /// An inventory item, new or a change of one that exists (`.itemasset`).
     Item,
+    /// What the module puts on a trader's shelf (`.tradeasset`), what the dead carry
+    /// (`.lootasset`), recipes (`.recipeasset`): the [`TableKind`]s.
+    Trade,
+    Loot,
+    Recipes,
     /// A model asset (`.meshasset`), a texture asset (`.texasset`), a sound asset (`.sndasset`):
     /// the [`MediaKind`]s.
     Model,
@@ -39,6 +44,9 @@ impl AssetKind {
             AssetKind::CharacterTemplate => "character template",
             AssetKind::Pda => "PDA interface",
             AssetKind::Item => "item",
+            AssetKind::Trade | AssetKind::Loot | AssetKind::Recipes => {
+                self.table().map_or("", TableKind::name)
+            }
             AssetKind::Model => MediaKind::Model.name(),
             AssetKind::Texture => MediaKind::Texture.name(),
             AssetKind::Sound => MediaKind::Sound.name(),
@@ -55,6 +63,9 @@ impl AssetKind {
             AssetKind::Character | AssetKind::CharacterTemplate => ".npcasset",
             AssetKind::Pda => ".pdaasset",
             AssetKind::Item => ".itemasset",
+            AssetKind::Trade | AssetKind::Loot | AssetKind::Recipes => {
+                self.table().map_or("", TableKind::extension)
+            }
             AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
                 self.media().map_or("", MediaKind::extension)
             }
@@ -71,6 +82,9 @@ impl AssetKind {
             AssetKind::Character | AssetKind::CharacterTemplate => "npc",
             AssetKind::Pda => "pda",
             AssetKind::Item => "item",
+            AssetKind::Trade | AssetKind::Loot | AssetKind::Recipes => {
+                self.table().map_or("", TableKind::header)
+            }
             AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
                 self.media().map_or("", MediaKind::header)
             }
@@ -84,6 +98,7 @@ impl AssetKind {
         match self {
             AssetKind::Quest | AssetKind::Behaviour | AssetKind::Pda | AssetKind::Item => 1,
             AssetKind::Character | AssetKind::CharacterTemplate => 1,
+            AssetKind::Trade | AssetKind::Loot | AssetKind::Recipes => 1,
             AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {
                 self.media().map_or(1, MediaKind::version)
             }
@@ -102,6 +117,17 @@ impl AssetKind {
         }
     }
 
+    /// The table kind it is, for a trader, a loot table or recipes.
+    #[must_use]
+    pub fn table(self) -> Option<TableKind> {
+        match self {
+            AssetKind::Trade => Some(TableKind::Trade),
+            AssetKind::Loot => Some(TableKind::Loot),
+            AssetKind::Recipes => Some(TableKind::Recipes),
+            _ => None,
+        }
+    }
+
     /// The kind of a file: the one of the extension (a character template reads as a character).
     #[must_use]
     pub fn of_extension(name: &str) -> Option<AssetKind> {
@@ -109,12 +135,15 @@ impl AssetKind {
     }
 
     /// Every kind with a file of its own, one per extension.
-    pub const FILES: [AssetKind; 8] = [
+    pub const FILES: [AssetKind; 11] = [
         AssetKind::Quest,
         AssetKind::Behaviour,
         AssetKind::Character,
         AssetKind::Pda,
         AssetKind::Item,
+        AssetKind::Trade,
+        AssetKind::Loot,
+        AssetKind::Recipes,
         AssetKind::Model,
         AssetKind::Texture,
         AssetKind::Sound,
@@ -128,6 +157,78 @@ impl From<MediaKind> for AssetKind {
             MediaKind::Texture => AssetKind::Texture,
             MediaKind::Sound => AssetKind::Sound,
         }
+    }
+}
+
+impl From<TableKind> for AssetKind {
+    fn from(kind: TableKind) -> Self {
+        match kind {
+            TableKind::Trade => AssetKind::Trade,
+            TableKind::Loot => AssetKind::Loot,
+            TableKind::Recipes => AssetKind::Recipes,
+        }
+    }
+}
+
+/// The table kinds: what a module adds to a table of the game that many things share, written in a
+/// file of the side that owns the rows - a trader's shelf, what the dead carry, recipes. An item
+/// never says any of it; the game reads the rows (`docs/ASSETS.md`, "One thing, one place").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableKind {
+    Trade,
+    Loot,
+    Recipes,
+}
+
+impl TableKind {
+    pub const ALL: [TableKind; 3] = [TableKind::Trade, TableKind::Loot, TableKind::Recipes];
+
+    /// What the author calls it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            TableKind::Trade => "trader",
+            TableKind::Loot => "loot table",
+            TableKind::Recipes => "recipes",
+        }
+    }
+
+    /// The extension of its file, with the dot.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            TableKind::Trade => ".tradeasset",
+            TableKind::Loot => ".lootasset",
+            TableKind::Recipes => ".recipeasset",
+        }
+    }
+
+    /// The key that names the kind and its format version in the file (`trade = 1`).
+    #[must_use]
+    pub fn header(self) -> &'static str {
+        match self {
+            TableKind::Trade => "trade",
+            TableKind::Loot => "loot",
+            TableKind::Recipes => "recipe",
+        }
+    }
+
+    /// The key of the file's rows.
+    #[must_use]
+    pub fn rows(self) -> &'static str {
+        match self {
+            TableKind::Trade => "stock",
+            TableKind::Loot => "drops",
+            TableKind::Recipes => "recipes",
+        }
+    }
+
+    /// The table kind of a file, by its extension (any case).
+    #[must_use]
+    pub fn of_file(name: &str) -> Option<TableKind> {
+        let ext = name.rfind('.').and_then(|d| name.get(d..))?;
+        Self::ALL.into_iter().find(|k| k.extension().eq_ignore_ascii_case(ext))
     }
 }
 
@@ -191,8 +292,19 @@ impl MediaKind {
 }
 
 /// The extensions of the editor's own kinds: the one list every caller asks.
-pub const OWN_EXTENSIONS: [&str; 8] =
-    [".nqasset", ".behasset", ".npcasset", ".pdaasset", ".itemasset", ".meshasset", ".texasset", ".sndasset"];
+pub const OWN_EXTENSIONS: [&str; 11] = [
+    ".nqasset",
+    ".behasset",
+    ".npcasset",
+    ".pdaasset",
+    ".itemasset",
+    ".tradeasset",
+    ".lootasset",
+    ".recipeasset",
+    ".meshasset",
+    ".texasset",
+    ".sndasset",
+];
 
 /// The own extension `name` ends in, as written (a slice of `name`, the dot included). A dot in
 /// a folder of the path is no extension, and an extension alone is no name.
@@ -229,6 +341,8 @@ pub fn kind_of(name: &str, head: Option<&[u8]>) -> Option<AssetKind> {
         Some(AssetKind::Pda)
     } else if is(".itemasset") {
         Some(AssetKind::Item)
+    } else if let Some(table) = TableKind::of_file(name) {
+        Some(table.into())
     } else if let Some(media) = MediaKind::of_file(name) {
         Some(media.into())
     } else if is(crate::project::EXTENSION) {
@@ -298,6 +412,9 @@ mod tests {
         assert_eq!(own_extension("wall.meshasset"), Some(".meshasset"));
         assert_eq!(own_extension("hum.sndasset"), Some(".sndasset"));
         assert_eq!(own_extension("items/Sil.ItemAsset"), Some(".ItemAsset"));
+        assert_eq!(own_extension("trade/Military.TradeAsset"), Some(".TradeAsset"));
+        assert_eq!(own_extension("loot/dead.lootasset"), Some(".lootasset"));
+        assert_eq!(own_extension("craft/bench.recipeasset"), Some(".recipeasset"));
     }
 
     #[test]
@@ -329,6 +446,16 @@ mod tests {
         assert_eq!(kind_of("b.behasset", None), Some(AssetKind::Behaviour));
         assert_eq!(kind_of("p.pdaasset", None), Some(AssetKind::Pda));
         assert_eq!(kind_of("w.itemasset", None), Some(AssetKind::Item));
+        for k in TableKind::ALL {
+            let a = AssetKind::from(k);
+            assert_eq!(kind_of(&format!("x{}", k.extension().to_ascii_uppercase()), None), Some(a));
+            assert_eq!(
+                (a.table(), a.extension(), a.header(), a.name()),
+                (Some(k), k.extension(), k.header(), k.name())
+            );
+            assert!(AssetKind::FILES.contains(&a));
+        }
+        assert_eq!(AssetKind::Item.table(), None);
         assert_eq!(kind_of("c.npcasset", None), Some(AssetKind::Character));
         assert_eq!(
             kind_of("c.npcasset", Some(b"return {\n  abstract = true,\n")),

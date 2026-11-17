@@ -135,6 +135,15 @@ What the suites hold, beyond what their names say:
   dialog and menu of `ui.contract` at both sizes with `untranslated` empty and no text cut whose English fits;
   every catalog reads and holds one English per context.
 
+- **Traders, loot tables, recipes and the Economy tab** (`gz-items`' tests, `test_items` phase E, the game's
+  `Run-LtxQa.ps1` and `Run-ItemsQa.ps1`): the three kinds read, written and saved as the difference; composed
+  after the items in the game's order; their checks; an item's `sold` / `loot` / `craft` / `lists` and a row of
+  `sections` about another item asset refused by name; the tab driven over `economy.view` in English and
+  Russian; the item's card showing the rows that name it; in the game - a trader's stock (and an item taken off
+  a shelf), the death loot and the recipes read from their own files, an item's foreign key named in the log
+  and never read. The Weapons Evolution project moved to it: 160 items rewritten (each read back and held to
+  say what it said), one recipes file, the check's answer the same as before (782 files, 0 errors, 24
+  warnings).
 - **Items** (`gz-items`' and `gz-ltx`'s tests, `test_items`, the game's `tools/qa/items/Run-ItemsQa.ps1`): the
   item kind read, checked, resolved and saved as a difference; the module composed as the game composes it - the
   order of its files, what an overlay merge makes a section's own word, the heirs of a section made again, a
@@ -499,6 +508,19 @@ What the suites hold, beyond what their names say:
   project: the project holds its notes, the record the converter wrote, and the two helpers of its own
   hand-made step.
 - The Sound QA of the game takes its sounds and effects as arguments: a tool of the game names no project.
+- **An item said what was another thing's, and that was the mistake** (2026-11-17): `sold`, `loot` and `craft`
+  wrote a trader's shelf, the death loot and recipes from inside an item, and `lists` any line of any config.
+  They are gone from the format; the three relations are kinds of their own (`.tradeasset`, `.lootasset`,
+  `.recipeasset`: the side that owns the rows says them), an item's scene carries its own section's keys
+  (`fit`, `set`), and an item only shows where it is found. The format was never released, so there is no
+  migration step: the reader refuses the four keys by name (`I432`) and says where each belongs. The rule that
+  came of it is written where every later kind meets it - `docs/ASSETS.md` rule 9, CLAUDE.md "Mod philosophy".
+- What no file of these kinds says, on purpose: which goods category of the game's trade presets an item is in,
+  and what a trader pays and asks for it. Both are lines of the game's shared price lists, patched in the open
+  (`.ltxp`); a typed place for them would need the game to resolve a trader's price sections when its config is
+  read, which the patch machinery does not do today.
+- The Economy tab's item picker offers the module's own items beside the game's (the roster's new items); the
+  Characters tab's picker still lists the game's and the module's config sections only.
 
 ### The updater
 

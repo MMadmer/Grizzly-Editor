@@ -465,8 +465,7 @@ pub enum Place {
     Field(String),
     /// A key of a section: the scope and the key.
     Key { scope: String, key: String },
-    /// A part of where it is found or what else it holds: `loot`, `sold`, `craft`, `scene`,
-    /// `sections`, `lists`, with the row.
+    /// A part of what else it holds: `scene`, `sections`, with the row.
     Part { name: String, row: Option<usize> },
 }
 
@@ -510,7 +509,9 @@ pub fn place_of(issue: &Issue) -> Place {
             Some(key) => Place::Key { scope: catalog::HUD.to_owned(), key },
             None => Place::Field("hud".to_owned()),
         },
-        Some(part @ ("loot" | "sold" | "craft" | "scene" | "sections" | "lists")) => {
+        // a key that is another file's to say is a problem of the item as a whole
+        Some("loot" | "sold" | "craft" | "lists") => Place::Head,
+        Some(part @ ("scene" | "sections")) => {
             let row = match p.get(1) {
                 Some(Seg::Index(i)) => Some(*i),
                 _ => None,
@@ -683,9 +684,11 @@ mod tests {
         );
         assert_eq!(at("I421", vec![Seg::key("icon")], "x"), Place::Field("icon".into()));
         assert_eq!(
-            at("I423", vec![Seg::key("craft"), Seg::Index(1), Seg::key("at")], "x"),
-            Place::Part { name: "craft".into(), row: Some(1) }
+            at("I433", vec![Seg::key("sections"), Seg::Index(1)], "x"),
+            Place::Part { name: "sections".into(), row: Some(1) }
         );
+        // a key that is another file's to say is a problem of the item as a whole
+        assert_eq!(at("I432", vec![Seg::key("craft")], "x"), Place::Head);
         assert_eq!(at("I401", Vec::new(), "x"), Place::Head);
         assert_eq!(
             sentence(&Issue::warning("I412", Vec::new(), "'cost' is \"x\": it takes a number")),

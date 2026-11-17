@@ -613,13 +613,13 @@ class Converter:
             sp.icon_png = png
             if sp.new:
                 sp.drop_keys.update(items.ICON_KEYS)
-        # the recipes the mod added to the craft script
+        # the recipes the mod added to the craft script: a recipes file of the module (what makes an item is
+        # a recipe's to say, never the item's), for the items the wanted state holds
         self.recipes = self.craft_recipes()
-        for result, rows in sorted(self.recipes.items()):
-            if result in own.items and not own.excluded(result):
-                spec_of(result).craft = rows
-            else:
-                self.problems.append(f"a recipe makes [{result}], which is no item of the module")
+        for result in sorted(self.recipes):
+            if result not in self.W.sections:
+                self.problems.append(f"a recipe makes [{result}], which is no section of the mod or of the game")
+                del self.recipes[result]
         for item in [k for k, v in self.specs.items() if v.new and v.main_new is None]:
             self.problems.append(f"[{item}]: a new item's section was not planned; left out")
             del self.specs[item]
@@ -709,6 +709,22 @@ class Converter:
             self.patch_files[os.path.join("patch", f"{self.id}_system_files.ltxp")] = lines
         self.rep["items"] = {"new": sum(1 for t in self.asset_tables.values() if "edit" not in t),
                              "changed": sum(1 for t in self.asset_tables.values() if "edit" in t)}
+        # the recipes, in the craft script's order: one file
+        self.recipe_file = None
+        if self.recipes:
+            rows = []
+            for result, tool, count, parts in self.craft_rows:
+                if result not in self.recipes:
+                    continue
+                row = luadata.Inline(makes=result)
+                if count != 1:
+                    row["count"] = luadata.Raw(str(count))
+                row["at"] = tool.lower()
+                row["parts"] = [p.lower() for p in parts]
+                rows.append(row)
+            self.recipe_file = os.path.join("craft", f"{self.id}.recipeasset")
+            self.recipe_table = {"recipe": luadata.Raw("1"), "recipes": rows}
+            self.write_text(self.recipe_file, luadata.write(self.recipe_table))
 
     def _patch_lines(self, lines, entries):
         for e in entries:
@@ -753,6 +769,11 @@ class Converter:
         system_files = {f[len("configs\\"):] for f in self.tree_files}
         comp = compose.Composer(self.G)
         refused, plans = items.apply_items(assets, comp, self.id)
+        # then the module's tables, as the game reads them: here the recipes, read back from their file
+        if self.recipe_file:
+            recipes = luadata.read(open(os.path.join(self.out, self.recipe_file), encoding="utf-8").read())
+            self.asset_problems.extend(items.check_recipes(recipes, self.recipe_file))
+            items.apply_recipes(recipes, comp)
         for rel in sorted(self.patch_files):
             apply_ltxp(open(os.path.join(self.out, rel), "rb").read(), comp, rel, system=True, system_files=system_files)
         # what the module build and the strings decide is checked apart: icon keys, the string ids, the recipes
@@ -783,7 +804,7 @@ class Converter:
                            "flattened": self.flattened, "texts": text_problems, "craft": craft_ok, "ltxp_refused": comp.refused}
         with open(os.path.join(self.port, "check_tree.txt"), "w", encoding="utf-8") as f:
             f.write("The game's system config composed with the module's items (new ones first, each waiting for its bases, "
-                    "then the changes in path order) and its .ltxp in name order, against the wanted state.\n"
+                    "then the changes in path order), its recipes and its .ltxp in name order, against the wanted state.\n"
                     f"sections {self.tree_check['sections']}, keys {self.tree_check['keys_compared']}\n"
                     f"differences: {len(diffs)}\n")
             for d in diffs[:2000]:

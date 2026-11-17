@@ -2,7 +2,9 @@
 
 This page is generated from the editor's own tables of the kind's keys (`crates/gz-items/src/fields.rs`): the reader, the check and this reference are one list. A test of `gz-items` fails when this file is not what the tables say.
 
-One file anywhere in the module is one item of the inventory - a weapon, a tool, a consumable, an outfit, a plain thing: a NEW one, or a CHANGE of one that exists (the game's, or another module's). The module ships the file as it is; the game reads it when its configs come up and makes the sections, the strings and the list entries itself. It is plain data like every asset (`docs/ASSETS.md`): `return { ... }` of literals, a key the game does not read is passed by, a key the editor does not know is kept through every save and noted once.
+One file anywhere in the module is one item of the inventory - a weapon, a tool, a consumable, an outfit, a plain thing: a NEW one, or a CHANGE of one that exists (the game's, or another module's). The module ships the file as it is; the game reads it when its configs come up and makes the sections, the strings and the use scene itself. It is plain data like every asset (`docs/ASSETS.md`): `return { ... }` of literals, a key the game does not read is passed by, a key the editor does not know is kept through every save and noted once.
+
+**An item says what the item is, and nothing of another thing** (`docs/ASSETS.md`, "One thing, one place"). Who sells it is the trader's to say (`TRADER.md`), who carries it the loot table's (`LOOT.md`), what makes it a recipe's (`RECIPES.md`): each is a file of its own, and the item shows it only as a fact - `items.info` answers `found`, the Items tab lists it under Where It Is Found with the file that says it. `sold`, `loot`, `craft` and `lists` are no keys of an item: the check refuses them by name (`I432`) and the game never reads them.
 
 ```lua
 -- a new item
@@ -18,9 +20,7 @@ set = { cost = 1200, inv_weight = 0.4, visual = [[dynamics\weapons\wpn_sil\wpn_s
 sections = {
 { name = "wpn_sil_diy_sounds", base = "base_sounds", set = { snd_shoot = [[weapons\sil\diy_shot]] } },
 },
-craft = { { at = "itm_repairkit_tier_1", parts = { "jar", "textile_patch_m", "rope", "flashlight_broken" } } },
-loot  = { count = { 0, 1 }, chance = 0.01, by = { bandit = 0.03 } },
-sold  = { { by = "trade_military", count = 1, chance = 0.5 } },
+scene = { like = "vodka", time = 7200, fit = "cut" },
 }
 ```
 
@@ -46,11 +46,11 @@ icon  = "icons/wpn_ak74.png",   -- the game's item gets a new picture; the game'
 
 ## What the game makes
 
-Of a new item: `[<section>]:<base>` with `set` (a list joined by `, `), `unset`, `add` and `drop` (the list rewritten joined by `,`); the strings - `<section>_name`, `<section>_short` and `<section>_descr` with `inv_name`, `inv_name_short` (the name's id when `short_name` is left out) and `description`, over what `set` says; `icons_texture` and `inv_grid_*` of the icon; `<section>_hud` from `hud`, over the HUD section the bases name when `hud` names no base; the `sections`; the recipes (`[xms_craft] <n> = at, section, count, part, ...`, `n` a zero-padded number after the highest there); then the lines of other configs: the death loot, the traders' stock, the use scene (`items\items\animations_settings.ltx`: `sound` is `snd`, `camera` `cam`, `time` `tm`, `helmet` `helm`), `lists`. A template (`abstract = true`) is its section and nothing else. Of a change: the same keys on the section it edits, its HUD section changed through the section's own `hud` key. **Any malformed part refuses the whole item**: a key no config can hold, a value with a line break, a recipe of five parts.
+Of a new item: `[<section>]:<base>` with `set` (a list joined by `, `), `unset`, `add` and `drop` (the list rewritten joined by `,`); the strings - `<section>_name`, `<section>_short` and `<section>_descr` with `inv_name`, `inv_name_short` (the name's id when `short_name` is left out) and `description`, over what `set` says; `icons_texture` and `inv_grid_*` of the icon; `<section>_hud` from `hud`, over the HUD section the bases name when `hud` names no base; the `sections`; then the use scene, lines of `items\items\animations_settings.ltx`: `sound` is `snd`, `camera` `cam`, `time` `tm`, `helmet` `helm`, `fit` `fit`, and the keys of `scene.set` as they are. A template (`abstract = true`) is its section and nothing else. Of a change: the same keys on the section it edits, its HUD section changed through the section's own `hud` key. **Any malformed part refuses the whole item**: a key no config can hold, a value with a line break.
 
 ## Order
 
-A module's characters, then its items - the new sections first (an item made from another item of the module after that one, else in the order of their paths), then the changes in the order of their paths -, then its `configs\xms\*.ltx`, then its `patch\*.ltxp`: what the module's own overlays and patches say of an item still counts. A section an item makes that the module's overlay defines again is merged, the later one winning - its own sections, and the ones made for the rows it adds (`[xms_craft]`, a scene's HUD section, a section of `lists`). Every change reaches the sections that inherit the changed key and do not set it themselves: `add = { ammo_class = ... }` on `wpn_ak74` reaches `wpn_ak74_kobra`. The order of paths is the game's: the paths compared byte by byte as the game reads them, ASCII letters lower-cased and `/` between folders - `items/weapons/ak` before `items/weapons2/ak`, `B` after `a`; of two changes of one key the later path wins.
+A module's characters, then its items - the new sections first (an item made from another item of the module after that one, else in the order of their paths), then the changes in the order of their paths -, then its traders, loot tables and recipes, then its `configs\xms\*.ltx`, then its `patch\*.ltxp`: what the module's own overlays and patches say of an item still counts. A section an item makes that the module's overlay defines again is merged, the later one winning - its own sections and a scene's HUD section. **A section has one file**: a row of `sections` that makes or changes the section another item asset of the module is about is refused (`I433`) - what changes an item is written in that item's file. Every change reaches the sections that inherit the changed key and do not set it themselves: `add = { ammo_class = ... }` on `wpn_ak74` reaches `wpn_ak74_kobra`. The order of paths is the game's: the paths compared byte by byte as the game reads them, ASCII letters lower-cased and `/` between folders - `items/weapons/ak` before `items/weapons2/ak`, `B` after `a`; of two changes of one key the later path wins.
 
 A refused item stops nothing: the game leaves it out with one line in its log (`! XMS: [<module>] <file>: left out - <why>`) - no base, an unknown base, a name that cannot be a section, an edit of a section that is not there.
 
@@ -81,12 +81,8 @@ What a key of an item's section means is the game's: its `configs\item_catalog.l
 | `add` | `{ key = member or list }` | - | Members added to a comma list (`ammo_class`, `scopes`, `upgrades`): `{ ammo_class = "ammo_5.45x39_ap" }` or a list of them. |
 | `drop` | `{ key = member or list }` | - | Members taken out of a comma list, the same way. |
 | `hud` | the HUD section (below) | - | The item's HUD section. A new item: `{ base, set, ... }` makes `<section>_hud` - refused when that section exists - and sets `hud` to it (unless `set.hud` names another). A change (no `base`): `{ set, unset, add, drop }` change the section the item's `hud` key names once `set` is applied. |
-| `sections` | a list of sections (below) | - | Other sections the item owns or changes: `{ name, base, set }` makes one (the name as written), `{ edit, set, unset, add, drop }` changes one - sound mixins, scope variants, upgrade sections, a use scene's HUD. |
-| `craft` | a list of recipes (below) | - | Recipes that make the item. |
-| `loot` | death loot (below) | - | What the dead carry: lines of the game's death loot - the count in `misc\death_generic.ltx`, the chances in `misc\death_items_by_communities.ltx`. |
-| `sold` | a list of stock rows (below), or one row alone | - | Stock of the game's traders. A module's own character keeps its stock in its `.npcasset`. |
+| `sections` | a list of sections (below) | - | Other sections the item owns: `{ name, base, set }` makes one (the name as written), `{ edit, set, unset, add, drop }` changes one that is the item's - sound mixins, scope variants, upgrade sections. A section that is another item asset's is changed in that asset. |
 | `scene` | string or table | - | The use animation: `"vodka"` uses the scene of that item; a table sets the keys of `items\items\animations_settings.ltx` (below), `[<section>]` there over `like`. |
-| `lists` | a list of lines (below) | - | Any other line the item needs somewhere: a key of any config, or a member of a list in one. |
 | `editor` | anything | - | The editor's notes. The game reads none of it. |
 
 ## `icon`
@@ -122,31 +118,6 @@ What a key of an item's section means is the game's: its `configs\item_catalog.l
 | `add` | `{ key = member or list }` | - | Members added to a list (a change). |
 | `drop` | `{ key = member or list }` | - | Members taken out of a list (a change). |
 
-## A row of `craft`
-
-| Key | Takes | Left out | Means |
-|---|---|---|---|
-| `at` | string (a section) | - | The tool or the workbench the recipe is in: the section the craft window is opened with (`itm_repairkit_tier_1`). |
-| `count` | integer, 1 to 1000 | 1 | How many the recipe makes. |
-| `parts` | one to four sections | - | What it takes. The game writes the recipe as `[xms_craft] <n> = at, section, count, part, ...`. |
-
-## `loot`
-
-| Key | Takes | Left out | Means |
-|---|---|---|---|
-| `count` | number or `{ min, max }` | - | How many the dead carry when they carry it: its line of `[item_count]`, a number or `{ min, max }`. Without one the death manager never spawns the item. |
-| `chance` | number, 0 to 1 | - | Its line of `[base]`, which every community and rank inherits. |
-| `by` | `{ community = chance }` | - | Lines of their own: `{ bandit = 0.03, stalker_veteran = 0.01 }` - a community, or a community and a rank. |
-
-## A row of `sold`
-
-| Key | Takes | Left out | Means |
-|---|---|---|---|
-| `by` | string | - | The trader's config: `trade_military` (`misc\trade\trade_military.ltx`), or a path under `configs` ending in `.ltx`. |
-| `supplies` | string or list (sections) | "supplies_1" | The section of it, or a list of them. |
-| `count` | number, 0 to 1000000 | 1 | How many are on the shelf. |
-| `chance` | number, 0 to 1 | 1 | The chance they are. |
-
 ## `scene` as a table
 
 | Key | Takes | Left out | Means |
@@ -156,20 +127,11 @@ What a key of an item's section means is the game's: its `configs\item_catalog.l
 | `camera` | string | - | The camera effect (`cam`). |
 | `time` | number, 0 to 600000 | - | How long the scene lasts, milliseconds (`tm`). |
 | `helmet` | string, number, boolean or list | - | What a helmet does to it (`helm`), as `animations_settings.ltx` says it. |
+| `fit` | string | the cycle is hurried | How a hands cycle longer than `time` fits the scene: `"cut"` keeps its own pace and ends it with the scene. |
 | `anm` | string | - | The scene's motion. |
 | `hud_anm` | string | - | The motion of the scene's HUD. |
 | `hud` | `{ base, set }` | - | The scene's own HUD section, `item_ea_<section>_hud` of the system config; `anm` left out is then `item_ea_<section>`. |
-
-## A row of `lists`
-
-| Key | Takes | Left out | Means |
-|---|---|---|---|
-| `file` | string | the system config | A config by its path under `configs` (`plugins\itms_manager.ltx`). |
-| `section` | string (a section) | - | The section of it the line goes into. |
-| `key` | string | the item's section | The key. |
-| `value` | string, number, boolean or list | a bare key | `key = value`. |
-| `add` | string | - | Instead of `value`: a member added to the list `key` holds. |
-| `drop` | string | - | Instead of `value`: a member taken out of it. |
+| `set` | `{ key = value }` | - | Further keys of the scene's section, written as they are: what a module's own scripts read of a scene. |
 
 ## Problems
 
@@ -200,12 +162,10 @@ What a key of an item's section means is the game's: its `configs\item_catalog.l
 | `I420` | warning | A text with characters the game's code page (cp1251) lacks. |
 | `I421` | error | An icon picture that is not there, lies outside the project or is no picture. |
 | `I422` | warning | An icon rectangle outside its texture. |
-| `I423` | warning | A recipe's tool or part that is not there. |
-| `I424` | warning | A config a row names that is not there, or lacks the section. |
-| `I425` | warning | A death loot community that is not there. |
 | `I426` | note | No game is linked: what only the game knows was not looked up. |
 | `I427` | error | A value outside what its key takes, or a part the game cannot read: the whole item is left out. |
 | `I428` | warning | A config of the module that does not compose. |
 | `I429` | warning | A new item's HUD section without a base, whose bases name no HUD section either. |
-| `I430` | warning | A new item's death loot without a count: the death manager never spawns it. |
 | `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |
+| `I432` | error | A key that is another file's to say: `sold` (a trader's), `loot` (a loot table's), `craft` (a recipe's), `lists` (a patch's). |
+| `I433` | error | A row of `sections` that makes or changes the section of another item asset of the module. |

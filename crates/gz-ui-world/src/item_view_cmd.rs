@@ -8,7 +8,7 @@ use std::sync::Arc;
 use gz_app::{ShellState, on_ui};
 use gz_base::Origin;
 use gz_editor::{CmdError, Editor, Registry, Reply, Spec, Value, json};
-use gz_items::{Count, Loot, SetValue, Sold};
+use gz_items::SetValue;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -54,13 +54,6 @@ pub(crate) struct ItemsView {
     /// Sets texts: `{ "name.rus": "...", "description.eng": "..." }`; an empty text takes it away.
     #[serde(default)]
     text: Option<serde_json::Map<String, Value>>,
-    /// Changes the death loot: `{ "count": [0, 1], "chance": 0.02, "by": { "bandit": 0.03 } }`
-    /// (the communities of `by` are added or changed; null in it takes one away).
-    #[serde(default)]
-    loot: Option<serde_json::Map<String, Value>>,
-    /// Adds a row of Sold By: `{ "by": "trade_military", "count": 1, "chance": 0.5 }`.
-    #[serde(default)]
-    sold: Option<serde_json::Map<String, Value>>,
     /// Saves the edits into the item's file (after the edits of this call).
     #[serde(default)]
     save: bool,
@@ -205,46 +198,6 @@ fn apply_edits(doc: &mut ItemsDoc, a: &ItemsView) -> Result<bool, CmdError> {
             any = true;
         }
     }
-    if let Some(l) = &a.loot {
-        let loot = doc.edit.loot.get_or_insert_with(Loot::default);
-        if let Some(c) = l.get("count") {
-            loot.count = match c {
-                Value::Number(n) => n.as_f64().map(Count::One),
-                Value::Array(v) if v.len() == 2 => {
-                    Some(Count::Range(v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0)))
-                }
-                _ => None,
-            };
-        }
-        if let Some(c) = l.get("chance") {
-            loot.chance = c.as_f64();
-        }
-        if let Some(Value::Object(by)) = l.get("by") {
-            for (who, c) in by {
-                loot.by.retain(|(w, _)| w != who);
-                if let Some(c) = c.as_f64() {
-                    loot.by.push((who.clone(), c));
-                }
-            }
-        }
-        if loot.count.is_none() && loot.chance.is_none() && loot.by.is_empty() {
-            doc.edit.loot = None;
-        }
-        any = true;
-    }
-    if let Some(row) = &a.sold {
-        let by = row.get("by").and_then(Value::as_str).unwrap_or_default().to_owned();
-        if by.is_empty() {
-            return Err(CmdError::invalid("sold.by names the trader's config (trade_military)"));
-        }
-        doc.edit.sold.push(Sold {
-            by,
-            supplies: row.get("supplies").map(members).unwrap_or_default(),
-            count: row.get("count").and_then(Value::as_f64),
-            chance: row.get("chance").and_then(Value::as_f64),
-        });
-        any = true;
-    }
     if any {
         doc.changed();
     }
@@ -290,13 +243,8 @@ pub(crate) async fn items_view(ed: Arc<Editor>, a: ItemsView, origin: Origin) ->
         Some(v) => Some(parse_show(v)?),
         None => None,
     };
-    let edits = a.set.is_some()
-        || a.unset.is_some()
-        || a.add.is_some()
-        || a.drop.is_some()
-        || a.text.is_some()
-        || a.loot.is_some()
-        || a.sold.is_some();
+    let edits =
+        a.set.is_some() || a.unset.is_some() || a.add.is_some() || a.drop.is_some() || a.text.is_some();
     let made = a.new.clone().map(|s| (false, s)).or_else(|| a.change.clone().map(|s| (true, s)));
     let wants = a.select.is_some()
         || made.is_some()
@@ -379,8 +327,6 @@ pub(crate) async fn items_view(ed: Arc<Editor>, a: ItemsView, origin: Origin) ->
             add: a.add.clone(),
             drop: a.drop.clone(),
             text: a.text.clone(),
-            loot: a.loot.clone(),
-            sold: a.sold.clone(),
             ..ItemsView::default()
         };
         on_ui(&ed, move |shell, _| {
@@ -581,14 +527,6 @@ pub(crate) fn form_json(doc: &ItemsDoc) -> Value {
         None => json!({ "form": "inherited" }),
     };
     let shown_icon = doc.edit_icon().map(|s| items::icon_json(&s));
-    let loot = e.loot.as_ref().map(|l| {
-        let count = match l.count {
-            Some(Count::One(n)) => json!(n),
-            Some(Count::Range(a, b)) => json!([a, b]),
-            None => Value::Null,
-        };
-        json!({ "count": count, "chance": l.chance, "by": l.by.iter().map(|(w, c)| json!({ "community": w, "chance": c })).collect::<Vec<_>>() })
-    });
     let other: Vec<Value> = doc
         .form
         .other
@@ -604,7 +542,11 @@ pub(crate) fn form_json(doc: &ItemsDoc) -> Value {
     };
     let identity_problems = [field("section"), field("base"), field("id"), field("edit")].concat();
     let text_problems = [field("name"), field("short_name"), field("description")].concat();
-    let found_problems = [part("loot"), part("sold"), part("craft")].concat();
+    // who sells it, who carries it and what makes it: what the module's tables say of its section
+    let found = match (&doc.loaded, doc.res.as_ref()) {
+        (Some(l), Some(res)) => l.roster.found(&res.section),
+        _ => Vec::new(),
+    };
     let used = doc.form.family.as_ref().is_some_and(|f| doc.item_lists.scene_families.contains(f));
     json!({
         "file": e.file,
@@ -623,12 +565,7 @@ pub(crate) fn form_json(doc: &ItemsDoc) -> Value {
         "icon": { "own": icon, "shown": shown_icon, "drawn": doc.icon_drawn(), "problems": field("icon") },
         "groups": groups_json(doc, &doc.form.groups),
         "hud": doc.form.hud.as_ref().map(|(name, groups)| json!({ "section": name, "groups": groups_json(doc, groups), "problems": field("hud") })),
-        "found": {
-            "loot": loot,
-            "sold": e.sold.iter().map(|s| json!({ "by": s.by, "supplies": s.supplies, "count": s.count, "chance": s.chance })).collect::<Vec<_>>(),
-            "craft": e.craft.iter().map(|c| json!({ "at": c.at, "parts": c.parts, "count": c.count })).collect::<Vec<_>>(),
-            "problems": found_problems,
-        },
+        "found": found,
         "scene": { "shown": e.scene.is_some() || used, "value": scene, "problems": part("scene") },
         "sections": e.sections.iter().map(|s| json!({
             "name": s.name, "edit": s.edit, "base": s.base,
