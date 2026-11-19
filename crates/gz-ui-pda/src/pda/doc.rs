@@ -24,9 +24,9 @@ use gz_ui::{
 };
 
 use crate::assets::PdaAssets;
-use crate::local::local_code_view;
 use crate::pda::canvas::{CanvasCache, draw_canvas};
 use crate::pda::{CANVAS_MIN_H, CANVAS_MIN_W, DETAILS_W, Model, PdaTab, SIDE_MIN, SOURCE_H, SOURCE_MIN};
+use gz_ui::code::{CodeCtl, CodeLang, CodeOpts, LineMark, code_view};
 
 /// What a new view of the tab is to show.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -368,7 +368,7 @@ impl PdaDoc {
         let text_rect =
             Rect::from_min_max(full.min, pos2(full.max.x, (full.max.y - bar_h).max(full.min.y + 1.0)));
         let error = if m.read_ok { 0 } else { m.read_line };
-        let mut goto_line = std::mem::take(&mut m.goto_line);
+        let goto_line = std::mem::take(&mut m.goto_line);
         let out = {
             let mut text_ui = ui.new_child(
                 UiBuilder::new()
@@ -376,9 +376,17 @@ impl PdaDoc {
                     .max_rect(text_rect)
                     .layout(Layout::top_down(Align::Min)),
             );
-            local_code_view(&mut text_ui, "pda_source", &mut m.text, error, &mut goto_line)
+            // the reader's line tinted and squiggled, the layout's text in the syntax colours
+            let marks = if error > 0 {
+                vec![LineMark { line: error, column: 0, tone: Tone::Error }]
+            } else {
+                Vec::new()
+            };
+            let mut opts = CodeOpts::new(CodeLang::LuaData);
+            opts.marks = &marks;
+            let mut ctl = CodeCtl { goto: (goto_line > 0).then_some((goto_line, 1)), ..CodeCtl::default() };
+            code_view(&mut text_ui, "pda_source", &mut m.text, &opts, &mut ctl)
         };
-        m.goto_line = goto_line;
         {
             let bar = Rect::from_min_max(
                 pos2(full.min.x + 8.0, text_rect.max.y),

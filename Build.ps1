@@ -50,6 +50,8 @@ if ($Preview) { $cargoArgs += @('--features', 'grizzly/preview') }
 Push-Location $root
 try { & $cargo @cargoArgs } finally { Pop-Location }
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
+# what the build left behind of earlier builds (tools/rust/sweep.py)
+& python (Join-Path $root 'tools\rust\sweep.py')
 
 # the programs with their debug information beside them (the crash reports read it), and the notices of the
 # third-party code they carry

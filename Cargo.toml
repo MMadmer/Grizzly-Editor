@@ -59,6 +59,9 @@ gz-nq = { path = "crates/gz-nq" }
 gz-characters = { path = "crates/gz-characters" }
 gz-items = { path = "crates/gz-items" }
 gz-pda = { path = "crates/gz-pda" }
+gz-text = { path = "crates/gz-text" }
+gz-gamelib = { path = "crates/gz-gamelib" }
+gz-ui-text = { path = "crates/gz-ui-text" }
 gz-media = { path = "crates/gz-media" }
 gz-screens = { path = "crates/gz-screens" }
 gz-world = { path = "crates/gz-world" }
@@ -126,6 +129,8 @@ reqwest = { version = "0.13", default-features = false, features = ["native-tls"
 # scripting
 mlua = { version = "0.12", features = ["luajit", "vendored", "send"] }
 # presentation
+# Markdown: the Text tab's preview (the parser alone, no HTML)
+pulldown-cmark = { version = "0.13", default-features = false }
 # no "rayon": tessellation runs on the drawing thread, never on the global pool a build fills
 egui = { version = "0.37", features = ["default_fonts", "bytemuck"] }
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }

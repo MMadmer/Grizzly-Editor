@@ -22,6 +22,9 @@ pub struct PickHit {
     pub point: Vec3,
     pub normal: Option<Vec3>,
     pub surface: Option<u32>,
+    /// The triangle of the object's own collision mesh that was hit
+    /// ([`crate::library::SolidMesh`]): a ray against what is solid, an object that has one.
+    pub solid: Option<u32>,
 }
 
 /// Which kinds a scene ray takes.
@@ -30,9 +33,13 @@ pub enum RayKinds {
     /// The objects with a mesh: static and dynamic scene objects, and terrains.
     #[default]
     Meshes,
-    /// Every object with geometry: the meshes, and by their shapes the shapes, the sound
-    /// environments, the fog volumes and the spawn points that own a shape.
+    /// Every object with geometry: the meshes (the bodies the spawn points' entities wear among
+    /// them), and by their shapes the shapes, the sound environments, the fog volumes and the
+    /// spawn points that own a shape.
     Geometry,
+    /// What stops a body: the objects with a mesh, only the faces whose surface collides
+    /// ([`Library::uses`]) - a tree's leaves, a decal and a ghost wall let the ray through.
+    Solid,
 }
 
 /// What a scene ray takes: the kinds, visible objects only, `only` a list, never `except`'s.
@@ -48,14 +55,18 @@ impl RayFilter<'_> {
     #[must_use]
     pub fn accepts(&self, o: &Object) -> bool {
         let kind = match self.kinds {
-            RayKinds::Meshes => matches!(o.class, ObjClass::SceneObject | ObjClass::Terrain),
+            // the models of the scene, and those the spawn points' entities wear
+            RayKinds::Meshes | RayKinds::Solid => {
+                matches!(o.class, ObjClass::SceneObject | ObjClass::Terrain)
+                    || (o.class == ObjClass::SpawnPoint && objects::visual_ref(o).is_some())
+            }
             RayKinds::Geometry => match &o.data {
                 ObjData::SceneObject(_)
                 | ObjData::Terrain(_)
                 | ObjData::Shape(_)
                 | ObjData::SoundEnv(_)
                 | ObjData::FogVolume(_) => true,
-                ObjData::Spawn(sp) => sp.attached.is_some(),
+                ObjData::Spawn(sp) => sp.attached.is_some() || objects::visual_ref(o).is_some(),
                 _ => false,
             },
         };
@@ -177,6 +188,24 @@ impl ScenePick {
         range: f32,
         accept: &(dyn Fn(&Object) -> bool + Sync),
     ) -> Option<PickHit> {
+        self.ray_pick_of(state, lib, start, dir, range, accept, false, false)
+    }
+
+    /// [`Self::ray_pick`], with `solid` only against the faces that stop a body, and with
+    /// `visuals` a spawn point as the model its entity wears instead of its marker.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn ray_pick_of(
+        &self,
+        state: &SceneState,
+        lib: &Library,
+        start: Vec3,
+        dir: Vec3,
+        range: f32,
+        accept: &(dyn Fn(&Object) -> bool + Sync),
+        solid: bool,
+        visuals: bool,
+    ) -> Option<PickHit> {
         use rayon::prelude::*;
         let cands = self.ray_candidates(start, dir, range);
         let test = |(id, _): &(ObjId, f32)| -> Option<PickHit> {
@@ -184,7 +213,10 @@ impl ScenePick {
             if !accept(o) {
                 return None;
             }
-            ray_object(state, lib, o, start, dir, range)
+            if visuals && o.class == ObjClass::SpawnPoint {
+                return ray_visual(lib, o, start, dir, range, solid);
+            }
+            ray_object_of(state, lib, o, start, dir, range, solid)
         };
         let hits: Vec<PickHit> = if cands.len() > 32 {
             cands.par_iter().filter_map(test).collect()
@@ -205,6 +237,23 @@ impl ScenePick {
         range: f32,
         accept: &(dyn Fn(&Object) -> bool + Sync),
     ) -> Vec<PickHit> {
+        self.ray_hits_of(state, lib, start, dir, range, accept, false, false)
+    }
+
+    /// [`Self::ray_hits`], with `solid` and `visuals` as [`Self::ray_pick_of`] takes them.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn ray_hits_of(
+        &self,
+        state: &SceneState,
+        lib: &Library,
+        start: Vec3,
+        dir: Vec3,
+        range: f32,
+        accept: &(dyn Fn(&Object) -> bool + Sync),
+        solid: bool,
+        visuals: bool,
+    ) -> Vec<PickHit> {
         let mut hits: Vec<PickHit> = self
             .ray_candidates(start, dir, range)
             .iter()
@@ -213,7 +262,10 @@ impl ScenePick {
                 if !accept(o) {
                     return None;
                 }
-                ray_object(state, lib, o, start, dir, range)
+                if visuals && o.class == ObjClass::SpawnPoint {
+                    return ray_visual(lib, o, start, dir, range, solid);
+                }
+                ray_object_of(state, lib, o, start, dir, range, solid)
             })
             .collect();
         hits.sort_by(|a, b| a.t.total_cmp(&b.t));
@@ -261,7 +313,7 @@ fn build_node(items: &mut [(ObjId, Aabb)], first: usize, count: usize, nodes: &m
 /// front-facing triangle (`OPT_ONLYNEAREST | OPT_CULL`). The distance is the world's.
 #[must_use]
 pub fn ray_library(lo: &LibraryObject, obj: &Object, start: Vec3, dir: Vec3, range: f32) -> Option<PickHit> {
-    ray_library_at(lo, obj, &obj.world(), start, dir, range)
+    ray_library_at(lo, obj, &obj.world(), start, dir, range, None)
 }
 
 /// [`ray_library`] with the model placed by `world` (a terrain's is in the world already).
@@ -272,15 +324,49 @@ fn ray_library_at(
     start: Vec3,
     dir: Vec3,
     range: f32,
+    solid: Option<&[crate::library::SurfaceUse]>,
 ) -> Option<PickHit> {
-    let bvh = lo.bvh.as_ref()?;
     let world = *world;
     let inv = gz_fmt_object::Mat4::invert_43(&world);
     let s = inv.transform_tiny(start);
     let d = inv.transform_dir(dir);
     let mut ray = Ray::new(s, d, range);
     ray.cull_back = true;
-    let hit = bvh.ray_nearest(&ray)?;
+    // an object with a collision mesh of its own is solid there and nowhere else
+    if let (Some(_), Some(mesh)) = (solid, &lo.solid) {
+        let hit = mesh.bvh.as_ref()?.ray_nearest(&ray)?;
+        let t = mesh.tris.get(hit.tri as usize)?;
+        let p = |i: usize| mesh.verts.get(t[i] as usize).copied().map(|v| world.transform_tiny(v));
+        let w = [p(0)?, p(1)?, p(2)?];
+        return Some(PickHit {
+            id: obj.id,
+            t: hit.t,
+            point: start + dir * hit.t,
+            normal: Some(tri_normal(w[0], w[1], w[2])),
+            surface: None,
+            solid: Some(hit.tri),
+        });
+    }
+    let bvh = lo.bvh.as_ref()?;
+    let hit = match solid {
+        None => bvh.ray_nearest(&ray)?,
+        // the nearest face whose surface stops a body; a face no surface lists does
+        Some(uses) => {
+            let mut best: Option<gz_fmt_level::RayHit> = None;
+            let _ = bvh.ray_visit(&ray, |h| {
+                let stops = lo
+                    .tri_surface
+                    .get(h.tri as usize)
+                    .and_then(|s| uses.get(*s as usize))
+                    .is_none_or(|u| u.collides);
+                if stops && best.as_ref().is_none_or(|b| h.t < b.t) {
+                    best = Some(h);
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            best?
+        }
+    };
     let tri = lo.tri(hit.tri)?;
     let w = [world.transform_tiny(tri[0]), world.transform_tiny(tri[1]), world.transform_tiny(tri[2])];
     Some(PickHit {
@@ -289,6 +375,7 @@ fn ray_library_at(
         point: start + dir * hit.t,
         normal: Some(tri_normal(w[0], w[1], w[2])),
         surface: lo.tri_surface.get(hit.tri as usize).copied().filter(|s| *s != NO_SURFACE),
+        solid: None,
     })
 }
 
@@ -302,18 +389,37 @@ pub fn ray_object(
     dir: Vec3,
     range: f32,
 ) -> Option<PickHit> {
-    let at = |t: f32| PickHit { id: o.id, t, point: start + dir * t, normal: None, surface: None };
+    ray_object_of(state, lib, o, start, dir, range, false)
+}
+
+/// [`ray_object`]; with `solid` a mesh is hit only where it stops a body, and an object without
+/// a mesh not at all.
+#[must_use]
+pub fn ray_object_of(
+    state: &SceneState,
+    lib: &Library,
+    o: &Object,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    solid: bool,
+) -> Option<PickHit> {
+    let at =
+        |t: f32| PickHit { id: o.id, t, point: start + dir * t, normal: None, surface: None, solid: None };
     let p = o.position();
     match &o.data {
         // a scene object a terrain cuts is hit as its cut model
         ObjData::SceneObject(_) => {
             let lo: Arc<LibraryObject> = objects::terrain::mesh_of(state, lib, o)?;
-            ray_library(&lo, o, start, dir, range)
+            let uses = solid.then(|| lib.uses(&lo));
+            ray_library_at(&lo, o, &o.world(), start, dir, range, uses.as_deref())
         }
         ObjData::Terrain(_) => {
             let lo = objects::terrain::mesh_of(state, lib, o)?;
-            ray_library_at(&lo, o, &gz_fmt_object::Mat4::IDENTITY, start, dir, range)
+            let uses = solid.then(|| lib.uses(&lo));
+            ray_library_at(&lo, o, &gz_fmt_object::Mat4::IDENTITY, start, dir, range, uses.as_deref())
         }
+        _ if solid => None,
         ObjData::Light(_) | ObjData::SoundSrc(_) => {
             ray_point(start, dir, p, VIS_RADIUS).filter(|t| *t < range).map(at)
         }
@@ -344,7 +450,7 @@ pub fn ray_object(
             .members
             .iter()
             .filter_map(|m| state.get(*m))
-            .filter_map(|m| ray_object(state, lib, m, start, dir, range))
+            .filter_map(|m| ray_object_of(state, lib, m, start, dir, range, solid))
             .min_by(|a, b| a.t.total_cmp(&b.t))
             .map(|h| PickHit { id: o.id, ..h }),
         ObjData::Sector(_) | ObjData::Portal(_) | ObjData::Kept(_) => None,
@@ -378,7 +484,9 @@ pub fn ray_scene(
     range: f32,
     filter: &RayFilter<'_>,
 ) -> Option<PickHit> {
-    pick.ray_pick(state, lib, start, dir, range, &|o: &Object| filter.accepts(o))
+    let solid = filter.kinds == RayKinds::Solid;
+    let visuals = matches!(filter.kinds, RayKinds::Meshes | RayKinds::Solid);
+    pick.ray_pick_of(state, lib, start, dir, range, &|o: &Object| filter.accepts(o), solid, visuals)
 }
 
 /// Every object a ray meets within its range (each one's nearest hit), nearest first.
@@ -392,7 +500,83 @@ pub fn ray_scene_all(
     range: f32,
     filter: &RayFilter<'_>,
 ) -> Vec<PickHit> {
-    pick.ray_hits(state, lib, start, dir, range, &|o: &Object| filter.accepts(o))
+    let solid = filter.kinds == RayKinds::Solid;
+    let visuals = matches!(filter.kinds, RayKinds::Meshes | RayKinds::Solid);
+    pick.ray_hits_of(state, lib, start, dir, range, &|o: &Object| filter.accepts(o), solid, visuals)
+}
+
+/// The model a spawn point's entity wears, when the library holds it.
+fn visual_of(lib: &Library, o: &Object) -> Option<Arc<LibraryObject>> {
+    objects::visual_ref(o).and_then(|r| lib.cached(&r))
+}
+
+/// A ray against the model a spawn point's entity wears, standing where the point stands.
+#[must_use]
+pub fn ray_visual(
+    lib: &Library,
+    o: &Object,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    solid: bool,
+) -> Option<PickHit> {
+    let lo = visual_of(lib, o)?;
+    let uses = solid.then(|| lib.uses(&lo));
+    ray_library_at(&lo, o, &o.world(), start, dir, range, uses.as_deref())
+}
+
+/// The world triangles that stop a body, of these objects, that may meet a box: an object's own
+/// collision faces where it has them (a level of the game), else the faces of its model whose
+/// surfaces collide; a spawn point as the model its entity wears.
+#[must_use]
+pub fn solid_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb) -> Vec<[Vec3; 3]> {
+    let mut out = Vec::new();
+    for id in ids {
+        let Some(o) = state.get(*id) else { continue };
+        let lo = if o.class == ObjClass::SpawnPoint {
+            visual_of(lib, o)
+        } else {
+            objects::terrain::mesh_of(state, lib, o)
+        };
+        let Some(lo) = lo else { continue };
+        let world = if o.class == ObjClass::Terrain { gz_fmt_object::Mat4::IDENTITY } else { o.world() };
+        let inv = gz_fmt_object::Mat4::invert_43(&world);
+        let local = crate::math::xform_box(b, &inv);
+        let mut found = Vec::new();
+        let mut put = |tri: [Vec3; 3]| {
+            out.push([
+                world.transform_tiny(tri[0]),
+                world.transform_tiny(tri[1]),
+                world.transform_tiny(tri[2]),
+            ]);
+        };
+        if let Some(mesh) = &lo.solid {
+            let Some(bvh) = &mesh.bvh else { continue };
+            bvh.query_box(&local, &mut found);
+            for t in found {
+                let Some(tri) = mesh.tris.get(t as usize) else { continue };
+                let v = |i: usize| mesh.verts.get(tri[i] as usize).copied();
+                if let (Some(a), Some(b), Some(c)) = (v(0), v(1), v(2)) {
+                    put([a, b, c]);
+                }
+            }
+            continue;
+        }
+        let Some(bvh) = &lo.bvh else { continue };
+        let uses = lib.uses(&lo);
+        bvh.query_box(&local, &mut found);
+        for t in found {
+            let through = lo
+                .tri_surface
+                .get(t as usize)
+                .and_then(|s| uses.get(*s as usize))
+                .is_some_and(|u| !u.collides);
+            if !through && let Some(tri) = lo.tri(t) {
+                put(tri);
+            }
+        }
+    }
+    out
 }
 
 /// The world triangles of these scene objects that may meet a box.

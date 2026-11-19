@@ -66,6 +66,8 @@ if [ $build_code -ne 0 ]; then
     exit 1
 fi
 build_secs=$(since "$t0")
+# what the build left behind of earlier builds (tools/rust/sweep.py)
+python tools/rust/sweep.py
 
 
 # name|package folder|executable, one per binary - one pass, a process per binary costs a

@@ -104,7 +104,7 @@ pub fn plan(from: &[PathBuf], to: Option<&RelPath>, module: &str) -> Plan {
         let name = leaf(src);
         let Some(kind) = files::kind_of_source(&name) else {
             plan.problems.push(format!(
-                "{name}: not a model (.glb, .gltf, .obj, .object), a picture (.png, .jpg, .tga, .bmp, .dds) or a sound (.wav, .ogg)"
+                "{name}: not a model (.glb, .gltf, .obj, .object, .ogf), a picture (.png, .jpg, .tga, .bmp, .dds) or a sound (.wav, .ogg)"
             ));
             continue;
         };

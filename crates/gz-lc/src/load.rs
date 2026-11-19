@@ -28,6 +28,21 @@ pub struct AssetTextures(pub Arc<AssetTexture>);
 /// One texture asset by its name: its description and its picture.
 pub type AssetTexture = dyn Fn(&str) -> Option<(TextureParams, Image)> + Send + Sync;
 
+/// A file of the linked game by its path under the game's data, either slash
+/// (`textures/trees/x.thm`): what the compiler reads of a texture the editor's own data lacks -
+/// a level of the game wears textures that only the game has.
+#[derive(Clone)]
+pub struct GameData(pub Arc<GameFile>);
+
+/// One file of the game: its bytes, `None` when the game has none of that name.
+pub type GameFile = dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync;
+
+impl std::fmt::Debug for GameData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GameData")
+    }
+}
+
 impl std::fmt::Debug for AssetTextures {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("AssetTextures")
@@ -35,13 +50,14 @@ impl std::fmt::Debug for AssetTextures {
 }
 
 /// Where the compilers read the editor's data: `$game_data$` (`shaders_xrlc.xr`) and
-/// `$game_textures$` (the descriptions and the pictures), and the textures the project's assets
-/// give, before that folder.
+/// `$game_textures$` (the descriptions and the pictures), the textures the project's assets
+/// give, before that folder, and the linked game's own, after it.
 #[derive(Clone, Debug)]
 pub struct Sources {
     pub game_data: PathBuf,
     pub textures: PathBuf,
     pub assets: Option<AssetTextures>,
+    pub game: Option<GameData>,
 }
 
 impl Sources {
@@ -79,13 +95,26 @@ impl Sources {
                 textures = p;
             }
         }
-        Self { game_data, textures, assets: None }
+        Self { game_data, textures, assets: None, game: None }
     }
 
     /// The same, with the textures of `assets` asked first.
     #[must_use]
     pub fn with_assets(self, assets: AssetTextures) -> Self {
         Self { assets: Some(assets), ..self }
+    }
+
+    /// The same, with the linked game's files asked for a texture the folder lacks.
+    #[must_use]
+    pub fn with_game(self, game: GameData) -> Self {
+        Self { game: Some(game), ..self }
+    }
+
+    /// A file of the textures folder, else the linked game's of the same name.
+    fn texture_file(&self, key: &str, ext: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.textures.join(format!("{key}.{ext}")))
+            .ok()
+            .or_else(|| (self.game.as_ref()?.0)(&format!("textures/{}.{ext}", key.replace('\\', "/"))))
     }
 
     /// `shaders_xrlc.xr`.
@@ -102,13 +131,27 @@ impl Sources {
         Ok(Shaders::new(list.shaders))
     }
 
+    /// A texture's description: its `.thm`, else - for a texture that has a picture and no
+    /// description that reads - what the picture itself says, its size and whether it lets
+    /// light through.
     fn thm(&self, key: &str) -> Option<TextureParams> {
-        let bytes = std::fs::read(self.textures.join(format!("{key}.thm"))).ok()?;
-        read_texture_thm(&bytes).ok().map(|t| t.params)
+        if let Some(params) =
+            self.texture_file(key, "thm").and_then(|bytes| read_texture_thm(&bytes).ok()).map(|t| t.params)
+        {
+            return Some(params);
+        }
+        let image = self.surface(key)?;
+        let clear = image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+        Some(TextureParams {
+            fmt: if clear { gz_fmt_tex::TextureFormat::DXT5 } else { gz_fmt_tex::TextureFormat::DXT1 },
+            width: image.width as i32,
+            height: image.height as i32,
+            ..TextureParams::default()
+        })
     }
 
     fn surface(&self, key: &str) -> Option<Image> {
-        let bytes = std::fs::read(self.textures.join(format!("{key}.dds"))).ok()?;
+        let bytes = self.texture_file(key, "dds")?;
         load_image(&bytes, Some("dds")).ok().map(|l| l.image)
     }
 
@@ -134,8 +177,9 @@ impl Sources {
                 let thm = if key == "level_lods" { None } else { self.thm(&key) };
                 if key != "level_lods" && thm.is_none() {
                     return Err(Error::Invalid(format!(
-                        "The description of the texture '{key}' ({}) could not be read.",
-                        self.textures.join(format!("{key}.thm")).display()
+                        "The description of the texture '{key}' ({}) could not be read{}.",
+                        self.textures.join(format!("{key}.thm")).display(),
+                        if self.game.is_some() { ", and the linked game has no such texture" } else { "" }
                     )));
                 }
                 prepare_texture(raw, thm.as_ref(), usage, |k| self.surface(k)).map_err(Error::from)
@@ -241,7 +285,12 @@ mod tests {
     fn a_texture_asset_is_asked_before_the_textures_folder_and_the_level_compiles_with_it() {
         let (prj, shaders, _) = crate::tests::project();
         let nowhere = std::env::temp_dir().join(format!("gz-lc-assets-{}", std::process::id()));
-        let plain = Sources { game_data: nowhere.clone(), textures: nowhere.join("textures"), assets: None };
+        let plain = Sources {
+            game_data: nowhere.clone(),
+            textures: nowhere.join("textures"),
+            assets: None,
+            game: None,
+        };
         // the folder has no description of either texture
         let refused = plain.textures(&prj.textures, TextureUse::Level { radiosity: false }).unwrap_err();
         assert!(refused.to_string().contains("The description of the texture"), "{refused}");
@@ -268,5 +317,39 @@ mod tests {
         )
         .unwrap();
         assert!(out.files.iter().any(|(n, _)| n == "level.geom"));
+    }
+
+    #[test]
+    fn a_texture_the_folder_lacks_is_read_from_the_linked_game() {
+        let (prj, _, _) = crate::tests::project();
+        let nowhere = std::env::temp_dir().join(format!("gz-lc-game-{}", std::process::id()));
+        let plain = Sources {
+            game_data: nowhere.clone(),
+            textures: nowhere.join("textures"),
+            assets: None,
+            game: None,
+        };
+        // the game has the pictures and no description: one lets light through, one does not
+        let game = |path: &str| {
+            let rgba = match path {
+                "textures/grnd/floor.dds" => [10, 200, 30, 255],
+                p if p.ends_with(".dds") => [90, 90, 90, 128],
+                _ => return None,
+            };
+            let picture = Image::filled(8, 4, rgba).ok()?;
+            gz_fmt_tex::encode_dds(&[picture], gz_fmt_tex::DdsEncoding::Rgba8).ok()
+        };
+        let sources = plain.clone().with_game(GameData(Arc::new(game)));
+        let textures = sources.textures(&prj.textures, TextureUse::Level { radiosity: false }).unwrap();
+        assert_eq!(textures.len(), 2);
+        let floor = textures.iter().find(|t| t.name == "grnd\\floor").unwrap();
+        assert!(!floor.has_alpha && !floor.has_surface, "an opaque picture is no surface to read");
+        assert_eq!((floor.width, floor.height), (8, 4));
+        let other = textures.iter().find(|t| t.name != "grnd\\floor").unwrap();
+        assert!(other.has_alpha && other.has_surface, "{}", other.name);
+        // a game that lacks the texture too is said so
+        let none = plain.with_game(GameData(Arc::new(|_: &str| None)));
+        let refused = none.textures(&prj.textures, TextureUse::Level { radiosity: false }).unwrap_err();
+        assert!(refused.to_string().contains("the linked game has no such texture"), "{refused}");
     }
 }

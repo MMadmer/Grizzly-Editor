@@ -38,8 +38,18 @@ pub fn clipboard_file(svc: &SceneService) -> PathBuf {
 #[must_use]
 pub fn bundle_of(state: &SceneState, ids: &[ObjId]) -> Bundle {
     let all = group::with_members(state, ids);
-    let objects: Vec<crate::model::Object> =
-        all.iter().filter_map(|id| state.get(*id)).map(|o| (**o).clone()).collect();
+    // a copy of what the level holds is no object of the level: it is the scene's own, whole,
+    // and taken out of nothing
+    let objects: Vec<crate::model::Object> = all
+        .iter()
+        .filter_map(|id| state.get(*id))
+        .map(|o| {
+            let mut copy = (**o).clone();
+            copy.marks.base = false;
+            copy.marks.removed = false;
+            copy
+        })
+        .collect();
     let mut groups = Vec::new();
     for (i, o) in objects.iter().enumerate() {
         if let ObjData::Group(g) = &o.data {
@@ -405,9 +415,16 @@ pub(crate) fn place_unplaced(
 }
 
 /// New Scene: an empty scene with no file, its history new; the kinds' eyes and locks stay.
-pub async fn new_scene(editor: &Arc<Editor>, svc: &SceneService, origin: Origin) -> Result<(), CmdError> {
+pub async fn new_scene(
+    editor: &Arc<Editor>,
+    svc: &SceneService,
+    over: Option<(&str, &Arc<SceneState>)>,
+    origin: Origin,
+) -> Result<(), CmdError> {
+    let _turn = svc.turn().await;
     let snap = svc.store.snapshot();
-    let mut fresh = SceneState::default();
+    // over a level of the game the scene starts with the level's own objects
+    let mut fresh = over.map_or_else(SceneState::default, |(name, level)| crate::base::over(level, name));
     for c in crate::class::ObjClass::ALL {
         let now = snap.tools.part(c);
         let t = fresh.tools.part_mut(c);
@@ -455,7 +472,7 @@ mod tests {
 
     fn scene_with(group_ref: &str) -> Texts {
         Texts {
-            scene: "return { scene = 1 }\n".into(),
+            scene: "return { scene = 2 }\n".into(),
             files: vec![(
                 "groups.lua".into(),
                 format!(
@@ -508,7 +525,7 @@ mod tests {
     #[test]
     fn a_group_with_members_is_read_as_it_is() {
         let t = Texts {
-            scene: "return { scene = 1 }\n".into(),
+            scene: "return { scene = 2 }\n".into(),
             files: vec![(
                 "groups.lua".into(),
                 "return { groups = { { name = \"hut\", ref = \"prefabs/hut.group\", members = {} } } }\n"

@@ -42,4 +42,6 @@ grep -E '^(error|warning)' -A 16 "$log" | head -"${CG_LINES:-120}"
 grep -E '^test .* FAILED$|panicked at|^test result:' "$log" | head -"${CG_LINES:-120}"
 tail -1 "$log"
 rm -f "$log"
+# what this run left behind of earlier builds (tools/rust/sweep.py)
+python tools/rust/sweep.py
 exit $code

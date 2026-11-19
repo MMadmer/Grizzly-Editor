@@ -788,3 +788,26 @@ fn a_document_s_file_names_never_leave_for_a_drive_or_a_server() {
     assert!(read_gltf(&gltf).is_err());
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn a_compiled_model_reads_back_as_the_object_it_was_exported_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut g = Gltf::default();
+    let doc = cube_doc(&mut g);
+    let path = write(dir.path(), "cube.gltf", g.gltf(doc));
+    let mut src = read_gltf(&path).unwrap();
+    src.object.surfaces[0].texture = "wood\\crate".into();
+    let ogf = export_static(&src.object, &ExportOptions::default()).unwrap();
+    let back = crate::read_ogf_bytes(&ogf.bytes, "crate.ogf").unwrap();
+    let (a, b) = (&src.object, &back.object);
+    assert_eq!(b.meshes.iter().map(|m| m.faces.len()).sum::<usize>(), a.meshes[0].faces.len());
+    let (ba, bb) = (a.bounding_box(), b.bounding_box());
+    assert!((ba.min - bb.min).length() < 1e-4 && (ba.max - bb.max).length() < 1e-4, "{ba:?} {bb:?}");
+    // the faces still look outward, and the surface wears the model's texture
+    assert!(outward(b));
+    assert_eq!(b.surfaces.len(), 1);
+    assert_eq!(b.surfaces[0].texture, "wood\\crate");
+    assert_eq!(b.surfaces[0].name, "crate");
+    assert!(!b.is_dynamic() && b.bones.is_empty());
+    assert!(crate::read_ogf_bytes(b"not a model", "x.ogf").is_err());
+}

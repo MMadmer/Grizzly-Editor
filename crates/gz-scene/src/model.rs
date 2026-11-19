@@ -54,6 +54,45 @@ impl Default for ObjFlags {
 pub struct ModMarks {
     pub authored: bool,
     pub removed: bool,
+    /// The object is the level's of the game the scene lies over ([`Backdrop`]): read from the
+    /// game library and never written. Only `removed` of it is the scene's to say.
+    pub base: bool,
+}
+
+/// The level of the game a scene lies over (`base = "<level>"` of its `.scene`): the scene's
+/// files hold what the module adds and which of the level's spawn points it takes out, and the
+/// level's own objects come from the game library as the scene is read.
+#[derive(Clone, Debug, Default)]
+pub struct Backdrop {
+    /// The level's name: its folder under the game's `levels`. Empty: the scene lies over none.
+    pub level: SmolStr,
+    /// The level as the game library holds it, every object marked [`ModMarks::base`]; `None`
+    /// while the library has no such level.
+    pub state: Option<Arc<SceneState>>,
+    /// The spawn points the scene's files take out that the scene holds no object for, by name
+    /// in the files' order: the level is not at hand, or it has none of that name. They are
+    /// lines of the files; a file made anew (Save As, a recovery snapshot) carries them.
+    pub pending: Vec<SmolStr>,
+}
+
+impl PartialEq for Backdrop {
+    fn eq(&self, other: &Self) -> bool {
+        self.level == other.level
+            && self.pending == other.pending
+            && match (&self.state, &other.state) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Backdrop {
+    /// Whether the scene lies over a level of the game.
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        !self.level.is_empty()
+    }
 }
 
 /// An object's motion: the X-Ray SDK's object motion (`.anm` body), kept as read until it is
@@ -213,6 +252,8 @@ pub struct SceneMeta {
     pub camera_hpb: Vec3,
     pub camera_pos: Vec3,
     pub level: LevelOptions,
+    /// The level of the game the scene lies over.
+    pub base: Backdrop,
 }
 
 impl Default for SceneMeta {
@@ -223,11 +264,19 @@ impl Default for SceneMeta {
             camera_hpb: Vec3::ZERO,
             camera_pos: Vec3::ZERO,
             level: LevelOptions::default(),
+            base: Backdrop::default(),
         }
     }
 }
 
 impl SceneMeta {
+    /// The level the scene is of: the level of the game it lies over, else its own name (a level
+    /// of the module's own is named after its scene).
+    #[must_use]
+    pub fn level_name(&self) -> String {
+        if self.base.is_set() { self.base.level.to_string() } else { self.name() }
+    }
+
     /// The scene's name: its file's stem, or empty.
     #[must_use]
     pub fn name(&self) -> String {
@@ -380,11 +429,20 @@ impl SceneState {
         self.by_class[class.index()].len()
     }
 
+    /// Over a level of the game everything that is not the level's own is the module's: the
+    /// `authored` mark is implied, so whatever adds an object need not know of the level.
+    fn own(&self, obj: &mut Object) {
+        if self.meta.base.is_set() && !obj.marks.base {
+            obj.marks.authored = true;
+        }
+    }
+
     /// Adds an object with a fresh id (the name is the caller's to make unique).
     pub fn insert(&mut self, mut obj: Object) -> ObjId {
         let id = ObjId(self.next_id);
         self.next_id += 1;
         obj.id = id;
+        self.own(&mut obj);
         self.by_class[obj.class.index()].insert(id);
         self.names.insert(name_key(&obj.name), id);
         self.objects.insert(id, Arc::new(obj));
@@ -392,8 +450,9 @@ impl SceneState {
     }
 
     /// Replaces an object in place, keeping the name index right.
-    pub fn replace(&mut self, obj: Object) {
+    pub fn replace(&mut self, mut obj: Object) {
         let id = obj.id;
+        self.own(&mut obj);
         if let Some(old) = self.objects.get(&id)
             && old.name != obj.name
         {
@@ -452,10 +511,18 @@ impl SceneState {
         o.flags.visible && self.tools.part(o.class).visible
     }
 
-    /// Whether an object may be changed: neither it nor its kind is locked.
+    /// Whether an object may be changed: neither it nor its kind is locked, and it is not the
+    /// level's own of the game the scene lies over.
     #[must_use]
     pub fn changeable(&self, o: &Object) -> bool {
-        !o.flags.locked && !self.tools.part(o.class).locked
+        !o.marks.base && !o.flags.locked && !self.tools.part(o.class).locked
+    }
+
+    /// Whether a save writes an object into the scene's files: what the scene holds of its own,
+    /// and of the level's objects those it takes out.
+    #[must_use]
+    pub fn written(o: &Object) -> bool {
+        !o.marks.base || o.marks.removed
     }
 
     /// What the gizmo may do to the selection: what every selected object allows (a locked one

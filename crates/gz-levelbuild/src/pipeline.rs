@@ -49,6 +49,25 @@ fn job_err(e: crate::BuildError) -> JobError {
 /// Files by name, as a step writes them into the level folder.
 type NamedFiles = Vec<(String, Vec<u8>)>;
 
+/// Why a request that names a step compiling the level itself is refused for a scene that lies
+/// over a level of the game; `None` when it names none.
+fn compile_over_a_level(req: &Request, level: &str) -> Option<String> {
+    let named: Vec<&str> = req
+        .only
+        .iter()
+        .chain(req.steps.iter().flatten())
+        .filter(|s| s.compiles())
+        .map(|s| s.name())
+        .collect();
+    if named.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} cannot be built: the scene lies over {level}, a level of the game, and holds nothing of the level to compile. What the module adds is built by spawn_layer and piece.",
+        named.join(", ")
+    ))
+}
+
 /// What a build is asked to do.
 #[derive(Clone, Debug, Default)]
 pub struct Request {
@@ -425,10 +444,16 @@ pub(crate) async fn run(
     if level.trim().is_empty() {
         return Err(JobError::new("The scene has no level path: set it in Level Settings."));
     }
-    // a stock level's compile steps run only when they are asked for by name or forced
+    // a stock level's compile steps run only when they are asked for by name or forced - and
+    // never for a scene that lies over the level: it holds what the module adds and nothing of
+    // the level to compile, so a forced build there builds the module's own layers again
     let stock = crate::stock::is_stock(&lb.game_levels(editor).await, &level);
     let pieces = lb.game_pieces(editor).await;
-    let explicit = req.force || req.only.is_some() || req.steps.is_some();
+    let over = stock && inp.snap.meta.base.is_set();
+    if over && let Some(refusal) = compile_over_a_level(req, &level) {
+        return Err(JobError::new(refusal));
+    }
+    let explicit = !over && (req.force || req.only.is_some() || req.steps.is_some());
     let req = &Request {
         opts: Options { library, stock: stock && !explicit, game_level: stock, pieces, ..req.opts.clone() },
         ..req.clone()
@@ -443,11 +468,15 @@ pub(crate) async fn run(
     let objects = lb.hashes.objects(&work);
     let fps = fingerprint::steps(&work, &objects, &req.opts);
     let status = service::status_with(&work, &objects, Some(&record), &req.opts);
-    let asked: Vec<Step> = match (req.only, &req.steps) {
+    let mut asked: Vec<Step> = match (req.only, &req.steps) {
         (Some(s), _) => with_needs(&[s]),
         (None, Some(list)) => with_needs(list),
         (None, None) => Step::ORDER.to_vec(),
     };
+    // over a level of the game nothing forces a step that compiles the level
+    if over {
+        asked.retain(|s| !s.compiles());
+    }
     let forced: Vec<Step> = match (req.force, req.only) {
         (false, _) => Vec::new(),
         (true, Some(s)) => vec![s],
@@ -928,6 +957,13 @@ fn log_lines(editor: &Editor, found: &[Finding]) {
     }
 }
 
+/// What the builder says of what it made that is no problem - a surface left out of the static
+/// geometry, a shader for models compiled as its shader for level geometry: the notes of its
+/// log, for the step's answer. A caller reads what was done, not only that it was.
+fn notes_of(found: &[Finding]) -> Vec<String> {
+    found.iter().filter(|f| f.severity == Severity::Note).map(|f| f.text.clone()).collect()
+}
+
 /// `level.ltx` and the game files: the spawn packets, patrol paths, sounds, particles, fog.
 async fn step_game(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     let scene = Arc::new(cx.work.clone());
@@ -981,6 +1017,24 @@ async fn step_spawn_layer(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
                 position: None,
             });
         }
+    }
+    // what the module adds beside its spawns reaches a game that reads it
+    let things: u64 = note
+        .get("things")
+        .and_then(Value::as_object)
+        .map_or(0, |m| m.values().filter_map(Value::as_u64).sum());
+    if things > 0 && !crate::service::game_states(cx.editor, gz_export_level::things::ABILITY).await {
+        cx.problems.push(LevelProblem {
+            step: Step::SpawnLayer,
+            code: "level_things",
+            severity: Severity::Warning,
+            text: format!(
+                "The level takes {things} things from the module's text - sounds, effects, lights, environment modifiers, glows, fog volumes or sound environments -, and the linked game reads no such text of a level (it does not state the ability {}): they stay out of the game.",
+                gz_export_level::things::ABILITY
+            ),
+            object: None,
+            position: None,
+        });
     }
     let path = note.get("path").and_then(Value::as_str).unwrap_or_default().to_owned();
     Ok(Made { files: if path.is_empty() { Vec::new() } else { vec![path] }, note, ..Made::default() })
@@ -1358,7 +1412,7 @@ async fn step_geometry(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     .collect();
     write_files(cx.editor, cx.dir.clone(), made).await?;
     remove_files(cx.editor, cx.dir.clone(), gone).await;
-    let note = json!({ "default_cell_meshes": completion.default_meshes, "portals_computed": completion.portals, "quality": cx.req.opts.quality.name() });
+    let note = json!({ "default_cell_meshes": completion.default_meshes, "portals_computed": completion.portals, "quality": cx.req.opts.quality.name(), "notes": notes_of(&log) });
     Ok(Made { files: names, note, ..Made::default() })
 }
 
@@ -1650,7 +1704,7 @@ async fn step_piece(cx: &mut StepCx<'_>) -> Result<Made, JobError> {
     if !edits.regions.is_empty() {
         cx.editor.log.info(format!("{}: {}.", Step::Piece.title(), edits.sentence()));
     }
-    let note = json!({ "parts": report.get("parts").cloned().unwrap_or(Value::Null), "lighter": report.get("lighter").cloned().unwrap_or(Value::Null), "collision": { "triangles": collision.tris.len(), "cuts": collision.cuts.len() }, "level_cuts": cuts });
+    let note = json!({ "parts": report.get("parts").cloned().unwrap_or(Value::Null), "lighter": report.get("lighter").cloned().unwrap_or(Value::Null), "collision": { "triangles": collision.tris.len(), "cuts": collision.cuts.len() }, "level_cuts": cuts, "notes": notes_of(&log) });
     Ok(Made { files, note, ..Made::default() })
 }
 

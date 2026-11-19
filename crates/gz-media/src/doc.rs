@@ -34,7 +34,7 @@ their assets. The rules every kind keeps are `docs/ASSETS.md`.\n\n";
 const CODES: &str = "\
 ## Problems\n\n\
 | Code | Severity | What |\n|---|---|---|\n\
-| `M101` | error | The source is not there. |\n\
+| `M101` | error | The source is not there: no such file, or a model neither the project nor the linked game has. |\n\
 | `M102` | error | The source cannot be read (the reader's sentence). |\n\
 | `M103` | error | Two assets of the kind publish one name (on both). |\n\
 | `M104` | warning | A texture nobody has: not a texture asset, not a file of the project, not the game's. |\n\
@@ -44,7 +44,7 @@ const CODES: &str = "\
 | `M108` | note | A dynamic model whose source has no bones: it gets one bone, `root`. |\n\
 | `M109` | error | A value outside what its key takes. |\n\
 | `M110` | error | `parts` together with `source`. |\n\
-| `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |\n\
+| `M111` | warning, error | What the model cannot take: `rotate` on a model with bones, a part that makes no faces (an error when no part makes any: there is no model), a row of `surfaces` that names no surface of the model, and over a compiled dynamic model `scale`, `rotate`, a bone the file lacks, an animation's `clip` and a row of `animations` that names no motion the file itself holds. |\n\
 | `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |\n\
 | `M113` | error | A source that lies outside the project: a project names nothing outside itself. |\n\
 | `M114` | warning | A sound's `streamer` on a sound that is not `copyrighted`: the replacement never plays. |\n\
@@ -63,8 +63,9 @@ pub fn reference(kind: MediaKind) -> String {
             out.push_str("# Models (`.meshasset`)\n\n");
             out.push_str(generated);
             out.push_str(
-                "A model asset is a text file beside its geometry - a glTF 2.0 (`.glb`, `.gltf`), a Wavefront OBJ \
-or an X-Ray SDK `.object` - or with its geometry written in it (`parts`). A scene object refers to it by its project \
+                "A model asset is a text file beside its geometry - a glTF 2.0 (`.glb`, `.gltf`), a Wavefront OBJ, \
+an X-Ray SDK `.object` or a compiled model (`.ogf`) -, over a model of the game (`source = \"game:...\"`), or with \
+its geometry written in it (`parts`). A scene object refers to it by its project \
 path: `ref = \"models/bunker/wall_long.meshasset\"` (any slashes, any case); any other reference is a library \
 object as before. A static model is compiled into the level by the level build; a dynamic one is published as \
 `meshes\\<name>.ogf` (and `.omf` with its motions) beside this text, which the game reads over the \
@@ -79,11 +80,35 @@ weights (the four heaviest), its clips motions sampled 30 times a second.\n\n",
             out.push_str(COMMON);
             out.push_str(
                 "```lua\nreturn {\n  mesh = 1,\n  source = \"wall_long.glb\",\n  surfaces = {\n    { name = \"brick\", texture = \"bunker\\\\wall_brick\", material = \"materials\\\\bricks\" },\n  },\n}\n```\n\n\
+A model of the game dressed differently - no geometry of the module's own; `asset.find kind=model` lists the \
+game's models and `asset.card` says what each part wears:\n\n\
+```lua\nreturn {\n  mesh = 1,\n  kind = \"dynamic\",\n  name = \"bunker\\\\box_red\",\n  source = \"game:dynamics/box/box_wood_01.ogf\",\n  surfaces = {\n    { name = \"box_wood_01\", texture = \"bunker\\\\box_red\" },\n  },\n}\n```\n\n\
 A blockout, no source:\n\n\
 ```lua\nreturn {\n  mesh = 1,\n  parts = {\n    { shape = \"box\", size = { 4, 3, 0.3 }, pos = { 0, 0, 0 }, surface = \"brick\", tile = 2 },\n    { shape = \"ramp\", size = { 2, 1, 4 }, pos = { 3, 0, 0 }, surface = \"concrete\" },\n    { shape = \"cylinder\", radius = 0.2, height = 3, sides = 12, pos = { 0, 0, 2 }, surface = \"metal\" },\n    { shape = \"plane\", size = { 10, 10 }, surface = \"concrete\", tile = 4 },\n    { shape = \"prism\", outline = { { 0, 0 }, { 6, 0 }, { 6, 4 }, { 0, 4 } }, height = 3, surface = \"brick\" },\n  },\n}\n```\n\n\
 ## The keys\n\n",
             );
             table(&mut out, MODEL);
+            out.push_str(
+                "\n## Over a compiled model\n\n\
+A source that is an `.ogf` - a file of the project, or `game:<name under meshes>.ogf`, read from the project's \
+own `gamedata\\meshes` first and then from the linked game - is a model that is compiled already. The asset \
+says what changes and nothing else:\n\n\
+- **`surfaces`**: one surface per texture and shader pair the model's parts wear, named after the texture's \
+last name (`prop\\prop_crate` is the surface `prop_crate`; `model.info` lists them). A row gives it another \
+`texture`, `shader`, and - for a static model - `compile`, `material`, `two_sided`.\n\
+- **static** (the default): the model's geometry at rest is compiled into the level like any other; `scale` \
+and `rotate` apply.\n\
+- **dynamic**: published as `meshes\\<name>.ogf` - the same file with each changed part's texture and shader, \
+`userdata` and a bone's `mass` said again; a file nothing is asked of is published byte for byte. Its \
+skeleton, its motions (and the motion files it names) and its levels of detail stay its own: `scale` and \
+`rotate` are not applied and say so (`M111`), and a row of `bones` names a bone of the file. The rest is said \
+to the game in the description shipped beside the model, and the game applies it as the model loads: a \
+bone's `material` when it is a dynamic one, a bone's `shape` as the kind alone - the game switches to it when \
+the model holds the size of such a shape for the bone -, and a row of `animations` as the `speed` and the \
+flags of a motion the file itself holds (a motion of a motion file it names is shared with other models and \
+keeps its own; `clip` names nothing here).\n\n\
+The game is never written: what ships is the module's own file under the module's own name.\n",
+            );
             out.push_str("\n## A row of `surfaces`\n\n");
             table(&mut out, SURFACE);
             out.push_str(

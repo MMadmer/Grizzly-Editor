@@ -54,6 +54,7 @@ pub mod overlay;
 mod service;
 pub mod spawn;
 pub mod starts;
+pub mod things;
 pub mod visuals;
 
 pub use cmd::{Layer, bake_layer, export_collision, export_cut, export_spawn, export_visuals, install};

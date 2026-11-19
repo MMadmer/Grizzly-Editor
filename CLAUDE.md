@@ -52,6 +52,7 @@ A change of plan is a change of its document first.
 | `docs/NQ_ARCHITECTURE.md`, `docs/nq/NQ_FORMAT.md` | quests and behaviour graphs |
 | `docs/pda/PDA_FORMAT.md`, `docs/assets/*.md` | PDA interfaces; characters, the scene, the project file, models, textures, sounds |
 | `docs/LEVEL_DESIGN.md` | how a place in a level is built by editing text: what to ask, what to write, how to check it |
+| `docs/GAME_LIBRARY.md` | the game as the editor's library: what is described, how it is kept current, a scene over a level, pictures without a window |
 | `docs/STATE.md` | what is proven and how, what is not, and the decisions the contracts do not state |
 | `tools/mcp/AI_SETUP.md`, `docs/MOD_QUICKSTART.md` | the editor for an agent; a mod from nothing |
 
@@ -82,7 +83,10 @@ A change of plan is a change of its document first.
   thread's submission crosses. A renderer is made with that gate; a render thread never waits for the GPU. The
   runtime also puts everything a queue is asked behind one lock that the window's frame takes: a pool thread
   that uploads to the GPU does it under `gz_win::drawing_priority()`, so the other pools cannot take the
-  processor from the thread the UI thread is waiting for.
+  processor from the thread the UI thread is waiting for. **A mesh is one buffer of 32 MB at most**
+  (`gz-render`'s `assets.rs`, `PAGE_BYTES`): a larger one - a level of the game as one model is over a
+  gigabyte - is cut into pages with vertices of their own (`paging.rs`) and drawn piece by piece, because a
+  device refuses a buffer past its limit and a frame waits for as long as one is filled.
 - **Frames are drawn on demand, and a scene pass only when its picture can change** (`gz-ui-viewport`'s
   `service.rs`, `due`): the scene, the library, the view as a pass reads it, assets, an animation, a spawn. A job's
   progress redraws the chip, the Task Center's card and the spinner at their own rates and builds no scene pass, so a
@@ -110,6 +114,12 @@ A change of plan is a change of its document first.
   (`--only`) while fixing, the three once at the end.
 - **Every cargo command goes through `bash tools/rust/cg.sh <cargo args>`** (or `Build.ps1`, which uses the same
   settings): the target folder `Intermediate\cargo`, the log under `Intermediate`.
+- **The build's scratch never grows without end.** Cargo removes nothing it stopped needing: every change of a
+  crate's features, flags or dependencies writes a new copy beside the old one, and the debug folder once filled
+  the author's disk with 400 GB. `tools/rust/sweep.py` runs after every cargo run of `cg.sh`, `test.sh` and
+  `Build.ps1`: of one target's copies it keeps the newest, and a profile folder over `GRIZZLY_TARGET_CAP_GB` (60)
+  is cut to that. Nothing else of a task's - logs, patches, copies, backups - is left in `Intermediate`, the temp
+  folder or the game's folder when the task ends: a backup nobody asked for is not made at all.
 - **Nothing a script starts may wait for ever**: a program runs under `python tools/rust/limited.py <seconds>
   <program> ...`, which ends it with everything it started when the time is up (exit code 124). A run that takes
   minutes is watched: something says every two minutes how far it is.
@@ -136,7 +146,10 @@ A change of plan is a change of its document first.
   `level.compile` and `level.play` picks; left out it is `auto`. Every phase that lights - lightmaps, static
   models, terrain, vertices, details - goes through it: a new one makes samples and never traces by itself. The
   one light outside it is the sky at the vertices that the tessellation phase computes, on the processor in every
-  build: seconds, and not worth a scene of its own on the card.
+  build: seconds, and not worth a scene of its own on the card. **Every kind of light is baked**: a point
+  light, a directional one, and a spot light as a point light inside its cone (`LT_SPOT`, `spot_share`: full
+  on the axis, nothing at the cone's edge) - the same rule on the processor (`point.rs`) and in the card's
+  shader (`light.wgsl`), held together by the card's self-check and the tests that light one scene both ways.
 - **Light never decides structure.** Visuals are merged before the light, and for one scene the visuals with
   their order, vertices and faces, the sectors, the portals and the collision are the same on any machine, with
   any lighter and any number of threads: `structure` in the compile's answer is that promise as a hash, and
@@ -294,11 +307,99 @@ A change of plan is a change of its document first.
   models for a command (`prefetch_library`) first makes again a terrain made for an earlier state of the scene:
   whoever asks reads the scene as it is now.
 
+## The game as the editor's library (gz-gamelib, `docs/GAME_LIBRARY.md`)
+
+- **A wrapper, never a copy.** Everything of the linked game a level designer names - models, textures, sounds,
+  particle effects, spawn sections, materials, light animations, sound environments, levels - is described as
+  text in the editor's own data (`_appdata_\game_library\<game key>\`, one per game, shared by every project):
+  what it is called and every fact that can be measured in the game's own file (a model's box, pivot, surfaces,
+  collision share, floors, bones with their shapes). The triangles, pixels and samples stay in the game; the
+  game is never written. `asset.find` searches it, `asset.card` answers one, `game.read` / `game.search` read
+  the game's configs and scripts.
+- **Always current, by a job of the editor** (`GameLibrary`): after every start, when another game takes the
+  place of the one there was, when the game's index is read again (a build that installed a module, a
+  refresh) and when a command reads the library - a library found current is not looked at again for 30
+  seconds; per kind what is new, changed and gone is described again on every core, the state saved as it
+  goes. The look takes in everything the library holds (`sync::stale_reason`): the files of the three kinds,
+  every list against its source, every level against its files. A start with nothing changed opens no file of
+  the game. Nothing watches the game's folder. A sync that is cut off leaves nothing half said: catalogs are
+  written before the state that names them, a missing catalog is made again, and a level says it is done in
+  its own `stamp.txt`; levels are made on every core at once, and Stop leaves the ones not begun.
+- **A level of the game is a scene with a passport**, made from the files the game loads (`level`,
+  `level.geom`, `level.cform`, `level.ai`, the entities of `all.spawn` by their own names): the passport says
+  the ground, every structure with its floors (height, rectangle, clear height, AI nodes), the materials - a
+  building's storeys are read, never guessed from a picture.
+- **A module's scene lies over the level** (`base = "<level>"`, `gz-scene`'s `base.rs`): the level's objects
+  stand in the scene marked the level's own (`ModMarks::base`), read from the game as the scene opens and never
+  written; the files hold what the module adds (`authored` implied) and entries of `spawns.lua` that take a
+  spawn point of the level out (`{ name, removed = true }`). Nothing of the level is changed; deleting a spawn
+  point of it takes it out. `SceneState::written` is the one rule of what a save writes. A copy of the
+  level's own (Duplicate, Paste, a group asset) is the module's object, written whole; the level's own stay
+  out of a group, an object tool and a motion (`check_editable` is the one guard). The lines that take out
+  what the scene holds no object for are the scene's (`Backdrop::pending`): a file made anew carries them.
+- **No kind is second class over a level of the game.** A compiled model is a `ref` (`<name>.ogf`); a character
+  of the module is a spawn section (`gz_game::OwnSections`: whoever owns assets the game makes sections of says
+  them to the editor - never a quest to put a person somewhere); a zone has one `shape`; what a spawn point's
+  entity wears stands there as a body in every ray, fit, audit and picture; the module's sounds, effects,
+  `dynamic` lights (a spot with its cone), environment modifiers, glows, fog volumes and sound environments ship
+  as `levels\<level>\overlay.things`, which the game puts beside the level's own (its `XMS_ARCHITECTURE.md` 8.5,
+  ability `level-things`); wallmarks painted over the level are faces of the module's piece.
+- **The scene reads the configs a game with the module would read** (`gz_game::ComposedConfigs`, said by the
+  items area: the game's tree with the module's configs, patches and item assets laid over it). So a section
+  the module makes - an item first of all - is a spawn section like any of the game's: listed, placed, checked
+  and baked with no word of its own anywhere. A module that makes no section composes nothing.
+- **`overlay.things` is every level's**: over a level of the game it holds all the module adds beside objects
+  and spawns; on a level of the module's own, what the level's own files cannot carry - the glows (the game
+  draws none of a level's file), the sound environments (no compiler makes their file) and the spot lights that
+  shine in the game (a level's file makes every light a point light). `gz-export-level`'s `things.rs`
+  (`Over::Game` / `Over::Own`) is the one writer; its normative text is the game's. The file is the build's
+  by its first line (`things::HEADER`): one somebody wrote is neither replaced nor removed, and the build
+  says so; a name the file cannot say (a `;`, a line break) leaves its thing out with a sentence. Play on a
+  level of the module's own stages the file with the level's pieces, as the module Play makes for them.
+- **What a level of the game does not take from a module is a check, never silence**: a directional light asked
+  to shine (`S221`: the game's one is the level's sun), sectors, portals and the level's bounds (`S222`), details
+  or an AI map painted over it (`S223`: the game grows the level's own grass alone, and the level's AI map
+  changes under a cutting terrain only). A build over such a level reads no sector of the module either.
+- **Queries and the audit read what stops a body** (`RayKinds::Solid`): a level's collision, the faces of a
+  model whose surfaces collide; a cutting terrain takes the old ground out of a level's collision as out of
+  its picture (`cut_solid`). A command that reads the scene first takes in what another program wrote into
+  its files (`catch_up`). **A scene's files have one reader or writer at a time** (`SceneService::turn`): a
+  save, a load, a new scene and the taking in of an outside change never cross, a change that is in already
+  is no change (`files_differ`: the files' sizes and times first, then their texts against the documents),
+  and a reading goes into the scene it was made of or nowhere (`Reload`'s `of`).
+- **The level compiler reads a texture the editor's data lacks from the linked game** (`gz_lc::Sources`:
+  the project's texture asset, the editor's textures folder, then the game's `.thm` and `.dds`, a picture
+  without a description told by itself): the piece of a module over any level of the game builds.
+- **A picture needs no window**: `asset.preview`, `asset.thumbnail` and `shot.scene` are drawn on the processor
+  (`gz-pix`'s `raster.rs`), a face in its texture's average colour, and answer what a pixel means.
+- **A name picked from the game is checked** (`S220`): the scene's crate knows no list of the game, it asks
+  whoever holds them (`gz_scene::names`, registered by the library). The same source says which models the
+  game draws nothing for (a model's card: `invisible`): an object that wears one is `S224` at its line, the
+  bake names it in its answer, and a section whose own model is such - a stash - is left alone. What is there
+  and the game would still not take is said the same way, with the reason (`Names::refusal`: a fog profile
+  without what the volume's loader reads - the game's rule, ported: change both or neither); a glow's shader
+  no glow is drawn with is `S225`.
+- **A compiled model placed as a static object is level geometry.** Its parts name the shader the model was
+  made for (`models\model`), which the game compiles for a model's vertices and draws nothing with on a
+  level: the level build compiles such a surface with the game's shader for level geometry that treats the
+  texture's alpha the same way (`gz_fmt_xr::Shaders::level_twin` - by the classes and the properties of the
+  game's own `shaders.xr`, never by a list of names) and says so in the step's `notes`. The library's shader
+  rows say what each is for (`draws`, `alpha`, `as_level`), and `level.inspect part=visuals piece=<name>`
+  reads what a piece really holds.
+- QA: `tools/qa/test_game_library.py --project <project>` over the linked game on a COPY, in a window (the
+  library's answers, a scene over a level with its guards and files, the pictures, what the build ships); the
+  first time on a machine it reads the game.
+
 ## Media assets (gz-media, `docs/assets/MODEL.md`, `TEXTURE.md`, `SOUND.md`)
 
 - **A model, a texture and a sound are text assets over a source file**: `*.meshasset` (`mesh = 1`) over a
-  `.glb` / `.gltf` / `.obj` / `.object` or with its geometry written in it as `parts` (box, ramp, cylinder, plane,
-  prism - a blockout an agent types); `*.texasset` (`tex = 1`) over a picture, saying all a `.thm` says in words;
+  `.glb` / `.gltf` / `.obj` / `.object`, over a compiled model - an `.ogf` of the project, or a model of the
+  game (`source = "game:<name>.ogf"`, read through `gz_media::GameModels`, never written) - or with its geometry
+  written in it as `parts` (box, ramp, cylinder, plane, prism - a blockout an agent types). Over a compiled
+  model the asset says what changes (`surfaces` by the name of the texture a part wears, `userdata`, a bone's
+  mass and material): static, its geometry is compiled like any model; dynamic, it is published as the same
+  file with that said again (`gz_fmt_ogf::restate`: every chunk nobody asked to change is copied byte for
+  byte, so the skeleton, the motions and the levels of detail stay the game's); `*.texasset` (`tex = 1`) over a picture, saying all a `.thm` says in words;
   `*.sndasset` (`snd = 1`) over a `.wav` or `.ogg`. Their keys are tables (`gz-media`'s `fields.rs`) that generate
   the references; a test fails on a hand edit. The X-Ray SDK library (`.object`, `.thm`) stays what it is.
   What the level build would refuse is an error of the asset's own check, said first: a surface without a texture
@@ -620,7 +721,9 @@ A change of plan is a change of its document first.
   (the spawn layer from what the scene marks `authored` / `removed`, the overlays the author exports), so its
   compile steps (`game`, `ai_map`, `game_graph`, `spawn`, `geometry`, `details`, `light`, `detail_light`) are not
   needed - the status and the Build chip never ask for them, and Build Level builds the spawn layer. Build Step and
-  Rebuild All still compile one on purpose; that output is the author's and ships. Files a build left in a stock
+  Rebuild All still compile one on purpose; that output is the author's and ships. A scene that lies over the
+  level (`base`) holds nothing of the level to compile: there a forced build (`force`, Rebuild All) builds the
+  module's own layers again, and a step that compiles the level, asked by name, is refused in a sentence. Files a build left in a stock
   level's folder replace the game's own in every game that mounts the module: a warning on the level, whose fix
   (`level.clean`, the destroy door; a confirmation naming them in the window) removes exactly what the build
   wrote. The build's own files (`build.prj`, `build.state`, the other `build.*`, `level_stat.*`, the compiler's
@@ -629,10 +732,15 @@ A change of plan is a change of its document first.
   shadows), into `levels\<level>\pieces\main`, and their collision into `overlay.xcform`; its scratch is the
   project's `temp\piece_<level>`. It is the one compile step a stock level needs, and only when the module places
   such objects; the game's own level is never rebuilt for it, so every other module keeps the level it knows.
+  A static object the piece carries is no object of the spawn layer too (`SpawnInput::statics_in_piece`): where
+  the game loads pieces the bake leaves it out, or it would stand in the game twice; a game without pieces
+  gets it as a prop of the spawn layer, as before there were pieces.
 - **Problems are on the thing they are about**: `level.problems` rows carry the object or the place, the Problems
   panel selects and frames it, the viewport draws refused faces. `level.status` and the status bar's Build chip
   read the same status without waiting (`LevelBuild::status_now`).
-- **Play** (`level.play`) on a stock level plays the module and compiles nothing: the module built the real way
+- **Play** (`level.play`) on a stock level - or in a project without a scene, a module that changes the game
+  and adds no level: the module built the same way, a new game at the game's own start, nothing of a level
+  staged - plays the module and compiles nothing: the module built the real way
   (`gz-build`'s module build with its bake) into the root's `modules\<id>`, a Player Start where the camera looks
   added to Play's copy when the scene has none (never to the project), and a new game started
   (`-start server(all/single/alife/new)`) with the module's mode on - Play's own `axr_options.ltx` in the root
@@ -1653,6 +1761,25 @@ A change of plan is a change of its document first.
   which names what the players lose (`mod.view ask_game_updates=true` puts it up).
 - QA: `tools/qa/test_screens.py --project <project>` over MCP on a COPY; the game's `tools/qa/screens/Run-ScreensQa.ps1` in the real engine.
 
+## Text files (gz-text, gz-ui-text; docs/UI_DESIGN.md "Text")
+
+- **Every text file of the project opens in the Text tab** (`text:<rel>`): scripts, configs and patches, XML,
+  Markdown, JSON, `.txt` and any file whose bytes are text; Open as Text opens the editor's own assets as text
+  too. What the browser opens is decided without touching the disk for a known extension; an unknown one is
+  sniffed on the IO pool (no NUL in the first 8 KB).
+- **The editor is the kit's `code`** (one widget: the Text tab, the PDA tab's Source pane, a Markdown code block),
+  coloured by the theme's `syntax` tokens; Markdown's preview is the kit's `markdown`, only the blocks in view
+  laid out. Neither parses or lays out the whole text in a frame that could stall.
+- **A text file is written back as it was read** (`gz-text`): its encoding (UTF-8, BOM or not, or Windows-1251 -
+  what the game reads its scripts, configs and XML in) and its line endings stay, a line nobody touched keeps its
+  own ending, an unchanged file is never written, and a character Windows-1251 lacks refuses the save by line.
+  The tab follows the file through the project's watcher and merges a change on disk into unsaved edits line by
+  line (Take Theirs for the lines both changed).
+- **Lua is read by LuaJIT's own parser** (compiled, never run): a syntax error is a problem at its line and
+  column, beside what `gz_mod::code` says of the file; the same list is the tab's Problems and `asset.check`.
+  The index of declarations (`script.lookup`, completion, Go to Definition) is made once per state of the linked
+  game's scripts and the project's, inside `Query::fresh`; a script of the game opens read-only.
+
 ## Dangerous operations
 
 - Any destructive operation from the UI requires confirmation. Destructive is
@@ -1728,7 +1855,9 @@ A change of plan is a change of its document first.
 
 - **The browser lists assets, not files.** Two sources: **Project** (the project's files) and **Library** (what the
   linked game and the editor's library offer, by kind: Objects, Groups, Textures, Sounds, Particles, Spawn Sections
-  by their in-game names, Base Scenes). An asset is ONE tile: its `.thm`, its backups, an object's skeleton files
+  by their in-game names, Base Scenes - the library's scenes and, under `game`, the levels of the linked game:
+  opening one opens the project's scene over it or makes one, `actions.rs` `scene_over_level`). A scene opened
+  from the browser asks about unsaved work like the Level tab does. An asset is ONE tile: its `.thm`, its backups, an object's skeleton files
   and a scene's folder are its companions - never tiles, and copied, moved, renamed and deleted with it
   (`gz-ui-content`'s `catalog.rs`). A tile drags the kit's payload (`gz_ui::drop`), which the viewport, a project
   folder and a tab's drop zones read; Place in Level and Bring into Project (`file.import`) are in its menu.

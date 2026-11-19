@@ -1655,8 +1655,11 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
     } else {
         ""
     };
+    let game_level =
+        shown_cat.as_deref().is_some_and(|c| crate::library::game_level(c, &entry.path).is_some());
     let bring_why = match shown_cat.as_deref().and_then(|c| c.file(&entry.path)).map(|f| f.origin) {
         _ if !f.has_project => "Open a project to bring it in.",
+        _ if game_level => "A level of the game is not copied: Open starts the project's scene over it.",
         Some(Origin::None) => "It has no file of its own: place it in a level instead.",
         _ => "",
     };
@@ -1667,6 +1670,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
     #[derive(PartialEq)]
     enum Pick {
         Open,
+        OpenText,
         Place,
         Bring,
         Copy,
@@ -1690,6 +1694,19 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
             }
         };
         row(ui, "Open", MenuItem { icon: Icon::Open, keys: "Enter", ..MenuItem::default() }, Pick::Open);
+        // any file of the project as text, the editor's own assets too
+        if !entry.folder && !library && count == 1 {
+            row(
+                ui,
+                "Open as Text",
+                MenuItem {
+                    icon: Icon::FileText,
+                    tip: "Open the file in the Text tab".into(),
+                    ..MenuItem::default()
+                },
+                Pick::OpenText,
+            );
+        }
         if !entry.folder {
             row(
                 ui,
@@ -1805,6 +1822,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
     let cat = f.browser.cats.peek(cat_key(&st.loc));
     match pick {
         Pick::Open => st.pending_open = Some(entry),
+        Pick::OpenText => actions::open_as_text(f.editor, &entry.path),
         Pick::Place => {
             if let (Some(r), Some(c)) = (place_ref, cat.as_ref()) {
                 actions::place(f.editor, crate::payload_of(c, &entry.path, false), r);

@@ -237,3 +237,61 @@ fn the_manifest_answers_its_format_by_any_of_its_names() {
     drop(rt);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// What the test's text check says of every file it reads.
+fn seen(_: Arc<Editor>, rel: RelPath) -> futures::future::BoxFuture<'static, Vec<gz_base::Problem>> {
+    Box::pin(async move { vec![gz_base::Problem::warning("X001", "seen").in_file(rel).at_line(1)] })
+}
+
+#[test]
+fn a_text_file_that_is_no_asset_is_checked_by_its_check() {
+    let root = std::env::temp_dir().join(format!("gz-asset-text-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in ["scripts", "ui", "part", "design", "temp"] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    std::fs::write(root.join("mod.ltx"), "[module]\nid = t\n[exclude]\ndesign\n").unwrap();
+    std::fs::write(root.join("scripts/a.script"), "function f() end\n").unwrap();
+    std::fs::write(root.join("ui/b.XML"), "<w/>\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "no check reads it").unwrap();
+    // a part of an asset: the folder of the asset's name beside it
+    std::fs::write(root.join("part.testasset"), "return {\n  test = 3,\n  id = \"p\",\n}\n").unwrap();
+    std::fs::write(root.join("part/objects.script"), "return {}\n").unwrap();
+    // left out of the build; the editor's scratch
+    std::fs::write(root.join("design/c.script"), "x = 1\n").unwrap();
+    std::fs::write(root.join("temp/d.script"), "x = 1\n").unwrap();
+    let (rt, ed) = editor(root.clone());
+    let kinds = Kinds::of(&ed);
+    kinds.add_text_check(&["script", "xml", "ltx", "testasset"], seen);
+    // the manifest keeps its own check, a kind's file its kind's
+    assert!(kinds.text_check("mod.ltx").is_none() && kinds.text_check("part.testasset").is_none());
+    assert!(kinds.text_check("other.ltx").is_some() && kinds.text_check("a.Script").is_some());
+    assert!(kinds.text_check("notes.txt").is_none());
+
+    let seen_in = |args_: serde_json::Value| -> Vec<String> {
+        let r = rt.block_on(ed.call("asset.check", args(args_), Origin::Mcp));
+        assert_eq!(r["ok"], true, "{r}");
+        let mut files: Vec<String> = r["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["code"] == "X001")
+            .map(|p| p["file"].as_str().unwrap().to_owned())
+            .collect();
+        files.sort();
+        files
+    };
+    assert_eq!(seen_in(json!({})), ["scripts/a.script", "ui/b.XML"]);
+    // a file asked for by itself; a folder the build leaves out, asked for, is looked into
+    assert_eq!(seen_in(json!({ "path": "scripts/a.script" })), ["scripts/a.script"]);
+    assert_eq!(seen_in(json!({ "path": "design" })), ["design/c.script"]);
+    // a part of an asset is checked with its asset, and its folder stands for the asset
+    assert!(seen_in(json!({ "path": "part/objects.script" })).is_empty());
+    let r = rt.block_on(ed.call("asset.check", args(json!({ "path": "part" })), Origin::Mcp));
+    assert_eq!(r["files"], 1, "{r}");
+    let other = rt.block_on(ed.call("asset.check", args(json!({ "path": "notes.txt" })), Origin::Mcp));
+    assert_eq!(other["ok"], false, "{other}");
+    drop(ed);
+    drop(rt);
+    let _ = std::fs::remove_dir_all(&root);
+}

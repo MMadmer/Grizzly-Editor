@@ -258,10 +258,18 @@ fn a_ray_names_what_it_hits() {
         ok(&w, json!({ "action": "ray", "from": [-20, 0.5, 0], "to": [20, 0.5, 0], "except": ["standing"] }));
     assert_eq!(a["hit"]["object"], "wall");
 
-    // a shape is geometry for a ray
+    // a volume is in nobody's way: a shape is met only by a ray that asks for the volumes
     let a = ok(&w, json!({ "action": "ray", "from": [0, 0.5, -30], "direction": [0, 0, 1], "reach": 20 }));
+    assert_eq!(a["hit"], Value::Null);
+    let a = ok(
+        &w,
+        json!({ "action": "ray", "from": [0, 0.5, -30], "direction": [0, 0, 1], "reach": 20, "volumes": true }),
+    );
     assert_eq!(a["hit"]["kind"], "shape");
-    let a = ok(&w, json!({ "action": "ray", "from": [0, 0.5, -30], "direction": [0, 0, 1], "reach": 5 }));
+    let a = ok(
+        &w,
+        json!({ "action": "ray", "from": [0, 0.5, -30], "direction": [0, 0, 1], "reach": 5, "volumes": true }),
+    );
     assert_eq!(a["hit"], Value::Null);
 
     refused(&w, json!({ "action": "ray", "from": [0, 0, 0], "to": [0, 0, 0] }), "direction");

@@ -68,6 +68,12 @@ pub struct SceneService {
     /// The documents the open scene was read from or last saved to: what a save writes the
     /// difference into. `None` for a scene not in its own files yet (new, imported).
     files: Mutex<Option<Arc<SceneFiles>>>,
+    /// One reader or writer of the scene's files at a time: a save and the taking in of what
+    /// another program wrote never cross, so a reading made before a save is never put in after it.
+    files_turn: Arc<tokio::sync::Mutex<()>>,
+    /// The scene's files as they stood (size and write time) when they were last told against
+    /// the documents: while they stand so, nothing is read to know they did not change.
+    seen: Mutex<Option<Vec<(u64, u64)>>>,
     /// What the open scene's files hold that is wrong, positioned (reading, following them).
     problems: Mutex<Vec<Problem>>,
     /// A scene was loaded or made in this session.
@@ -167,11 +173,14 @@ impl SceneService {
             radios: Mutex::new((0, Arc::new(Radios::unlinked()))),
             radio_cx: Mutex::new(None),
             files: Mutex::new(None),
+            files_turn: Arc::default(),
+            seen: Mutex::new(None),
             problems: Mutex::new(Vec::new()),
             opened: AtomicBool::new(false),
             watch_gen: AtomicU64::new(0),
         });
         start_recovery_timer(editor, &svc);
+        learn_surface_uses(editor, &svc);
         follow_library(editor, &svc);
         follow_terrains(editor, &svc);
         svc
@@ -248,6 +257,13 @@ impl SceneService {
         self.problems.lock().clone()
     }
 
+    /// The turn at the scene's files and at which scene is open: whoever reads the files into the
+    /// scene, writes them or puts another scene in holds it for all of that, so no reading of one
+    /// scene's files is put into another.
+    pub(crate) async fn turn(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.files_turn.clone().lock_owned().await
+    }
+
     /// The documents the open scene was read from.
     #[must_use]
     pub fn files(&self) -> Option<Arc<SceneFiles>> {
@@ -256,14 +272,34 @@ impl SceneService {
 
     /// The scene is saved against `files` from now on: the documents on the disk as they were
     /// just read, with the problems that reading found.
-    pub(crate) fn attach_files(&self, files: SceneFiles, problems: Vec<Problem>) {
+    pub(crate) fn attach_files(&self, files: SceneFiles, problems: Vec<Problem>, stamp: Vec<(u64, u64)>) {
         *self.files.lock() = Some(Arc::new(files));
         *self.problems.lock() = problems;
+        self.looked(stamp);
+    }
+
+    /// The scene's files were read as they stood at `stamp`: until they stand otherwise nothing
+    /// is read to know they hold what the documents hold.
+    fn looked(&self, stamp: Vec<(u64, u64)>) {
+        *self.seen.lock() = Some(stamp);
+    }
+
+    /// A save wrote the painted layers: as they stand in `stamp` they are the scene's own. The
+    /// text files keep what was seen of them - they are told against their documents.
+    fn layers_looked(&self, stamp: &[(u64, u64)]) {
+        let first = 1 + format::CLASS_FILES.len();
+        if let Some(seen) = self.seen.lock().as_mut()
+            && seen.len() == stamp.len()
+            && let (Some(mine), Some(now)) = (seen.get_mut(first..), stamp.get(first..))
+        {
+            mine.copy_from_slice(now);
+        }
     }
 
     /// The scene is no longer the one its files hold (a new scene).
     pub(crate) fn forget_files(&self) {
         *self.files.lock() = None;
+        *self.seen.lock() = None;
         self.problems.lock().clear();
         self.watch_gen.fetch_add(1, Ordering::Relaxed);
         self.set_opened();
@@ -318,9 +354,13 @@ async fn prefetch_into(
         .values()
         .filter_map(|o| match &o.data {
             ObjData::SceneObject(d) if !d.visual_mode() => Some(d.reference.clone()),
+            // what a spawn point's entity wears stands in the scene like any model
+            ObjData::Spawn(_) => crate::objects::visual_ref(o).map(SmolStr::new),
             _ => None,
         })
         .collect();
+    refs.sort_unstable();
+    refs.dedup();
     if let Some(d) = state.bulk.details.as_ref() {
         refs.extend(d.model.indices.objects.iter().map(|o| o.reference.clone()));
     }
@@ -366,6 +406,41 @@ pub fn library_reference(path: &RelPath) -> Option<String> {
 
 /// The library hears the project's watcher: a library object changed on the disk is read again
 /// the next time it is used.
+/// A surface's use as the compiler shaders tell it: `flags` by shader name, lower case.
+/// A helper object or the occluder material is neither drawn nor solid whatever its shader
+/// says; a shader the list lacks is taken for one that does both.
+pub fn use_rule(flags: rustc_hash::FxHashMap<String, u32>) -> crate::library::UseRule {
+    use crate::library::{SurfaceUse, default_use};
+    use gz_fmt_xr::ShaderXrlc;
+    Arc::new(move |object, surface| {
+        let base = default_use(object, surface);
+        if base == SurfaceUse::NEITHER {
+            return base;
+        }
+        match flags.get(&surface.shader_xrlc.to_ascii_lowercase()) {
+            Some(f) => {
+                SurfaceUse { draws: f & ShaderXrlc::RENDERING != 0, collides: f & ShaderXrlc::COLLISION != 0 }
+            }
+            None => base,
+        }
+    })
+}
+
+/// Reads the compiler shaders (the linked game's, else the editor's own) and gives the library
+/// the rule they make: until it arrives every surface is taken for drawn and solid.
+fn learn_surface_uses(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
+    let lib = Arc::downgrade(&svc.library);
+    let ed = editor.clone();
+    editor.exec.spawn(async move {
+        let Ok((bytes, _)) = gz_game::read_game_or_bundled(&ed, "shaders_xrlc.xr").await else { return };
+        let Ok(list) = gz_fmt_xr::ShadersXrlc::read(&bytes) else { return };
+        let flags = list.shaders.iter().map(|s| (s.name().to_ascii_lowercase(), s.flags)).collect();
+        if let Some(lib) = lib.upgrade() {
+            lib.set_use_rule(use_rule(flags));
+        }
+    });
+}
+
 fn follow_library(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
     let Ok((_, project)) = gz_project::Project::of(editor) else { return };
     let Ok(under) = RelPath::new(LIBRARY_FOLDER) else { return };
@@ -566,6 +641,8 @@ pub(crate) struct Opened {
     pub problems: Vec<Problem>,
     /// Groups placed from their assets as the scene was read: the scene is unsaved.
     pub placed: usize,
+    /// How the scene's files stood just before they were read (`files_stamp`).
+    pub stamp: Vec<(u64, u64)>,
 }
 
 /// Why a scene did not open: the sentence, and the positioned problem when its file says where.
@@ -585,17 +662,20 @@ pub(crate) fn open_files(
     root: &Path,
     file: &Path,
     settings: sdk::SyncSettings<'_>,
+    levels: Option<&dyn crate::base::BaseSource>,
 ) -> Result<Opened, String> {
-    open_scene(root, None, file, settings, None).map_err(|e| e.message)
+    open_scene(root, None, file, settings, levels, None).map_err(|e| e.message)
 }
 
-/// [`open_files`] with the editor's library (`editor_root`) for the groups placed at the read, and
-/// what the open scene keeps of a file that does not parse (`keep`).
+/// [`open_files`] with the editor's library (`editor_root`) for the groups placed at the read, the
+/// levels of the game a scene may lie over (`levels`), and what the open scene keeps of a file
+/// that does not parse (`keep`).
 pub(crate) fn open_scene(
     root: &Path,
     editor_root: Option<&Path>,
     file: &Path,
     settings: sdk::SyncSettings<'_>,
+    levels: Option<&dyn crate::base::BaseSource>,
     keep: Option<&SceneState>,
 ) -> Result<Opened, OpenFailed> {
     if is_sdk(file) {
@@ -607,13 +687,15 @@ pub(crate) fn open_scene(
         let rel = rel_of(root, file);
         let problems =
             loaded.warnings.into_iter().map(|w| Problem::warning("S040", w).in_file(rel.clone())).collect();
-        return Ok(Opened { state: loaded.state, files: None, problems, placed: 0 });
+        return Ok(Opened { state: loaded.state, files: None, problems, placed: 0, stamp: Vec::new() });
     }
+    // before the texts: a write that lands between the two is found by the next look
+    let stamp = files_stamp(file);
     let texts = read_texts(file).map_err(|e| format!("Cannot open scene file: {} ({e})", file.display()))?;
     let main = rel_of(root, file);
     let dir = rel_of(root, &format::folder_of(file));
     let keep = keep.map(|state| format::Keep { state, files: &[] });
-    let mut read = format::read_over(&texts, &main, &dir, settings, keep)
+    let mut read = format::read_based(&texts, &main, &dir, settings, keep, levels)
         .map_err(|r| OpenFailed { message: r.to_string(), problem: Some(r.problem) })?;
     read.state.meta.file = Some(file.to_path_buf());
     read.files.base.meta.file = Some(file.to_path_buf());
@@ -621,7 +703,7 @@ pub(crate) fn open_scene(
     let (notes, placed) =
         crate::edit::place_unplaced(&mut read.state, &read.unplaced, root, editor_root, settings);
     read.problems.extend(notes);
-    Ok(Opened { state: read.state, files: Some(read.files), problems: read.problems, placed })
+    Ok(Opened { state: read.state, files: Some(read.files), problems: read.problems, placed, stamp })
 }
 
 /// The load as a job: the files on the IO pool, the parse on the CPU pool, the library objects
@@ -650,13 +732,16 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         crate::cmd::prop_context(&ed).await;
         ctx.check()?;
         ctx.stage("Reading the scene");
+        // from the reading to the documents nothing else reads or writes a scene's files
+        let _turn = s.turn().await;
         let (root, lib, pf) = (s.root.clone(), s.editor_root.clone(), f.clone());
+        let levels = crate::base::BaseLevels::of(&ed).get();
         let opened = ctx
             .exec
             .io(move || {
                 let st: sdk::SyncSettings<'_> =
                     settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-                open_scene(&root, Some(&lib), &pf, st, None)
+                open_scene(&root, Some(&lib), &pf, st, levels.as_deref(), None)
             })
             .await
             .map_err(|e| JobError::new(e.message))?;
@@ -676,6 +761,7 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         }
         *s.files.lock() = opened.files.map(Arc::new);
         *s.problems.lock() = opened.problems;
+        s.looked(opened.stamp);
         s.set_opened();
         if let Ok((_, project)) = gz_project::Project::of(&ed)
             && let Err(e) = project.note_recent_scene(&f).await
@@ -718,6 +804,77 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
     result
 }
 
+/// What another program wrote into the scene's files since they were last read comes in before
+/// a command answers: whoever writes a file and asks about the scene at once is answered about
+/// what it wrote, not about the scene of a moment ago. The watcher brings the same change a
+/// little later and finds it in already.
+async fn catch_up(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
+    let Some(file) = svc.store.snapshot().meta.file.clone() else { return };
+    if svc.files().is_none() {
+        return;
+    }
+    if let Err(e) = outside_change(editor, svc, &file).await {
+        editor.log.warn(format!("the scene's files changed outside the editor: {e}"));
+    }
+}
+
+/// The size and the write time of every file of a scene, in a fixed order - the `.scene`, the
+/// files of the kinds, the painted layers; a file that is not there counts as nothing.
+fn files_stamp(scene: &Path) -> Vec<(u64, u64)> {
+    let dir = format::folder_of(scene);
+    let of = |p: &Path| {
+        std::fs::metadata(p).map_or((0, 0), |m| {
+            let time = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos() as u64);
+            (m.len(), time)
+        })
+    };
+    std::iter::once(of(scene))
+        .chain(format::CLASS_FILES.iter().map(|cf| of(&dir.join(cf.file))))
+        .chain(format::layers::LAYERS.iter().map(|l| of(&dir.join(l.file))))
+        .collect()
+}
+
+/// The scene's files as they stand now when they hold another text than the documents the scene
+/// is saved against; `None` when they hold the same. Blocking. While the files stand as they
+/// stood at the last look nothing is read.
+fn files_differ(svc: &SceneService, scene: &Path) -> Option<Vec<(u64, u64)>> {
+    let held = svc.files()?;
+    // taken before the texts: a write that lands between the two is looked at next time
+    let stamp = files_stamp(scene);
+    let seen = svc.seen.lock().clone();
+    if seen.as_ref() == Some(&stamp) {
+        return None;
+    }
+    // a `.scene` that is gone or cannot be read is a change too: whoever takes it in says why
+    let Ok(now) = read_texts(scene) else { return Some(stamp) };
+    let differ = now.scene != held.scene.text()
+        || format::CLASS_FILES.iter().enumerate().any(|(i, cf)| {
+            if held.broken.contains(&cf.file) {
+                // no text of a file that did not read is held: it changed when the file itself
+                // was written since the last look (the first entry of a stamp is the `.scene`)
+                return seen.as_ref().and_then(|s| s.get(i + 1)) != stamp.get(i + 1);
+            }
+            let disk = now.files.iter().find(|(n, _)| n == cf.file).map(|(_, t)| t.as_str());
+            let read = held.docs.iter().find(|d| d.file == cf.file).map(|d| d.doc.text());
+            disk != read
+        })
+        // a painted layer is no text to tell against a document: it changed when its file was
+        // written since the last look (a save of the editor's own says it looked, `layers_looked`)
+        || seen.as_ref().is_some_and(|seen| {
+            let first = 1 + format::CLASS_FILES.len();
+            (first..first + format::layers::LAYERS.len()).any(|i| seen.get(i) != stamp.get(i))
+        });
+    if differ {
+        return Some(stamp);
+    }
+    *svc.seen.lock() = Some(stamp);
+    None
+}
+
 /// A scene command needs the scene: one is open, or the project's scene is opened now (and
 /// waited for). `no_scene` when the project has none.
 pub async fn need_scene(editor: &Arc<Editor>) -> Result<Arc<SceneService>, CmdError> {
@@ -734,6 +891,7 @@ pub async fn need_scene(editor: &Arc<Editor>) -> Result<Arc<SceneService>, CmdEr
         editor.jobs.wait(id).await;
     }
     if svc.opened() {
+        catch_up(editor, &svc).await;
         return Ok(svc);
     }
     let Ok((_, project)) = gz_project::Project::of(editor) else {
@@ -849,6 +1007,8 @@ pub async fn save_scene(
     file: PathBuf,
 ) -> Result<usize, String> {
     crate::edit::writable(editor, &file).map_err(|e| e.message)?;
+    // the files are this save's until it has written them and holds their documents
+    let _turn = svc.turn().await;
     let snap = svc.store.snapshot();
     let same = snap.meta.file.as_deref() == Some(file.as_path()) && snap.meta.imported.is_none();
     let files = if same { svc.files() } else { None };
@@ -872,7 +1032,11 @@ pub async fn save_scene(
     let watch = gz_project::Project::of(editor).ok().map(|(_, p)| p.tree.changes().clone());
     let f = file.clone();
     let out = plan.files.clone();
-    let written = editor.exec.io(move || commit(&f, &out, watch.as_ref())).await?;
+    let (written, stamp) = editor
+        .exec
+        .io(move || commit(&f, &out, watch.as_ref()).map(|written| (written, files_stamp(&f))))
+        .await?;
+    svc.layers_looked(&stamp);
     let mut after = plan.after;
     after.base.meta.file = Some(file.clone());
     after.base.meta.imported = None;
@@ -947,11 +1111,23 @@ pub(crate) async fn outside_change(
     svc: &Arc<SceneService>,
     file: &Path,
 ) -> Result<(), String> {
+    // one reader or writer of the files at a time: what is read here is put in before anything
+    // else writes or reads them
+    let _turn = svc.turn().await;
+    // the scene may have been switched while this waited for its turn
+    if svc.store.snapshot().meta.file.as_deref() != Some(file) {
+        return Ok(());
+    }
+    // a change that came in already (the watcher after a command took it in, a save of the
+    // editor's own) is none
+    let (s, f) = (svc.clone(), file.to_path_buf());
+    let Some(stamp) = ed.exec.io(move || files_differ(&s, &f)).await else { return Ok(()) };
     let settings = crate::game::settings(ed).await;
     let (root, lib, f) = (svc.root.clone(), svc.editor_root.clone(), file.to_path_buf());
     let st = settings.clone();
     let snap = svc.store.snapshot();
     let last = snap.clone();
+    let levels = crate::base::BaseLevels::of(ed).get();
     let opened = ed
         .exec
         .io(move || {
@@ -960,6 +1136,7 @@ pub(crate) async fn outside_change(
                 Some(&lib),
                 &f,
                 st.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
+                levels.as_deref(),
                 Some(&last),
             )
         })
@@ -975,10 +1152,16 @@ pub(crate) async fn outside_change(
             let mut problems = svc.problems.lock();
             problems.retain(|q| !(q.code == p.code && q.file == p.file));
             problems.push(p);
+            // looked at as they stood: a scene that does not read is not read again on every
+            // command until somebody writes it
+            svc.looked(stamp);
             return Err(e.message);
         }
     };
-    let Some(theirs) = opened.files else { return Ok(()) };
+    let Some(theirs) = opened.files else {
+        svc.looked(opened.stamp);
+        return Ok(());
+    };
     // a file that did not read and reads again: what the scene changed of its objects meanwhile
     // is unsaved work like any other, whatever a save in between marked
     let held = match svc.files() {
@@ -1003,6 +1186,7 @@ pub(crate) async fn outside_change(
                     state: Box::new(opened.state),
                     label: "Reload from Disk".into(),
                     clean: opened.placed == 0,
+                    of: file.to_path_buf(),
                 },
                 Origin::Mcp,
             )
@@ -1012,6 +1196,7 @@ pub(crate) async fn outside_change(
         theirs.hold_broken(svc.files().as_deref());
         *svc.files.lock() = Some(Arc::new(theirs));
         *svc.problems.lock() = opened.problems;
+        svc.looked(opened.stamp);
         ed.log
             .info("the scene was changed outside the editor: it is read again (Undo takes the change back)");
         return Ok(());
@@ -1041,6 +1226,7 @@ pub(crate) async fn outside_change(
                 state: Box::new(merged.0),
                 label: "Merge Changes from Disk".into(),
                 clean: false,
+                of: file.to_path_buf(),
             },
             Origin::Mcp,
         )
@@ -1048,6 +1234,7 @@ pub(crate) async fn outside_change(
         .map_err(|e| e.message)?;
     *svc.files.lock() = Some(Arc::new(merged.1));
     *svc.problems.lock() = problems;
+    svc.looked(opened.stamp);
     ed.log.info("the scene's files were changed outside the editor: the unsaved changes are kept over them");
     Ok(())
 }
@@ -1155,9 +1342,14 @@ fn rebase(
     let main = RelPath::new("scene.scene").unwrap_or_else(|_| RelPath::root());
     let dir = RelPath::root();
     let keep = format::Keep { state: now, files: &theirs.broken };
-    let merged = format::read_over(&texts, &main, &dir, settings, Some(keep)).map_err(|r| r.to_string())?;
+    // the level under the scene is the one the files lie over now, as they were just read
+    let level = &theirs.base.meta.base;
+    let merged = format::read_based(&texts, &main, &dir, settings, Some(keep), Some(level))
+        .map_err(|r| r.to_string())?;
     let mut state = merged.state;
+    let base = state.meta.base.clone();
     state.meta = now.meta.clone();
+    state.meta.base = base;
     let mut files = theirs.clone();
     files.base.meta = now.meta.clone();
     files.hold_broken(Some(mine));

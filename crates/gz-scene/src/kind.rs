@@ -14,6 +14,7 @@ use crate::format::{self, group};
 /// The keys of a `.scene` itself (its objects are in the files of its folder).
 const SCENE_KEYS: &[&str] = &[
     format::HEADER,
+    "base",
     "level",
     "build",
     "sun",
@@ -89,6 +90,8 @@ fn check_scene(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
         let abs = file.abs.clone();
         let main = file.path.clone();
         let lib = gz_project::library_root(&ed);
+        let levels = crate::base::BaseLevels::of(&ed).get();
+        let names = crate::names::NameSources::names(&ed).await;
         ed.exec
             .io(move || {
                 let texts = match crate::service::read_texts(&abs) {
@@ -103,7 +106,7 @@ fn check_scene(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
                 let stem = main.as_str().rsplit_once('.').map_or(main.as_str(), |(s, _)| s);
                 let folder = gz_base::RelPath::new(stem).unwrap_or_else(|_| main.clone());
                 let st = settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-                match format::read(&texts, &main, &folder, st) {
+                match format::read_based(&texts, &main, &folder, st, None, levels.as_deref()) {
                     Ok(mut read) => {
                         // the groups placed at the read: a group asset that cannot be read is an error
                         let depth = main.as_str().split('/').count();
@@ -117,6 +120,16 @@ fn check_scene(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
                             );
                             read.problems.extend(notes);
                         }
+                        let mut more = Vec::new();
+                        if let Some(names) = &names {
+                            picked_names(&read, &folder, &**names, &mut more);
+                            undrawn_models(&read, &folder, &**names, st, &mut more);
+                        }
+                        directional_lights(&read, &folder, &mut more);
+                        glow_shaders(&read, &folder, &mut more);
+                        zones_over_a_level(&read, &folder, &mut more);
+                        details_over_a_level(&read, &main, &mut more);
+                        read.problems.extend(more);
                         read.problems
                     }
                     Err(r) => vec![*r.problem],
@@ -145,4 +158,334 @@ fn check_group(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
             })
             .await
     })
+}
+
+/// Where a key of an object of the scene's own files stands: the file and the span.
+fn key_place(
+    read: &format::Read,
+    folder: &gz_base::RelPath,
+    o: &crate::model::Object,
+    key: &str,
+) -> Option<(gz_base::RelPath, gz_luadata::Span)> {
+    use gz_luadata::Seg;
+    let (file, list) = format::file_of(o.class)?;
+    let doc = read.files.docs.iter().find(|d| d.file == file)?;
+    let span = doc.doc.nearest_span(&[Seg::key(list), Seg::item("name", o.name.as_str()), Seg::key(key)]);
+    Some((folder.join(file).ok()?, span))
+}
+
+/// `S220`: a key that picks something of the game by its name - a sound, a particle effect, a
+/// light animation, a sound environment, a texture, a compiled model - names what neither the
+/// game nor the project has. The game plays, draws or shows nothing there.
+fn picked_names(
+    read: &format::Read,
+    folder: &gz_base::RelPath,
+    names: &dyn crate::names::Names,
+    out: &mut Vec<Problem>,
+) {
+    use crate::format::fields::{self, Ty};
+    for o in read.state.objects.values().filter(|o| !o.marks.base) {
+        for f in fields::object_fields(o.class) {
+            let Ty::Pick(list) = f.ty else { continue };
+            if !(f.applies)(o) {
+                continue;
+            }
+            let gz_luadata::Value::String(value) = (f.get)(o) else { continue };
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            let Some(kind) = crate::names::kind_of_pick(list, value) else { continue };
+            let word = crate::names::kind_word(kind);
+            // there, and not what the game takes for one
+            if let Some(why) = names.refusal(kind, value) {
+                let p = Problem::warning(
+                    "S220",
+                    format!("{} names the {word} '{value}', which the game would not take: {why}", o.name),
+                );
+                out.push(match key_place(read, folder, o, f.key) {
+                    Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+                    None => p,
+                });
+                continue;
+            }
+            if names.has(kind, value) != Some(false) {
+                continue;
+            }
+            let near = names.nearest(kind, value);
+            let hint = if kind == "fog_profile" {
+                "a fog profile is a file under the game's configs, said from there (the game's own is environment/fog/default.ltx)"
+                    .to_owned()
+            } else if near.is_empty() {
+                format!("`asset.find kind={kind}` lists what there is")
+            } else {
+                format!("nearest: {}", near.join(", "))
+            };
+            let p = Problem::warning(
+                "S220",
+                format!(
+                    "{} names the {word} '{value}', which neither the game nor the project has: {hint}",
+                    o.name
+                ),
+            );
+            out.push(match key_place(read, folder, o, f.key) {
+                Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+                None => p,
+            });
+        }
+    }
+}
+
+/// `S225`: a glow that names a shader no glow is drawn with. The game draws a glow with the lens
+/// flares' shader or the sun's and takes the flares' for any other name: the glow is drawn, and
+/// not the way the name says.
+fn glow_shaders(read: &format::Read, folder: &gz_base::RelPath, out: &mut Vec<Problem>) {
+    use crate::objects::{GlowShader, glow_shader};
+    for o in read.state.of_class(crate::class::ObjClass::Glow).filter(|o| !o.marks.base) {
+        let crate::model::ObjData::Glow(g) = &o.data else { continue };
+        if glow_shader(&g.shader) != GlowShader::Other {
+            continue;
+        }
+        let p = Problem::warning(
+            "S225",
+            format!(
+                "{} names the shader '{}', which no glow is drawn with: the game draws a glow like a lens flare (`effects\\flare`, also when `shader` is left out) or like the sun (`effects\\sun`: hidden by depth too), and takes the flares' for this one",
+                o.name, g.shader
+            ),
+        );
+        out.push(match key_place(read, folder, o, "shader") {
+            Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+            None => p,
+        });
+    }
+}
+
+/// `S224`: an object whose model the game draws nothing for - it is there, it stops a body, a
+/// box of it holds things, and nobody sees it. A section whose own model is such is made to be
+/// unseen (a stash is an unseen case inside something that is drawn): there it is the section's
+/// way and nothing is said. A model named a collider is unseen by its name.
+fn undrawn_models(
+    read: &format::Read,
+    folder: &gz_base::RelPath,
+    names: &dyn crate::names::Names,
+    settings: Option<&(dyn gz_entities::Settings + Sync)>,
+    out: &mut Vec<Problem>,
+) {
+    use crate::model::ObjData;
+    let model_ref = |name: &str| {
+        let name = name.trim().replace('/', "\\");
+        if name.to_ascii_lowercase().ends_with(".ogf") { name } else { format!("{name}.ogf") }
+    };
+    for o in read.state.objects.values().filter(|o| !o.marks.base) {
+        let (model, key) = match &o.data {
+            ObjData::SceneObject(d) if d.reference.to_ascii_lowercase().ends_with(".ogf") => {
+                (model_ref(&d.reference), "ref")
+            }
+            ObjData::Spawn(d) => {
+                let Some(model) = crate::objects::visual_ref(o) else { continue };
+                // the section's own model is unseen too: the section is made that way
+                let section = d.entity.as_ref().map(|e| e.section().to_owned()).unwrap_or_default();
+                let own = settings
+                    .filter(|s| s.section_exist(&section))
+                    .and_then(|s| s.r_string(&section, "visual"))
+                    .map(model_ref);
+                if own.is_some_and(|own| names.undrawn(&own) == Some(true)) {
+                    continue;
+                }
+                (model, "props")
+            }
+            _ => continue,
+        };
+        if model.to_ascii_lowercase().contains("collider") || names.undrawn(&model) != Some(true) {
+            continue;
+        }
+        let p = Problem::warning(
+            "S224",
+            format!(
+                "{} wears the model '{model}', which the game draws nothing for: the object is there and nobody sees it (`asset.find kind=model` marks such a model `invisible`)",
+                o.name
+            ),
+        );
+        out.push(match key_place(read, folder, o, key) {
+            Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+            None => p,
+        });
+    }
+}
+
+/// `S222`: a sector or a portal of a scene that lies over a level of the game. The level's
+/// visibility cells are the game's own, compiled into its level, and a module adds none: what the
+/// module places is hung on the level's sectors where it stands.
+fn zones_over_a_level(read: &format::Read, folder: &gz_base::RelPath, out: &mut Vec<Problem>) {
+    use crate::class::ObjClass;
+    if !read.state.meta.base.is_set() {
+        return;
+    }
+    for class in [ObjClass::Sector, ObjClass::Portal] {
+        for o in read.state.of_class(class).filter(|o| !o.marks.base) {
+            let what = if class == ObjClass::Sector { "sector" } else { "portal" };
+            let p = Problem::warning(
+                "S222",
+                format!(
+                    "{} is a {what} of a scene over a level of the game: the level's own sectors and portals are the game's, and a module adds none - it is not built (the module's objects hang on the level's sectors where they stand)",
+                    o.name
+                ),
+            );
+            out.push(match key_place(read, folder, o, "name") {
+                Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+                None => p,
+            });
+        }
+    }
+    // the level's bound and the bounds of its AI map are the game's as well
+    for o in read.state.of_class(ObjClass::Shape).filter(|o| !o.marks.base) {
+        let crate::model::ObjData::Shape(d) = &o.data else { continue };
+        let what = match d.usage {
+            crate::objects::SHAPE_LEVEL_BOUND => "the bound of the level",
+            u if u == crate::bulk::ground::SHAPE_AI_MAP_BOUNDS => "the bounds of the AI map",
+            _ => continue,
+        };
+        let p = Problem::warning(
+            "S222",
+            format!(
+                "{} says {what} in a scene over a level of the game: the level and its AI map are the game's, and the shape changes nothing",
+                o.name
+            ),
+        );
+        out.push(match key_place(read, folder, o, "usage") {
+            Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+            None => p,
+        });
+    }
+}
+
+/// `S223`: a painted layer of a scene over a level of the game that the game takes from the
+/// level alone. What grows on a level is the level's own file, read whole; its AI map is the
+/// level's too, and a module changes that under a terrain that cuts the ground, never by
+/// painting. Such a layer stays in the project and does not ship.
+fn details_over_a_level(read: &format::Read, main: &gz_base::RelPath, out: &mut Vec<Problem>) {
+    use format::layers::{LAYERS, own};
+    if !read.state.meta.base.is_set() {
+        return;
+    }
+    for layer in LAYERS {
+        let why = match layer.class {
+            crate::class::ObjClass::DetailObjects
+                if read.state.bulk.details.as_ref().is_some_and(|d| !d.model.slots.is_empty()) =>
+            {
+                "the scene paints details (grass) over a level of the game: the game grows the level's own and reads none of a module's, so the layer does not ship"
+            }
+            crate::class::ObjClass::AiMap if own(layer, &read.state) => {
+                "the scene holds an AI map of its own over a level of the game: the level's AI map is the game's, and a module changes it under a terrain that cuts the ground alone - the painted map does not ship"
+            }
+            _ => continue,
+        };
+        out.push(Problem::warning("S223", why).in_file(main.clone()));
+    }
+}
+
+/// `S221`: a directional light asked to shine in the game. The game has one directional light,
+/// the level's sun, which is the scene's own setting: such an object is baked into the lightmaps
+/// when it is asked to, and shines in the game never.
+fn directional_lights(read: &format::Read, folder: &gz_base::RelPath, out: &mut Vec<Problem>) {
+    use crate::objects::{LT_DIRECT, light_flags};
+    for o in read.state.of_class(crate::class::ObjClass::Light).filter(|o| !o.marks.base) {
+        let crate::model::ObjData::Light(d) = &o.data else { continue };
+        if d.kind != LT_DIRECT || d.flags & light_flags::AFFECT_DYNAMIC == 0 {
+            continue;
+        }
+        let also = if d.flags & light_flags::AFFECT_STATIC != 0 {
+            "it lights the lightmaps only"
+        } else {
+            "it lights nothing"
+        };
+        let p = Problem::warning(
+            "S221",
+            format!(
+                "{} is a directional light asked to shine in the game: the game's one directional light is the level's sun (the scene's sun setting), so {also}; make it a point or a spot light, or light the lightmaps with it alone",
+                o.name
+            ),
+        );
+        out.push(match key_place(read, folder, o, "kind") {
+            Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+            None => p,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lists that know every name and call a model with `_case` in it one nobody sees.
+    struct Lists;
+
+    impl crate::names::Names for Lists {
+        fn has(&self, _: &str, _: &str) -> Option<bool> {
+            Some(true)
+        }
+
+        fn nearest(&self, _: &str, _: &str) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn undrawn(&self, model: &str) -> Option<bool> {
+            Some(model.contains("_case"))
+        }
+    }
+
+    #[test]
+    fn a_model_nobody_sees_is_said_at_its_object_and_a_collider_is_not() {
+        let objects = [
+            r#"{ name = "unseen", pos = { 1, 0, 0 }, ref = "dynamics/cache/box_case.ogf" },"#,
+            r#"{ name = "seen", pos = { 2, 0, 0 }, ref = "dynamics/box/box_wood.ogf" },"#,
+            r#"{ name = "wall", pos = { 3, 0, 0 }, ref = "dynamics/cache/collider_case.ogf" },"#,
+        ];
+        let texts = format::Texts {
+            scene: "return {\n  scene = 2,\n}\n".into(),
+            files: vec![(
+                "objects.lua".into(),
+                format!("return {{\n  objects = {{\n    {}\n  }},\n}}\n", objects.join("\n    ")),
+            )],
+            layers: Vec::new(),
+        };
+        let main = gz_base::RelPath::new("levels/yard.scene").unwrap();
+        let folder = gz_base::RelPath::new("levels/yard").unwrap();
+        let read = format::read_based(&texts, &main, &folder, None, None, None).unwrap();
+        let mut out = Vec::new();
+        undrawn_models(&read, &folder, &Lists, None, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        let p = &out[0];
+        assert_eq!(p.code.as_str(), "S224");
+        assert!(p.message.contains("unseen") && p.message.contains("box_case.ogf"), "{}", p.message);
+        // on the object's own line of its file
+        assert_eq!(p.file.as_ref().map(gz_base::RelPath::as_str), Some("levels/yard/objects.lua"));
+        assert_eq!(p.line, Some(3));
+    }
+
+    #[test]
+    fn a_glow_with_a_shader_no_glow_is_drawn_with_is_said_at_its_key() {
+        let glows = [
+            r#"{ name = "plain", pos = { 0, 2, 0 }, texture = "glow/a" },"#,
+            r#"{ name = "sun", pos = { 1, 2, 0 }, texture = "glow/a", shader = "effects/sun" },"#,
+            r#"{ name = "odd", pos = { 2, 2, 0 }, texture = "glow/a", shader = "default" },"#,
+        ];
+        let texts = format::Texts {
+            scene: "return {\n  scene = 2,\n}\n".into(),
+            files: vec![(
+                "glows.lua".into(),
+                format!("return {{\n  glows = {{\n    {}\n  }},\n}}\n", glows.join("\n    ")),
+            )],
+            layers: Vec::new(),
+        };
+        let main = gz_base::RelPath::new("levels/yard.scene").unwrap();
+        let folder = gz_base::RelPath::new("levels/yard").unwrap();
+        let read = format::read_based(&texts, &main, &folder, None, None, None).unwrap();
+        assert!(read.problems.is_empty(), "{:?}", read.problems);
+        let mut out = Vec::new();
+        glow_shaders(&read, &folder, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!((out[0].code.as_str(), out[0].line), ("S225", Some(5)));
+        assert!(out[0].message.contains("odd") && out[0].message.contains("'default'"), "{}", out[0].message);
+    }
 }

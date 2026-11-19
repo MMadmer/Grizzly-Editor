@@ -18,12 +18,20 @@ use gz_media::{Index, Media, Payload};
 /// The publisher the build asks.
 pub struct MediaBuild;
 
-/// The files the assets of `index` are made of, as the build's walk leaves them out.
+/// The files the assets of `index` are made of, as the build's walk leaves them out. A file of
+/// the module's `gamedata` is none of them: the game reads it where it lies, by its own name,
+/// and an asset made over it must not take it out of the module.
 #[must_use]
 pub fn sources_of(index: &Index) -> Sources {
     let mut out = Sources::default();
     for e in &index.entries {
-        out.extend(e.source.iter().chain(&e.uses).map(|r| source_key(r.as_str())));
+        out.extend(
+            e.source
+                .iter()
+                .chain(&e.uses)
+                .filter(|r| !gz_media::index::ships_where_it_lies(r.as_str()))
+                .map(|r| source_key(r.as_str())),
+        );
     }
     out
 }
@@ -48,7 +56,12 @@ pub fn no_descriptions_warning(version: Option<&str>) -> String {
 /// Bakes and publishes every asset of `index` that ships; `game` is the linked game's folder,
 /// asked whether it reads the descriptions. Blocking: run it on the IO pool.
 #[must_use]
-pub fn publication(root: &Path, index: &Index, game: Option<&Path>) -> Publication {
+pub fn publication(
+    root: &Path,
+    index: &Index,
+    game: Option<&Path>,
+    models: &gz_media::resolve::GameModel,
+) -> Publication {
     let mut out = Publication { sources: sources_of(index), ..Publication::default() };
     // an asset that does not read would silently not ship: the build stops on it
     for e in index.entries.iter().filter(|e| !e.excluded) {
@@ -92,7 +105,7 @@ pub fn publication(root: &Path, index: &Index, game: Option<&Path>) -> Publicati
         files.push(file);
         Ok(())
     };
-    let done = gz_media::publish(root, index, &mut sink);
+    let done = gz_media::publish(root, index, models, &mut sink);
     out.errors.extend(done.problems);
     out.files = files;
     if let Some(game) = game
@@ -120,11 +133,12 @@ impl MediaPublisher for MediaBuild {
             let Some(index) = fresh(&editor).await else { return Publication::default() };
             let game = gz_project::Project::of(&editor).map(|(_, p)| p.game_root()).unwrap_or_default();
             let root = session.root.clone();
+            let models = gz_media::GameModels::reader(&editor, &root);
             editor
                 .exec
                 .io(move || {
                     let game = (!game.trim().is_empty()).then(|| std::path::PathBuf::from(&game));
-                    publication(&root, &index, game.as_deref())
+                    publication(&root, &index, game.as_deref(), &models)
                 })
                 .await
         })
@@ -222,7 +236,7 @@ mod tests {
         let d = Dir::new("build");
         project(&d);
         let index = gz_media::scan(&d.0);
-        let p = publication(&d.0, &index, None);
+        let p = publication(&d.0, &index, None, &gz_media::resolve::no_game());
         assert!(p.errors.is_empty(), "{:?}", p.errors);
         assert!(p.warnings.is_empty());
         let rt =
@@ -266,7 +280,7 @@ mod tests {
             fs::read(d.0.join("art\\wall.texasset")).unwrap()
         );
         let first = fs::metadata(&dds).unwrap().modified().unwrap();
-        let again = publication(&d.0, &gz_media::scan(&d.0), None);
+        let again = publication(&d.0, &gz_media::scan(&d.0), None, &gz_media::resolve::no_game());
         let mut walk2 =
             BuildWalk::scan_with(&FileTree::scan(&d.0), &rules, WalkScope::Module, &exec, &again.sources);
         walk2.publish(again.files);
@@ -284,13 +298,13 @@ mod tests {
         d.put("mod.ltx", "[module]\nid = od\n");
         d.put("art/gone.texasset", "return { tex = 1, source = \"gone.png\" }\n");
         d.put("art/bad.sndasset", "return { snd = ");
-        let p = publication(&d.0, &gz_media::scan(&d.0), None);
+        let p = publication(&d.0, &gz_media::scan(&d.0), None, &gz_media::resolve::no_game());
         assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
         assert!(p.errors[0].starts_with("art/bad.sndasset"), "{:?}", p.errors);
         let d2 = Dir::new("unbaked");
         d2.put("mod.ltx", "[module]\nid = od\n");
         d2.put("art/gone.texasset", "return { tex = 1, source = \"gone.png\" }\n");
-        let p = publication(&d2.0, &gz_media::scan(&d2.0), None);
+        let p = publication(&d2.0, &gz_media::scan(&d2.0), None, &gz_media::resolve::no_game());
         assert!(p.errors.iter().any(|e| e.starts_with("art/gone.texasset")), "{:?}", p.errors);
         assert!(p.files.is_empty());
     }
@@ -301,7 +315,7 @@ mod tests {
         project(&d);
         let game = d.0.join("game");
         fs::create_dir_all(&game).unwrap();
-        let p = publication(&d.0, &gz_media::scan(&d.0), Some(&game));
+        let p = publication(&d.0, &gz_media::scan(&d.0), Some(&game), &gz_media::resolve::no_game());
         assert_eq!(p.warnings, [no_descriptions_warning(None)]);
         assert!(p.warnings[0].contains("asset-descriptions"));
         assert!(no_descriptions_warning(Some("1.6.4")).starts_with("The linked game (1.6.4) does not state"));

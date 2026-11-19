@@ -21,9 +21,8 @@
 //! `gz-ui-mod`'s `MOD_MENU` keeps; [`register`] adds `pda.preview`, `screens.view` and `pda.open`.
 //!
 //! What this crate draws that no other surface does ([`local`]): `local_list_header` (a list's
-//! title with its +), `local_code_view` (Mono text with a gutter, Lua data coloured, the reader's
-//! error line underlined), `local_drop_mark` (where a dragged row lands). Drops go through the
-//! kit's board (`gz_ui::drop::Zone`).
+//! title with its +), `local_drop_mark` (where a dragged row lands); the Source pane is the kit's
+//! `code`. Drops go through the kit's board (`gz_ui::drop::Zone`).
 //!
 //! Nothing here touches a file or computes inside a frame: files are read, decoded and written
 //! on the pools; a frame draws from the model and the caches and starts what it needs.

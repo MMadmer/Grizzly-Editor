@@ -286,8 +286,8 @@ pub const MODEL: &[Field] = &[
     f(
         "source",
         Ty::File,
-        "the file with the asset's own name and `.glb`, `.gltf`, `.obj` or `.object`",
-        "The model's geometry: glTF 2.0, Wavefront OBJ or an X-Ray SDK `.object`. Not together with `parts`.",
+        "the file with the asset's own name and `.glb`, `.gltf`, `.obj`, `.object` or `.ogf`",
+        "The model's geometry: glTF 2.0, Wavefront OBJ, an X-Ray SDK `.object`, or a compiled model - an `.ogf` of the project, or a model of the game by its engine name (`\"game:dynamics/box/box_wood_01.ogf\"`: the project's own `gamedata\\meshes` first, then the linked game). Over a compiled model the asset says what changes: `surfaces` by the name of the texture a part wears, `userdata`, a bone's `mass` and `material`; a dynamic one is published as the same file with that said again - its skeleton, its motions and its levels of detail stay its own. Not together with `parts`.",
     ),
     f(
         "name",
@@ -410,7 +410,7 @@ pub const BONE: &[Field] = &[
         "material",
         Ty::Text,
         "\"default_object\"",
-        "The bone's game material (a dynamic one of `gamemtl.xr`).",
+        "The bone's game material, a dynamic one of `gamemtl.xr` (`objects\\...`): said to the game in the model's description, which takes it when it is dynamic and keeps the model's own otherwise. The published model itself keeps the material its source has.",
     ),
 ];
 

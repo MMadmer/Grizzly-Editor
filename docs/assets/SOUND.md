@@ -36,7 +36,7 @@ return {
 
 | Code | Severity | What |
 |---|---|---|
-| `M101` | error | The source is not there. |
+| `M101` | error | The source is not there: no such file, or a model neither the project nor the linked game has. |
 | `M102` | error | The source cannot be read (the reader's sentence). |
 | `M103` | error | Two assets of the kind publish one name (on both). |
 | `M104` | warning | A texture nobody has: not a texture asset, not a file of the project, not the game's. |
@@ -46,7 +46,7 @@ return {
 | `M108` | note | A dynamic model whose source has no bones: it gets one bone, `root`. |
 | `M109` | error | A value outside what its key takes. |
 | `M110` | error | `parts` together with `source`. |
-| `M111` | warning | What the model cannot take: `rotate` on a model with bones, a part that makes no faces. |
+| `M111` | warning, error | What the model cannot take: `rotate` on a model with bones, a part that makes no faces (an error when no part makes any: there is no model), a row of `surfaces` that names no surface of the model, and over a compiled dynamic model `scale`, `rotate`, a bone the file lacks, an animation's `clip` and a row of `animations` that names no motion the file itself holds. |
 | `M112` | error | A surface that wears no texture: no level build and no model of the game takes it. |
 | `M113` | error | A source that lies outside the project: a project names nothing outside itself. |
 | `M114` | warning | A sound's `streamer` on a sound that is not `copyrighted`: the replacement never plays. |

@@ -402,6 +402,11 @@ pub async fn read(editor: &Editor, path: &RelPath) -> Result<AssetFile, ReadFail
 /// Writes a text to a file of the open project: past the write guard, atomically, with the
 /// token that keeps the watcher from calling it an outside change; the tree hears of it.
 pub async fn write_text(editor: &Editor, path: &RelPath, text: String) -> Result<(), CmdError> {
+    write_bytes(editor, path, text.into_bytes()).await
+}
+
+/// [`write_text`] for bytes: a text file written in the encoding it was read in.
+pub async fn write_bytes(editor: &Editor, path: &RelPath, text: Vec<u8>) -> Result<(), CmdError> {
     let session = editor.project()?;
     let abs = session.fs(path);
     let project = session.services.get::<Project>();
@@ -415,9 +420,9 @@ pub async fn write_text(editor: &Editor, path: &RelPath, text: String) -> Result
             if let Some(dir) = file.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            gz_editor::fsx::write_atomic(&file, text.as_bytes())?;
+            gz_editor::fsx::write_atomic(&file, &text)?;
             if let Some(p) = watch {
-                p.tree.changes().note_written(&rel, text.as_bytes());
+                p.tree.changes().note_written(&rel, &text);
             }
             Ok(())
         })

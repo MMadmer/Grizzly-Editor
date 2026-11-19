@@ -4,6 +4,7 @@
 //! read(path)      -> MeshSource     by the extension: .glb / .gltf / .obj
 //! read_gltf(path) -> MeshSource     glTF 2.0: a .gltf with external or data-URI buffers, or a .glb
 //! read_obj(path)  -> MeshSource     Wavefront OBJ with its .mtl
+//! read_ogf_bytes(bytes, file) -> MeshSource   a compiled model of the game, in its rest pose
 //! ```
 //!
 //! A source becomes the same [`Object`] a library `.object` is, so everything downstream - the
@@ -44,6 +45,7 @@ mod assemble;
 mod gltf;
 mod math;
 mod obj;
+mod ogf;
 
 #[cfg(test)]
 mod tests;
@@ -54,9 +56,10 @@ use gz_fmt_object::Object;
 
 pub use gltf::read_gltf;
 pub use obj::read_obj;
+pub use ogf::{OgfPart, object_of_ogf, object_of_parts, ogf_parts, read_ogf_bytes};
 
 /// The extensions this crate reads, lower case, without the dot.
-pub const EXTENSIONS: &[&str] = &["glb", "gltf", "obj"];
+pub const EXTENSIONS: &[&str] = &["glb", "gltf", "obj", "ogf"];
 
 /// The most elements an accessor, a vertex list or a face list may hold.
 pub const MAX_ELEMENTS: usize = 1 << 24;
@@ -142,6 +145,11 @@ pub fn read(path: &Path) -> Result<MeshSource> {
     match extension(path).as_str() {
         "glb" | "gltf" => read_gltf(path),
         "obj" => read_obj(path),
+        "ogf" => {
+            let bytes = std::fs::read(path)
+                .map_err(|e| MeshError::Io { path: path.to_owned(), reason: gz_base::io_reason(&e) })?;
+            read_ogf_bytes(&bytes, &file_name(path))
+        }
         other => Err(MeshError::Invalid {
             file: file_name(path),
             message: format!(

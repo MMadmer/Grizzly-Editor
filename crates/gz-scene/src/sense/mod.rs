@@ -69,15 +69,16 @@ pub struct QueryParams {
     /// What to ask: ground, walls, heights, ray, box, fit, free or ai.
     pub action: QueryAction,
     /// Metres: the point of ground, walls (its height), fit (where the model's pivot goes; left
-    /// out with object: where the object stands), free (near where), box (the box's centre,
-    /// with size).
+    /// out with object: where the object stands), free (near where, on the floor of its height),
+    /// box (the box's centre, with size), heights (the floor at or below its height instead of
+    /// the highest one: a storey of a building).
     #[serde(default)]
     pub position: Option<[f32; 3]>,
     /// ground, ai: several points at once (at most 1024).
     #[serde(default)]
     pub positions: Option<Vec<[f32; 3]>>,
-    /// ground: start above everything in the scene instead of at the point (the highest floor
-    /// of the column).
+    /// ground, free: start above everything in the scene instead of at the point (the highest
+    /// floor of the column: a roof, open ground).
     #[serde(default)]
     pub top: bool,
     /// How far the rays reach, metres (ground: 30, walls: 6, ray along direction: 1000).
@@ -116,6 +117,11 @@ pub struct QueryParams {
     /// ray: every object it crosses (`hits`), not only the first.
     #[serde(default)]
     pub all: bool,
+    /// ray: the volumes count as well - a zone's shape, a sound environment, a fog volume, each
+    /// with its `kind`. Left out, the ray meets what stands in the level (objects, terrains, the
+    /// bodies of spawn points): a volume is in nobody's way and hides nothing behind it.
+    #[serde(default)]
+    pub volumes: bool,
     /// box: its lowest corner, metres.
     #[serde(default)]
     pub min: Option<[f32; 3]>,
@@ -280,9 +286,17 @@ pub(crate) fn slope_of(n: Vec3) -> f32 {
 
 /// The surface of a hit as answers write it: `{name, texture, material}`, `null` without one.
 pub(crate) fn surface_json(sc: &Scene<'_>, hit: &PickHit) -> Value {
-    let Some(s) = hit.surface else { return Value::Null };
     let Some(o) = sc.state.get(hit.id) else { return Value::Null };
-    let Some(lo) = crate::objects::terrain::mesh_of(sc.state, sc.lib, o) else { return Value::Null };
+    let Some(lo) = model_of_object(sc, o) else { return Value::Null };
+    // a face of an object's own collision (a level of the game) names the material it is of
+    if let Some(tri) = hit.solid {
+        return lo
+            .solid
+            .as_ref()
+            .and_then(|m| m.material_of(tri))
+            .map_or(Value::Null, |m| json!({ "material": m, "collision": true }));
+    }
+    let Some(s) = hit.surface else { return Value::Null };
     lo.object.surfaces.get(s as usize).map_or(Value::Null, |s| {
         json!({ "name": s.name.as_str(), "texture": s.texture.as_str(), "material": s.game_mtl.as_str() })
     })
@@ -306,4 +320,17 @@ pub(crate) fn opt_r4(v: Option<f32>) -> Value {
 #[must_use]
 pub fn is_solid(o: &Object) -> bool {
     matches!(o.class, ObjClass::SceneObject | ObjClass::Terrain)
+        || (o.class == ObjClass::SpawnPoint && objects::visual_ref(o).is_some())
+}
+
+/// The model of an object that has one: a scene object's, a terrain's, the one a spawn point's
+/// entity wears.
+pub(crate) fn model_of_object(
+    sc: &Scene<'_>,
+    o: &Object,
+) -> Option<std::sync::Arc<crate::library::LibraryObject>> {
+    match o.class {
+        ObjClass::SpawnPoint => objects::visual_ref(o).and_then(|r| sc.lib.cached(&r)),
+        _ => crate::objects::terrain::mesh_of(sc.state, sc.lib, o),
+    }
 }

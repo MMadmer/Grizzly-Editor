@@ -9,7 +9,7 @@ use super::{
 use crate::cmd::{r4, v3};
 use crate::math::{Aabb, Mat4, Transform, Vec3, xform_box};
 use crate::model::{ObjData, ObjId};
-use crate::pick::{PickHit, RayKinds, box_triangles, ray_scene, ray_scene_all};
+use crate::pick::{PickHit, RayKinds, ray_scene, ray_scene_all, solid_triangles};
 
 fn hit_json(sc: &Scene<'_>, h: &PickHit, dir: Vec3) -> Value {
     json!({
@@ -43,7 +43,8 @@ pub(super) fn ray(sc: &Scene<'_>, p: &QueryParams) -> Result<Value, CmdError> {
         return Err(CmdError::invalid("the ray has no direction: to is from, or direction is 0, 0, 0"));
     }
     let lists = Lists::of(sc.state, p)?;
-    let f = lists.filter(RayKinds::Geometry);
+    // what stands in the level; a volume is in nobody's way and is met only when asked for
+    let f = lists.filter(if p.volumes { RayKinds::Geometry } else { RayKinds::Meshes });
     if p.all {
         let hits = ray_scene_all(sc.pick, sc.state, sc.lib, from, dir, range, &f);
         let total = hits.len();
@@ -84,7 +85,7 @@ impl OBox {
 
 /// The world triangles of a scene object that meet a turned box.
 pub(crate) fn object_meets(sc: &Scene<'_>, id: ObjId, ob: &OBox, margin: Vec3) -> Vec<[Vec3; 3]> {
-    box_triangles(sc.state, sc.lib, &[id], &ob.world())
+    solid_triangles(sc.state, sc.lib, &[id], &ob.world())
         .into_iter()
         .filter_map(|t| ob.meets(&t, margin))
         .collect()

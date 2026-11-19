@@ -588,7 +588,7 @@ static LIGHT: &[Field<Object>] = &[
         "",
         Ty::Words(LIGHT_KINDS),
         "\"point\"",
-        "How the light shines.",
+        "How the light shines: all around, inside a cone along where it looks (`rot`), or from one direction over the whole level.",
         |d| word(d.kind, LIGHT_KINDS),
         |d, v| d.kind = as_word_or_number(v, LIGHT_KINDS)?
     ),
@@ -651,7 +651,7 @@ static LIGHT: &[Field<Object>] = &[
         "deg",
         Ty::Angle { min: 0.1, max: 120.0 },
         "22.5",
-        "The opening of a spot light.",
+        "The whole opening of a spot light: its light is full on the axis and gone at the cone's edge.",
         |d| angle(d.cone),
         |d, v| d.cone = as_angle(v)?,
         applies = |o| matches!(&o.data, ObjData::Light(d) if d.kind == LT_SPOT)
@@ -710,14 +710,14 @@ static LIGHT: &[Field<Object>] = &[
         "Lightmap",
         light_flags::AFFECT_STATIC,
         "true",
-        "The build bakes it into the level's lightmaps."
+        "The build bakes it into the lightmaps: of the level, or of the module's piece over a level of the game."
     ),
     light_flag!(
         "dynamic",
         "Dynamic",
         light_flags::AFFECT_DYNAMIC,
         "false",
-        "The game lights objects with it as they move."
+        "It shines in the game and lights what moves: a point light or a spot light; a directional one does not (`S221`)."
     ),
     light_flag!(
         "animated",
@@ -794,7 +794,7 @@ static GLOW: &[Field<Object>] = &[
         "",
         Ty::Pick("e_shader"),
         "\"effects\\\\glow\"",
-        "How it is drawn.",
+        "How it is drawn: left out (or `effects\\glow`, `effects\\flare`) like a lens flare - its picture added to the frame, gone when something of the level stands between the eye and it; `effects\\sun` the same, hidden by depth as well. The game draws a glow with no other shader (`S225`).",
         |d| text(&d.shader),
         |d, v| d.shader = as_text(v)?
     ),
@@ -818,7 +818,7 @@ static GLOW: &[Field<Object>] = &[
         "",
         Ty::Bool,
         "false",
-        "The same size on the screen at any distance.",
+        "The same size on the screen at any distance: `radius` is then a share of half the screen's height (0.02 is a small light), not metres.",
         |d| Value::Bool(d.flags & GLOW_FIXED != 0),
         |d, v| d.flags = if as_bool(v)? { d.flags | GLOW_FIXED } else { d.flags & !GLOW_FIXED }
     ),
@@ -976,11 +976,34 @@ static SOUND_SOURCE: &[Field<Object>] = &[
 
 // ---------------------------------------------------------------- shapes
 
-/// One shape: a sphere or a box (the box's axes and centre as the rows of its matrix).
+/// The keys a shape of a file may say.
+const SHAPE_KEYS: [&str; 9] = ["kind", "center", "radius", "size", "rot", "x", "y", "z", "raw"];
+
+/// The sides of a box whose axes lie along the shape's own: what `size` says.
+fn box_size(s: &ShapeDef) -> Option<Vec3> {
+    let d = &s.data;
+    let straight = [d[1], d[2], d[4], d[6], d[8], d[9]].iter().all(|x| *x == 0.0);
+    (straight && [d[3], d[7], d[11], d[15]] == [0.0, 0.0, 0.0, 1.0] && s.pad == [0; 3])
+        .then(|| Vec3::new(d[0], d[5], d[10]))
+}
+
+/// One shape: a sphere, or a box - by its `size` where its sides lie along the shape's axes,
+/// else by the three axes of its matrix (`x`, `y`, `z`, each the direction and the length of a
+/// side); `center` where it is not the shape's origin.
 #[must_use]
 pub fn shape_value(s: &ShapeDef) -> Value {
     let mut t = Table::new();
     let v3 = |i: usize| list([num(s.data[i]), num(s.data[i + 1]), num(s.data[i + 2])]);
+    if s.kind == CF_BOX
+        && let Some(size) = box_size(s)
+    {
+        t.put("kind", "box");
+        t.put("size", list([num(size.x), num(size.y), num(size.z)]));
+        if s.data[12..15].iter().any(|x| *x != 0.0) {
+            t.put("center", v3(12));
+        }
+        return Value::Table(t);
+    }
     if s.kind == CF_SPHERE {
         t.put("kind", "sphere");
         t.put("center", v3(0));
@@ -1024,6 +1047,11 @@ pub fn shape_of(v: &Value) -> Result<ShapeDef, Bad> {
         }
         return Ok(ShapeDef { kind: b[0], pad: [b[1], b[2], b[3]], data });
     }
+    if let Some((k, _)) = v.fields().iter().find(|(k, _)| !SHAPE_KEYS.contains(&k.as_str())) {
+        return Err(format!(
+            "holds a shape with the key '{k}', which a shape has not: a sphere says center and radius, a box size (and rot) or x, y, z, and center"
+        ));
+    }
     let row = |k: &str| v.get(k).map(as_vec3).transpose().map(|x| x.unwrap_or(Vec3::ZERO));
     match v.get("kind") {
         Some(Value::String(s)) if s == "sphere" => {
@@ -1033,6 +1061,25 @@ pub fn shape_of(v: &Value) -> Result<ShapeDef, Bad> {
             let kind = if k.as_str() == Some("box") { CF_BOX } else { as_u8(k)? };
             let mut d = ShapeDef::boxed(&crate::math::Mat4::IDENTITY);
             d.kind = kind;
+            // a box by its sides, turned by `rot` (degrees, as an object's) when it says one
+            if let Some(size) = v.get("size") {
+                if ["x", "y", "z"].iter().any(|a| v.get(a).is_some()) {
+                    return Err("holds a box that says both size and its axes (x, y, z): one of them".into());
+                }
+                let size = as_vec3(size)?;
+                let turn = match v.get("rot") {
+                    Some(r) => crate::math::rotation_matrix(as_angles(r)?),
+                    None => crate::math::Mat4::IDENTITY,
+                };
+                for (r, side) in [size.x, size.y, size.z].into_iter().enumerate() {
+                    let axis = turn.row(r) * side;
+                    d.data[r * 4] = axis.x;
+                    d.data[r * 4 + 1] = axis.y;
+                    d.data[r * 4 + 2] = axis.z;
+                }
+            } else if v.get("rot").is_some() {
+                return Err("holds a box with rot and no size: rot turns a box said by its size".into());
+            }
             for (r, key) in ["x", "y", "z", "center"].iter().enumerate() {
                 if let Some(x) = v.get(key) {
                     let p = as_vec3(x)?;
@@ -1057,7 +1104,7 @@ pub fn shapes_of(v: &Value) -> Result<Vec<ShapeDef>, Bad> {
 }
 
 const SHAPES_TY: Ty = Ty::Table(
-    "a list of `{ kind = \"sphere\", center = { x, y, z }, radius = m }` and `{ kind = \"box\", x = {..}, y = {..}, z = {..}, center = {..} }`",
+    "a list of `{ kind = \"sphere\", center = { x, y, z }, radius = m }` and `{ kind = \"box\", size = { x, y, z }, center = { x, y, z } }` - the box's sides in metres, `rot = { x, y, z }` (deg) to turn it, or its three axes `x`, `y`, `z` instead of `size`; `center` is where it stands from the object, left out at it",
 );
 
 static SHAPE: &[Field<Object>] = &[
@@ -1167,7 +1214,7 @@ static FOG: &[Field<Object>] = &[
         "",
         Ty::Pick("fog_profile"),
         "\"environment\\\\fog\\\\default.ltx\"",
-        "The fog's settings, a file of the game's configs.",
+        "How the fog flows, a file of the game's configs said from there (`S220` when neither the game nor the project has it).",
         |d| text(&d.profile),
         |d, v| d.profile = as_text(v)?
     ),

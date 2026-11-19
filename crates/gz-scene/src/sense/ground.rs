@@ -41,7 +41,8 @@ fn one_point(
 
 pub(super) fn ground(sc: &Scene<'_>, p: &QueryParams) -> Result<Value, CmdError> {
     let lists = Lists::of(sc.state, p)?;
-    let f = lists.filter(RayKinds::Meshes);
+    // the ground is what stops a body: the collision of a level, the faces of a model that collide
+    let f = lists.filter(RayKinds::Solid);
     let reach = p.reach.unwrap_or(30.0).max(0.1);
     match (&p.position, &p.positions) {
         (Some(_), Some(_)) => Err(CmdError::invalid("ground takes position or positions, not both")),
@@ -90,8 +91,16 @@ pub(super) fn heights(sc: &Scene<'_>, p: &QueryParams) -> Result<Value, CmdError
         )));
     }
     let lists = Lists::of(sc.state, p)?;
-    let f = lists.filter(RayKinds::Meshes);
-    let grid: Vec<Vec<Option<f32>>> = match sc.top() {
+    let f = lists.filter(RayKinds::Solid);
+    // with a position: the floor at or below its height (a storey of a building), not the roof
+    let from = match p.position {
+        Some(at) => {
+            let at = finite(at, "position")?;
+            sc.top().map(|(_, lo)| (at.y + 0.05, lo))
+        }
+        None => sc.top(),
+    };
+    let grid: Vec<Vec<Option<f32>>> = match from {
         None => vec![vec![None; columns]; rows],
         Some((hi, lo)) => {
             use rayon::prelude::*;

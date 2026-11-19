@@ -26,7 +26,7 @@ escape\
   wallmarks.bin     the wallmarks layer (binary)
 ```
 
-Every file is Lua data (`return { ... }` of literals). The `.scene` starts with the header `scene = 1`; the files of the folder are parts of the scene and carry no header. A file of a kind the scene has no objects of does not exist. A key at its default is not written, and a key the editor does not know is kept where it is through every save. A save writes only what changed: an object nobody touched keeps its bytes and its comments.
+Every file is Lua data (`return { ... }` of literals). The `.scene` starts with the header `scene = 2`; the files of the folder are parts of the scene and carry no header. A file of a kind the scene has no objects of does not exist. A key at its default is not written, and a key the editor does not know is kept where it is through every save. A save writes only what changed: an object nobody touched keeps its bytes and its comments.
 
 Positions are metres, angles degrees, colours `{ r, g, b }` from 0 to 1. Things are named, never numbered: an object's `name` is unique in the scene (in any case; the case written is kept), and whatever points at an object - a group's members, a sector's meshes, a portal's sectors, a way's links - names it. A number is the shortest text that reads back to the very value; the few values a number of the file cannot be are words: `"-0"`, `"nan"`, `"inf"`, `"-inf"`.
 
@@ -34,6 +34,7 @@ Positions are metres, angles degrees, colours `{ r, g, b }` from 0 to 1. Things 
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `base` | string (game_level) | "" | The level of the game the scene lies over: the level's own objects are read from the game and never written, and the scene's files hold what the module adds. |
 | `level.path` | string | "level" | The folder of the built level under the game's `levels`. |
 | `level.prefix` | string | "level_prefix" | What the level's own names start with. |
 | `level.map_version` | string | "1.0" | The version the level's `level.ltx` gives in `[map_usage]`. |
@@ -62,6 +63,36 @@ Positions are metres, angles degrees, colours `{ r, g, b }` from 0 to 1. Things 
 | `view_flags` | `{ <kind> = n }` | none | What the viewport draws of each kind (names, crosses, solid sectors), as the kinds' flags. |
 | `random_placement` | `{ on = true, scale = { {min}, {max} }, rotation = { {min}, {max} }, proportional = true, objects = { ref, ... } }` | off | What placing a library object picks at random: the object of a list, its scale and its rotation. |
 | `layers` | `{ ai_map = "ai_map.bin", details = "details.bin", wallmarks = "wallmarks.bin" }` | none | The painted layers' files in the scene's folder. |
+
+## A scene over a level of the game
+
+A module that adds to a level of the game says `base = "<level>"` and writes only what it adds:
+
+```lua
+-- rawdata/levels/agroprom_base.scene
+return {
+scene = 2,
+base = "l03_agroprom",
+}
+-- rawdata/levels/agroprom_base/spawns.lua
+return {
+spawns = {
+{ name = "agr_smart_terrain_1_2_anomal_zone", removed = true },
+{ name = "base_guard_gate", pos = { 40, 2.5, -12 }, rot = { 0, 90, 0 }, section = "agro_base_guard" },
+},
+}
+```
+
+The level itself is the game's and is never copied into the project: as the scene is read its objects come from the game library (`docs/GAME_LIBRARY.md`) - the level's geometry as one object (`level_geometry`, with the level's own collision), every spawn point of the game's spawn that stands on it, its patrol paths, lights, glows, sounds and effects, fog volumes and sound environments, and its AI map. They stand in the scene for every query, check and picture; `scene.objects` answers them with `level = true` (`own = true` leaves them out), and nothing of them is the scene's to change. What the library holds of the level - the same objects as text, and the level's passport: its structures, floors, materials and heights - is `asset.card ref=<level> kind=level`.
+
+- Everything the scene's files hold is the module's: `authored` is implied and not written.
+- An entry of `spawns.lua` with `removed = true` and no `section` is no spawn point of the scene's: it takes the level's spawn point of that `name` out of the game for the module's mode. It says `name` and `removed` alone. An entry that names what the level has not is a warning (`S061`) and stays in the file.
+- A key of the `.scene` left out is the level's: its folder, its sun, its light controls.
+- The level's painted layers are the level's; a layer file in the scene's folder is the module's own, made when the scene paints it. Wallmarks painted so ship as part of the module's piece of the level; details (grass) and a painted AI map do not ship - the game grows the level's own grass and keeps the level's own AI map, which a module changes under a terrain that cuts the ground alone (`S223`).
+- What the module adds beside objects and spawn points - sound sources, particle effects, lights that shine in the game, environment modifiers, glows, fog volumes, sound environments - the build writes into `levels\<level>\overlay.things`, which the game puts beside the level's own. Sectors, portals, the bound of the level and of its AI map are the game's there (`S222`).
+- A level the game library cannot give (`S060`: no game linked, no level of that name) leaves the scene with what its own files say; a save then writes them as they are.
+
+A scene without `base` is a level of the module's own, or an X-Ray SDK scene imported whole, where `authored` and `removed` are said object by object.
 
 ## Every object
 
@@ -105,22 +136,22 @@ Static and dynamic objects of the library.
 
 ## Lights - `lights` of `lights.lua`
 
-The lights the build bakes and the game shines.
+The lights the build bakes and the game shines. Every kind is baked into the lightmaps (`lightmap`): a point light all around, a spot light inside its `cone` along where it looks (all of it on the axis, none at the cone's edge), a directional one from its direction. In the game (`dynamic`) a point light and a spot light shine - the spot through the level's `overlay.things` -; a directional one never does, the game's one directional light being the level's sun (`S221`).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `kind` | `"point"` `"spot"` `"directional"` | "point" | How the light shines. |
+| `kind` | `"point"` `"spot"` `"directional"` | "point" | How the light shines: all around, inside a cone along where it looks (`rot`), or from one direction over the whole level. |
 | `color` | { r, g, b } | { 1, 1, 1 } | The colour of its light. |
 | `brightness` | number | 1 | Multiplies the colour; below 0 the light darkens. |
 | `range` | number (m) | 8 | How far it reaches. |
 | `attenuation` | { x, y, z } | { 1, 0, 0 } | Its constant, linear and quadratic falloff over the range. |
-| `cone` | number (deg) | 22.5 | The opening of a spot light. |
+| `cone` | number (deg) | 22.5 | The whole opening of a spot light: its light is full on the axis and gone at the cone's edge. |
 | `texture` | string (texture) | - | The picture a spot light throws. |
 | `virtual_size` | number (m) | 0 | The size of the light's source the shadows are soft by. |
 | `control` | string (light_control) | "$static" | The group of lights it is switched with: `$static`, `$hemi`, `$sun` or one of the scene's `light_controls`. |
 | `animation` | string (lightanim) | - | A colour animation of the game's light animations. |
-| `lightmap` | boolean | true | The build bakes it into the level's lightmaps. |
-| `dynamic` | boolean | false | The game lights objects with it as they move. |
+| `lightmap` | boolean | true | The build bakes it into the lightmaps: of the level, or of the module's piece over a level of the game. |
+| `dynamic` | boolean | false | It shines in the game and lights what moves: a point light or a spot light; a directional one does not (`S221`). |
 | `animated` | boolean | false | Its colour animation plays in the game. |
 | `breaking` | boolean | false | It flickers out now and then. |
 | `shadows` | boolean | false | Objects cast shadows in it. |
@@ -129,14 +160,14 @@ The lights the build bakes and the game shines.
 
 ## Glows - `glows` of `glows.lua`
 
-Glows: light halos the game draws.
+Glows: a picture that always faces the viewer, at a place - the halo of a lamp. The game draws the ones a module brings (the level's `overlay.things`), fading each in while its place is in sight.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `texture` | string (texture) | - | The glow's picture. |
-| `shader` | string (e_shader) | "effects\\glow" | How it is drawn. |
+| `shader` | string (e_shader) | "effects\\glow" | How it is drawn: left out (or `effects\glow`, `effects\flare`) like a lens flare - its picture added to the frame, gone when something of the level stands between the eye and it; `effects\sun` the same, hidden by depth as well. The game draws a glow with no other shader (`S225`). |
 | `radius` | number (m) | 0.5 | How big it is. |
-| `fixed_size` | boolean | false | The same size on the screen at any distance. |
+| `fixed_size` | boolean | false | The same size on the screen at any distance: `radius` is then a share of half the screen's height (0.02 is a small light), not metres. |
 | `glow_flags` | integer | 0 | Bits of the glow's flags no key names. |
 
 ## Sound Sources - `sources` of `sounds.lua`
@@ -158,13 +189,13 @@ Sound sources: a sound of the game played at a place.
 
 ## Sound Environments - `environments` of `sounds.lua`
 
-Sound environments: volumes that change how sound echoes.
+Sound environments: boxes that change how sound echoes. `pos`, `rot` and `scale` say the box (a unit box scaled: `scale = { 12, 4, 7 }` is 12 x 4 x 7 m). Inside it the game plays `inner`; straight above it, `outer`. `asset.find kind=sound_env` lists the game's environments. They reach the game through the level's `overlay.things`, on a level of the module's own and over a level of the game alike.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `inner` | string (sound_env) | - | The sound environment inside the volume. |
 | `outer` | string (sound_env) | - | The sound environment outside the volume. |
-| `shapes` | a list of `{ kind = "sphere", center = { x, y, z }, radius = m }` and `{ kind = "box", x = {..}, y = {..}, z = {..}, center = {..} }` | one unit box | The spheres and boxes the volume is made of. |
+| `shapes` | a list of `{ kind = "sphere", center = { x, y, z }, radius = m }` and `{ kind = "box", size = { x, y, z }, center = { x, y, z } }` - the box's sides in metres, `rot = { x, y, z }` (deg) to turn it, or its three axes `x`, `y`, `z` instead of `size`; `center` is where it stands from the object, left out at it | one unit box | The spheres and boxes the volume is made of. |
 
 ## Particle Effects - `particles` of `particles.lua`
 
@@ -181,18 +212,18 @@ Shapes: volumes of spheres and boxes (and the level's bound).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `shapes` | a list of `{ kind = "sphere", center = { x, y, z }, radius = m }` and `{ kind = "box", x = {..}, y = {..}, z = {..}, center = {..} }` | none | The spheres and boxes it is made of, in its own coordinates. |
+| `shapes` | a list of `{ kind = "sphere", center = { x, y, z }, radius = m }` and `{ kind = "box", size = { x, y, z }, center = { x, y, z } }` - the box's sides in metres, `rot = { x, y, z }` (deg) to turn it, or its three axes `x`, `y`, `z` instead of `size`; `center` is where it stands from the object, left out at it | none | The spheres and boxes it is made of, in its own coordinates. |
 | `usage` | `"common"` `"level_bound"` `"ai_map_bounds"` | "common" | What the shape is for: a volume of its own, the bound of the level, or the AI Map Bounds the AI map is generated inside. |
 
 ## Fog Volumes - `volumes` of `fog.lua`
 
-Fog volumes: one box each.
+Fog volumes: one box each (`pos`, `rot`, `scale`: a unit box scaled). An emitter's box fills with fog that flows by its `profile`; the occlusion volumes of its `group` are what the fog flows around. A group has one emitter. The fog fills its whole box and is lit by the lights around it: a small box in a still place reads as mist, a large one as smoke. The game shows it with volumetric fog on.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `kind` | `"emitter"` `"occlusion"` | "emitter" | An emitter fills its box with fog; an occlusion volume keeps fog out. |
 | `group` | integer | none | Volumes of one group are one fog. |
-| `profile` | string (fog_profile) | "environment\\fog\\default.ltx" | The fog's settings, a file of the game's configs. |
+| `profile` | string (fog_profile) | "environment\\fog\\default.ltx" | How the fog flows, a file of the game's configs said from there (`S220` when neither the game nor the project has it). |
 
 ## Spawn Points - `spawns` of `spawns.lua`
 
@@ -224,7 +255,7 @@ Way paths: named points and the links between them; orders and quests walk them.
 
 ## Sectors - `sectors` of `zones.lua`
 
-Sectors: the cells the level's visibility is divided into.
+Sectors: the cells the visibility of a level of the module's own is divided into. Over a level of the game the cells are the game's and a module adds none (`S222`).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -235,7 +266,7 @@ Sectors: the cells the level's visibility is divided into.
 
 ## Portals - `portals` of `zones.lua`
 
-Portals: the openings between two sectors.
+Portals: the openings between two sectors of a level of the module's own (`S222` over a level of the game).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -270,6 +301,10 @@ Terrains: a height grid over a rectangle that replaces the ground under it. `pos
 ## Spawn properties
 
 `props` holds the named properties of the spawn's entity that differ from a new entity of its section - the fields of the game's server entity by name: the object's own (`story_id`, `spawn_story_id`, `custom_data = [[ ... ]]`, `graph_id`, `node_id`, `distance`, `alife_flags`), its model (`visual`, `visual_flags`, `startup_animation`), and a table per part of its class (`trader = { money = 500, specific_character = "..." }`, `creature = { health = 0.5 }`, `zone = { ... }`, `script = { ... }`, ...). `header` holds what the entity's header says beyond the object's name and transform. A part the entity lacks is `false`. The editor proves every save: the properties read back must give the very spawn packet the entity writes, or the spawn is kept as its packet (`raw`, hex) and `asset.check` names it. An entity of an X-Ray SDK text scene whose class the linked game does not know has no packet: it keeps the section's numbered values as they were (`values`).
+
+A zone's volume is said once, by the point's `shape`: `shape = { shapes = { { kind = "box", size = { 20, 6, 12 } } } }`. The entity carries the same shapes and `props` does not repeat them; a file that says `props.shapes` and no `shape` is read into the point's shape.
+
+A section is one of the linked game's (`game.lookup type=spawn_section`) or one the game makes of the module's own assets: a character `characters/guard.npcasset` of the module `agro_base` is the section `agro_base_guard`, placed like any other.
 
 ## The painted layers
 

@@ -12,15 +12,15 @@ use gz_base::{Blob, SmolStr};
 
 pub use shape::{
     CF_BOX, CF_SPHERE, FV_EMITTER, FV_OCCLUSION, FogData, SHAPE_COMMON, SHAPE_LEVEL_BOUND, ShapeData,
-    ShapeDef, SoundEnvData,
+    ShapeDef, SoundEnvData, entity_shapes, shape_defs,
 };
 pub use simple::{
-    Fuzzy, GlowData, KeptObject, LT_DIRECT, LT_POINT, LT_SPOT, LightData, ParticlesData, SO_USE_SURFACE,
-    SO_VISUAL_MODE, SceneObjectData, SoundSrcData, SurfaceOverride, light_flags,
+    Fuzzy, GlowData, GlowShader, KeptObject, LT_DIRECT, LT_POINT, LT_SPOT, LightData, ParticlesData,
+    SO_USE_SURFACE, SO_VISUAL_MODE, SceneObjectData, SoundSrcData, SurfaceOverride, glow_shader, light_flags,
 };
 pub use spawn::{
     ENVMOD_CHOOSE_NAME, EnvMod, ORDER_HOSTILE, ORDER_RUN, PLAYERSTART_CHOOSE_NAME, PointKind,
-    RPOINT_CHOOSE_NAME, RPoint, SpawnData, SpawnEntity, XmsOrder, env_flags,
+    RPOINT_CHOOSE_NAME, RPoint, SpawnData, SpawnEntity, XmsOrder, env_flags, sync_shape, visual_ref,
 };
 pub use terrain::TerrainData;
 pub use way::{
@@ -108,9 +108,13 @@ pub fn world_box(state: &SceneState, obj: &Object, local_ref: &dyn Fn(&str) -> O
                         p.z + PLAYERSTART_HALF_WIDTH,
                     ),
                 ),
-                PointKind::Spawn => match d.attached.as_ref().and_then(|a| attached_box(a)) {
-                    Some(sb) => sb,
-                    None => rpoint_box(p),
+                // what stands there in the game: the model the entity wears, once it is loaded
+                PointKind::Spawn => match spawn::visual_ref(obj).and_then(|r| local_ref(&r)) {
+                    Some(model) => xform_box(&model, &obj.world()),
+                    None => match d.attached.as_ref().and_then(|a| attached_box(a)) {
+                        Some(sb) => sb,
+                        None => rpoint_box(p),
+                    },
                 },
             };
             if let Some(a) = &d.attached

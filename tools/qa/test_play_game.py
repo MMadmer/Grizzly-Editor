@@ -126,6 +126,9 @@ SCENES["l01_escape_terrain"] = {"stock": True, "level": "l01_escape", "scene": "
 # rest is a piece per cell, which Play stages as a module of its own and the game loads beside the level
 SCENES["mp_close_combat_cells"] = {**SCENES["mp_close_combat"], "scene": "mp_close_combat", "cells": True,
                                    "options": {**SCENES["mp_close_combat"]["options"], "build.cell_size": 16}}
+# a module that changes the game and has no scene (a gameplay mod): the project file names none, Play builds the
+# module and starts a new game where the game starts it, with nothing of a level built or staged
+SCENES["none"] = {"stock": True, "noscene": True, "level": "qa_no_level"}
 SCENE = "mp_test"
 # the settings the game's own QA forces (Run-NqQa.ps1, Update-QaUserLtx): a window, no sound, no pause
 USER_LTX = {"renderer": "renderer_r4", "vid_mode": "1024x768", "vid_window_mode": "st_opt_windowed",
@@ -341,10 +344,28 @@ def prepare_scene(scene: str) -> bool:
     return True
 
 
+def drop_scene(project: str) -> None:
+    """The copy's project file names no scene: the project is a module without a level."""
+    for name in os.listdir(project):
+        if name.lower().endswith(".grizzly"):
+            path = os.path.join(project, name)
+            text = open(path, encoding="utf-8").read()
+            kept = [l for l in text.splitlines() if not l.strip().startswith("scene")]
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("\n".join(kept) + "\n")
+
+
 def run_scene(project: str, root: str, scene: str, keep_log: str | None) -> None:
     cfg = SCENES[scene]
     level = cfg["level"]
     loaded = {k: v.replace("<level>", level) for k, v in LOADED.items()}
+    if cfg.get("noscene"):
+        st = cmd("state")
+        check(not (st.get("scene") or {}).get("open"), "the project has no scene", qa.short(st.get("scene")))
+        # the level the game starts on is the game's: what is said of a level is said of any
+        loaded = {k: v for k, v in loaded.items() if "<level>" not in LOADED[k]}
+        play_in_place(root, level, loaded, keep_log, stock=True)
+        return
     src = cfg.get("scene", scene)
     os.makedirs(os.path.join(project, "rawdata", "levels"), exist_ok=True)
     shutil.copy2(os.path.join(qa.REPO, "rawdata", "levels", src + ".level"),
@@ -720,6 +741,8 @@ def run(ctx: qa.Run) -> None:
     # a folder of its own in the temp folder; the game run in place on it is told apart by this path
     root = tempfile.mkdtemp(prefix="gzpr_")
     project = ctx.project
+    if SCENES[args.scene].get("noscene"):
+        drop_scene(project)
     pid_file, launcher_file = os.path.join(work, "editor.pid"), os.path.join(work, "launcher.pid")
     try:
         exe = qa.exe()

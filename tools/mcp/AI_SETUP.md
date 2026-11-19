@@ -61,7 +61,10 @@ How the commands behave (`docs/COMMANDS.md` is the contract):
 
 A scene is text too: `<name>.scene` and a folder of Lua files (`objects.lua`, `groups.lua`, `terrain.lua`, ...), and
 models, textures and sounds are `.meshasset`, `.texasset` and `.sndasset` files beside their sources (a glTF, an OBJ,
-a picture, a `.wav`; `asset.import` brings them in, or a model's `parts` are a blockout typed in the file). What the
+a picture, a `.wav`; `asset.import` brings them in, a model's `parts` are a blockout typed in the file, and
+`source = "game:<model>.ogf"` is a model of the game in another dress). Over a level of the game
+(`base = "<level>"`) every kind is placed by its own list: objects, spawn points of any section - the module's own
+characters and items among them -, lights, glows, fog volumes, sounds, sound environments, effects. What the
 text cannot show, the editor answers in numbers and pictures; never write a coordinate from memory. The five
 commands to start with:
 

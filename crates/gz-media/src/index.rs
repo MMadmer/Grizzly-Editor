@@ -32,6 +32,8 @@ pub struct Entry {
     pub dynamic: bool,
     /// A model of `parts`: no source.
     pub parts: bool,
+    /// A model over a model of the game (`source = "game:..."`): its engine name.
+    pub game: Option<String>,
     /// Left out of the build by `[exclude]`.
     pub excluded: bool,
     /// Why the file does not read.
@@ -97,17 +99,37 @@ impl Index {
     pub fn users_of(&self, rel: &str) -> Vec<&Entry> {
         let key = rel.replace('\\', "/").to_lowercase();
         let same = |p: &RelPath| p.as_str().to_lowercase() == key;
+        // a model of the game is read from the project's own `gamedata\meshes` first: a file
+        // there is what a `game:` model of that name is made of
+        let game_model = key
+            .strip_prefix("gamedata/meshes/")
+            .and_then(|k| k.strip_suffix(".ogf"))
+            .map(|k| k.replace('/', "\\"));
         self.entries
             .iter()
-            .filter(|e| e.source.as_ref().is_some_and(same) || e.uses.iter().any(same))
+            .filter(|e| {
+                e.source.as_ref().is_some_and(same)
+                    || e.uses.iter().any(same)
+                    || (e.game.is_some() && e.game == game_model)
+            })
             .collect()
     }
 
     /// A file the build never ships as it is: a media asset where it lies, or a file an asset
-    /// takes its data from.
+    /// takes its data from - unless that file lies in the module's `gamedata`, where the game
+    /// reads it by its own name: an asset made over it changes nothing of the file's own way
+    /// into the game.
     #[must_use]
     pub fn is_source(&self, rel: &str) -> bool {
-        gz_project::rules::is_media_asset_name(rel) || !self.users_of(rel).is_empty()
+        if gz_project::rules::is_media_asset_name(rel) {
+            return true;
+        }
+        !ships_where_it_lies(rel)
+            && self.users_of(rel).iter().any(|e| {
+                let key = rel.replace('\\', "/").to_lowercase();
+                e.source.as_ref().is_some_and(|p| p.as_str().to_lowercase() == key)
+                    || e.uses.iter().any(|p| p.as_str().to_lowercase() == key)
+            })
     }
 
     /// The paths the build writes for the assets that ship, relative to the module's root,
@@ -136,6 +158,7 @@ pub fn entry(root: &Path, rel: &RelPath, module: &str, excluded: bool) -> Entry 
         uses: Vec::new(),
         dynamic: false,
         parts: false,
+        game: None,
         excluded,
         error: None,
     };
@@ -157,7 +180,8 @@ pub fn entry(root: &Path, rel: &RelPath, module: &str, excluded: bool) -> Entry 
             let m = ModelAsset::from_value(&value).0;
             e.dynamic = m.dynamic;
             e.parts = !m.parts.is_empty();
-            (m.name, if e.parts { None } else { m.source })
+            e.game = files::game_model(m.source.as_deref()).filter(|_| !e.parts);
+            (m.name, if e.parts || e.game.is_some() { None } else { m.source })
         }
         MediaKind::Texture => {
             let t = TextureAsset::from_value(&value).0;
@@ -177,12 +201,20 @@ pub fn entry(root: &Path, rel: &RelPath, module: &str, excluded: bool) -> Entry 
     e.name = files::published_name(name.as_deref(), rel.as_str(), module);
     e.key = name_key(&e.name);
     if !e.parts
+        && e.game.is_none()
         && let Some(src) = files::source_of(kind, &abs, source.as_deref())
     {
         e.uses.extend(files::dependencies(&src).iter().filter_map(|d| rel_of(d)));
         e.source = rel_of(&src);
     }
     e
+}
+
+/// Whether a project file is one the game reads where it lies: a file of the module's
+/// `gamedata`. A build ships it by its own name whatever asset names it as a source.
+#[must_use]
+pub fn ships_where_it_lies(rel: &str) -> bool {
+    rel.replace('\\', "/").to_lowercase().starts_with("gamedata/")
 }
 
 /// The index of these asset files, read in parallel on the caller's pool.

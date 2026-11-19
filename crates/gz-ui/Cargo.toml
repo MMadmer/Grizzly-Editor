@@ -16,6 +16,7 @@ gz-task.workspace = true
 gz-luadata.workspace = true
 egui.workspace = true
 parking_lot.workspace = true
+pulldown-cmark.workspace = true
 rfd = { version = "0.15", default-features = false }
 rustc-hash.workspace = true
 serde.workspace = true

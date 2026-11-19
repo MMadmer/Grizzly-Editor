@@ -170,6 +170,8 @@ applies; `{"batch": [ ... ]}` runs several in order and answers `results`. One a
 | `mod` | the module: info, build, package, exclude, thumbnail |
 | `release` | GitHub releases and the Mod Browser: publish, list, edit, delete, the catalog |
 | `screens`, `world`, `characters`, `pda` | what those tabs do beyond editing their files (imports, presets, previews) |
+| `text` | a text file in the Text tab: open, a line, find, the Markdown view, what it shows (`text.view`) |
+| `script` | the scripts' declarations, the linked game's and the project's: where a name is declared and what a prefix completes to (`script.lookup`) |
 | `scene` | the open level: objects, selection, transforms, properties, tools, undo |
 | `level` | building and running: build, status, problems, compile, play, export; what a build made (`level.inspect`) |
 | `graph` | an open quest or behaviour graph: edit operations, layout, find |

@@ -46,6 +46,24 @@ fn check(p: &Palette, fails: &mut Vec<String>) {
             holds(fails, t, &format!("{tone:?} on its tint over {n}"), c, over(p.tint(tone), *bg), min::TONE);
         }
     }
+    // code text reads on the surfaces code stands on
+    let x = p.syntax;
+    for (what, c) in [
+        ("keyword", x.keyword),
+        ("string", x.string),
+        ("number", x.number),
+        ("comment", x.comment),
+        ("function", x.function),
+        ("name", x.name),
+        ("tag", x.tag),
+        ("attribute", x.attribute),
+        ("punct", x.punct),
+        ("added", x.added),
+        ("removed", x.removed),
+    ] {
+        holds(fails, t, &format!("syntax.{what} on inset"), c, p.inset, min::SYNTAX);
+        holds(fails, t, &format!("syntax.{what} on base"), c, p.base, min::SYNTAX);
+    }
     // the four states stay apart: they are told apart by their colour
     let states = [Tone::Error, Tone::Warning, Tone::Success, Tone::Required].map(|tone| (tone, p.tone(tone)));
     for (i, (a, ca)) in states.iter().enumerate() {

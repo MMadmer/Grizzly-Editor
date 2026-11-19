@@ -44,7 +44,9 @@ return {\n  mesh = 1,\n  surfaces = {\n    { name = \"plank\", texture = \"wood\
         )
         .into_bytes())
     });
-    ProviderMakers::of(editor).add(Arc::new(|_ed, root: &Path| Some(provider(root.to_path_buf()))));
+    ProviderMakers::of(editor).add(Arc::new(|ed, root: &Path| {
+        Some(provider(root.to_path_buf(), crate::GameModels::reader(ed, root)))
+    }));
     ProjectHooks::of(editor).on_open(|ed, _session| {
         let ed = ed.clone();
         ed.exec.clone().spawn(async move {
@@ -196,15 +198,27 @@ fn model_json(r: &str, source: &str, file: String, o: &LibraryObject) -> Value {
 }
 
 /// One model as `model.info` answers it. Blocking.
-fn info_of(root: &Path, lib: &Library, r: &str) -> Value {
+fn info_of(root: &Path, lib: &Library, game: &resolve::GameModel, r: &str) -> Value {
     if is_asset(r) {
         let key = r.replace('/', "\\");
-        return match resolve::model(root, &key) {
+        return match resolve::model(root, &key, game) {
             Ok(m) => {
                 let file = wire(root, &root.join(&key));
                 let mut o = LibraryObject::provided(&key.to_lowercase(), m.object);
                 o.stamp = m.stamp;
-                model_json(r, "asset", file, &o)
+                let mut info = model_json(r, "asset", file, &o);
+                // a model over a compiled one: the skeleton is the file's own
+                if let (Some(c), Some(map)) = (&m.compiled, info.as_object_mut()) {
+                    map.insert("bones".into(), json!(c.bones));
+                    map.insert(
+                        "over".into(),
+                        match &c.game {
+                            Some(name) => json!({ "game": name }),
+                            None => json!({ "file": m.source.as_deref().map(|p| wire(root, p)) }),
+                        },
+                    );
+                }
+                info
             }
             Err(e) => json!({ "ref": r, "error": e.to_string() }),
         };
@@ -230,12 +244,13 @@ async fn model_info(ed: Arc<Editor>, p: InfoParams, _o: Origin) -> Reply {
     }
     let svc = SceneService::of(&ed)?;
     let (root, lib, exec) = (svc.root.clone(), svc.library.clone(), ed.exec.clone());
+    let game = crate::GameModels::reader(&ed, &root);
     let models = ed
         .exec
         .io(move || {
             exec.io_pool().install(|| {
                 use rayon::prelude::*;
-                p.refs.par_iter().map(|r| info_of(&root, &lib, r)).collect::<Vec<_>>()
+                p.refs.par_iter().map(|r| info_of(&root, &lib, &game, r)).collect::<Vec<_>>()
             })
         })
         .await;
@@ -293,6 +308,7 @@ async fn model_list(ed: Arc<Editor>, p: ListParams, _o: Origin) -> Reply {
     let assets: Vec<String> =
         index.of_kind(MediaKind::Model).filter(|e| !e.excluded).map(|e| e.path.to_string()).collect();
     let (root, lib, exec) = (svc.root.clone(), svc.library.clone(), ed.exec.clone());
+    let game = crate::GameModels::reader(&ed, &root);
     let answer = ed
         .exec
         .io(move || {
@@ -326,7 +342,7 @@ async fn model_list(ed: Arc<Editor>, p: ListParams, _o: Origin) -> Reply {
                     use rayon::prelude::*;
                     page.par_iter()
                         .map(|(r, s)| {
-                            let info = info_of(&root, &lib, r);
+                            let info = info_of(&root, &lib, &game, r);
                             json!({ "ref": r, "source": s, "size": info.get("size").cloned().unwrap_or(Value::Null) })
                         })
                         .collect()

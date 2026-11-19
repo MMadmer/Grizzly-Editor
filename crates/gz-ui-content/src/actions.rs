@@ -73,6 +73,8 @@ pub(crate) enum Open {
     Scene(String),
     /// A base scene of the library: brought into the project, then opened there.
     BaseScene(String),
+    /// A level of the game: the project's scene over it, or a new one.
+    LevelScene(String),
 }
 
 /// What opening an entry means. `cat` is the catalog it is listed in.
@@ -83,8 +85,12 @@ pub(crate) fn what_opens(cat: &Catalog, path: &str) -> Result<Open, String> {
     let ext = icons::extension(path).map(str::to_ascii_lowercase).unwrap_or_default();
     if cat.source == Source::Library {
         return match cat.category {
-            // a base scene of the library comes into the project, then opens there
-            model::SCENES => Ok(Open::BaseScene(crate::catalog::stem(path).to_owned())),
+            // a level of the game opens the project's scene over it; a base scene of the
+            // library comes into the project, then opens there
+            model::SCENES => Ok(match crate::library::game_level(cat, path) {
+                Some(level) => Open::LevelScene(level),
+                None => Open::BaseScene(crate::catalog::stem(path).to_owned()),
+            }),
             model::OBJECTS => Ok(Open::Doc(OpenRequest {
                 arg: Some("library".to_owned()),
                 ..OpenRequest::file("model", path)
@@ -150,7 +156,63 @@ pub(crate) fn what_opens(cat: &Catalog, path: &str) -> Result<Open, String> {
             ..OpenRequest::file("texture", path)
         }));
     }
+    // a script, a config, XML, Markdown...: the Text tab; a file of another name is looked into
+    // off the UI thread first (`open_if_text`)
+    if gz_text::is_text_name(path) {
+        return Ok(Open::Doc(OpenRequest::file("text", path)));
+    }
     Err(format!("no viewer for this asset kind yet: '{path}'"))
+}
+
+/// Whether a file of the project reads as text (no NUL in its first bytes, not too large): what
+/// opens in the Text tab when its name says nothing. On the IO pool.
+pub(crate) async fn is_text_file(editor: &Arc<Editor>, path: &str) -> Result<(), String> {
+    use std::io::Read as _;
+    let Some(session) = editor.project_opt() else { return Err("no project is open".to_owned()) };
+    let rel = gz_base::RelPath::new(path).map_err(|_| format!("{path} is no file of the project"))?;
+    let abs = session.fs(&rel);
+    let shown = path.to_owned();
+    editor
+        .exec
+        .io(move || -> Result<(), String> {
+            let meta = std::fs::metadata(&abs)
+                .map_err(|e| format!("{shown} could not be read: {}", gz_base::io_reason(&e)))?;
+            if meta.len() > gz_text::MAX_BYTES {
+                return Err(format!("{shown}: {}", gz_text::ReadError::TooLarge(meta.len())));
+            }
+            let mut head = vec![0u8; 8192];
+            let n = std::fs::File::open(&abs)
+                .and_then(|mut f| f.read(&mut head))
+                .map_err(|e| format!("{shown} could not be read: {}", gz_base::io_reason(&e)))?;
+            if gz_text::sniff(&head[..n]) {
+                Ok(())
+            } else {
+                Err(format!("{shown}: {}", gz_text::ReadError::NotText))
+            }
+        })
+        .await
+}
+
+/// Open as Text, and a double click on a file whose name says nothing: the Text tab when the file
+/// is text, a note saying why not otherwise.
+pub(crate) fn open_as_text(editor: &Arc<Editor>, path: &str) {
+    let (ed, path) = (editor.clone(), path.to_owned());
+    editor.exec.spawn(async move {
+        match is_text_file(&ed, &path).await {
+            Ok(()) => {
+                if let Err((e, _)) = call(
+                    &ed,
+                    "ui.tab",
+                    &[("action", json!("open")), ("kind", json!("text")), ("path", json!(path))],
+                )
+                .await
+                {
+                    ed.notices.error(e);
+                }
+            }
+            Err(e) => ed.notices.note(format!("No viewer for this kind of entry yet: {e}")),
+        }
+    });
 }
 
 /// A double click from the window: into a folder, an asset's tab.
@@ -179,19 +241,12 @@ pub(crate) fn open_entry(
     let Some(cat) = browser.cats.peek(crate::service::cat_key(&st.loc)) else { return };
     match what_opens(&cat, &entry.path) {
         Ok(Open::Doc(req)) => cx.requests.open(req),
-        Ok(Open::Scene(scene)) => cx.editor.post("scene.open", args(&[("path", json!(scene))])),
-        Ok(Open::BaseScene(name)) => {
-            let ed = cx.editor.clone();
-            cx.editor.exec.spawn(async move {
-                match bring_in_base_scene(&ed, &name).await {
-                    Ok(scene) => {
-                        if let Err((e, _)) = call(&ed, "scene.open", &[("path", json!(scene))]).await {
-                            ed.notices.error(e);
-                        }
-                    }
-                    Err(e) => ed.notices.error(e),
-                }
-            });
+        Ok(Open::Scene(scene)) => open_scene(cx.editor, SceneOpen::File(scene)),
+        Ok(Open::BaseScene(name)) => open_scene(cx.editor, SceneOpen::Base(name)),
+        Ok(Open::LevelScene(level)) => open_scene(cx.editor, SceneOpen::Over(level)),
+        // a file whose name says nothing may still be text
+        Err(e) if e.starts_with("no viewer") && source == Source::Project && has_project => {
+            open_as_text(cx.editor, &entry.path);
         }
         Err(e) if e.starts_with("no viewer") => {
             cx.editor.notices.note(format!("No viewer for this kind of entry yet: '{}'", entry.path))
@@ -202,7 +257,15 @@ pub(crate) fn open_entry(
 
 /// The same for MCP: the outcome comes back instead of a notice.
 pub(crate) async fn open_for_mcp(editor: &Arc<Editor>, cat: &Catalog, path: &str) -> Result<(), String> {
-    match what_opens(cat, path)? {
+    let opens = match what_opens(cat, path) {
+        // a file whose name says nothing opens as text when it is text
+        Err(e) if e.starts_with("no viewer") && cat.source == Source::Project => {
+            is_text_file(editor, path).await?;
+            Open::Doc(OpenRequest::file("text", path))
+        }
+        other => other?,
+    };
+    match opens {
         Open::Doc(req) => {
             let mut pairs = vec![("action", json!("open")), ("kind", json!(req.kind))];
             if let Some(p) = &req.path {
@@ -220,7 +283,185 @@ pub(crate) async fn open_for_mcp(editor: &Arc<Editor>, cat: &Catalog, path: &str
             let scene = bring_in_base_scene(editor, &name).await?;
             call(editor, "scene.open", &[("path", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
         }
+        Open::LevelScene(level) => {
+            scene_over_level(editor, &level, &[]).await.map(|_| ()).map_err(String::from)
+        }
     }
+}
+
+/// What the browser opens in the Level tab.
+pub(crate) enum SceneOpen {
+    /// A scene file of the project.
+    File(String),
+    /// A base scene of the library, by its name.
+    Base(String),
+    /// The project's scene over a level of the game.
+    Over(String),
+}
+
+/// Opens a scene from the window: unsaved work of the open scene is asked about (Save / Don't
+/// Save / Cancel) and the open goes on with the answer; the Level tab comes up with the scene.
+pub(crate) fn open_scene(editor: &Arc<Editor>, what: SceneOpen) {
+    let ed = editor.clone();
+    editor.exec.spawn(async move {
+        let first = run_scene_open(&ed, &what, &[]).await;
+        let reply = match first {
+            Ok(()) => return show_level(&ed),
+            Err((why, reply)) => {
+                if reply.get("code").and_then(Value::as_str) != Some("unsaved") {
+                    return ed.notices.error(why);
+                }
+                reply
+            }
+        };
+        // the scene in the way, by its name
+        let named: Vec<gz_ui::Tx<'static>> = reply
+            .get("unsaved")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|u| u.get("name").and_then(Value::as_str))
+            .map(|n| gz_ui::Tx::raw(n.to_owned()))
+            .collect();
+        let named = if named.is_empty() { vec![gz_ui::Tx::from("Untitled scene")] } else { named };
+        // the question is a kit dialog: it is asked on the UI thread, where the dialogs live and
+        // where who is asking is known - asked from this task it could be answered for a command
+        // that happened to run at that moment, or come up as a sheet of another dialog
+        let Ok(queue) = gz_app::UiQueue::of(&ed) else { return };
+        let ed1 = ed.clone();
+        queue.post(move |_shell, ctx| {
+            let ed2 = ed1.clone();
+            let line = dialog::unsaved_prompt(ctx, asker(&ed1), "scene", &named, move |answer| {
+                let flag = match answer {
+                    dialog::Answer::Yes => "save",
+                    dialog::Answer::No => "discard",
+                    dialog::Answer::Cancel => return,
+                };
+                let ed3 = ed2.clone();
+                ed2.exec.spawn(async move {
+                    match run_scene_open(&ed3, &what, &[(flag, json!(true))]).await {
+                        Ok(()) => show_level(&ed3),
+                        Err((why, _)) => ed3.notices.error(why),
+                    }
+                });
+            });
+            if let Some(l) = line {
+                ed1.log.finding(&l);
+            }
+        });
+    });
+}
+
+fn show_level(editor: &Arc<Editor>) {
+    editor.post("ui.tab", args(&[("action", json!("activate")), ("doc", json!("level"))]));
+}
+
+/// One open of [`SceneOpen`], with what settles unsaved work (`save` or `discard`).
+async fn run_scene_open(
+    editor: &Arc<Editor>,
+    what: &SceneOpen,
+    settle: &[(&str, Value)],
+) -> Result<(), (String, Value)> {
+    let with = |path: String| {
+        let mut pairs = vec![("path", json!(path))];
+        pairs.extend(settle.iter().cloned());
+        pairs
+    };
+    match what {
+        SceneOpen::File(file) => call(editor, "scene.open", &with(file.clone())).await.map(|_| ()),
+        SceneOpen::Base(name) => {
+            let scene = bring_in_base_scene(editor, name).await.map_err(|e| (e, Value::Null))?;
+            call(editor, "scene.open", &with(scene)).await.map(|_| ())
+        }
+        SceneOpen::Over(level) => {
+            scene_over_level(editor, level, settle).await.map(|_| ()).map_err(|e| match e {
+                OverError::Refused(why, reply) => (why, reply),
+                OverError::Other(why) => (why, Value::Null),
+            })
+        }
+    }
+}
+
+/// Why the project's scene over a level did not open.
+pub(crate) enum OverError {
+    /// A command refused: its sentence and its answer (`code: unsaved` among them).
+    Refused(String, Value),
+    Other(String),
+}
+
+impl From<OverError> for String {
+    fn from(e: OverError) -> Self {
+        match e {
+            OverError::Refused(why, _) | OverError::Other(why) => why,
+        }
+    }
+}
+
+/// The project's scene over a level of the game: the scene of the project that says
+/// `base = "<level>"` is opened; without one a new scene over the level is made and saved as
+/// `rawdata\levels\<level>.scene` (the first free name). Answers the scene's file.
+pub(crate) async fn scene_over_level(
+    editor: &Arc<Editor>,
+    level: &str,
+    settle: &[(&str, Value)],
+) -> Result<String, OverError> {
+    let Ok((_, project)) = gz_project::Project::of(editor) else {
+        return Err(OverError::Other("no project is open".to_owned()));
+    };
+    project.tree.refresh().await;
+    let root = std::path::PathBuf::from(project.root());
+    let scenes: Vec<std::path::PathBuf> =
+        project.tree.snapshot().files_with_extension("scene").iter().map(|r| r.to_fs(&root)).collect();
+    let wanted = level.to_owned();
+    let (found, unread) = editor
+        .exec
+        .io(move || {
+            let mut unread = Vec::new();
+            let found = scenes.into_iter().find(|file| {
+                // a scene that does not read says nothing of the level it lies over
+                if gz_scene::format::level_of_readable_file(file).is_none() {
+                    unread.push(file.clone());
+                    return false;
+                }
+                gz_scene::format::base_of_file(file).is_some_and(|b| b.eq_ignore_ascii_case(&wanted))
+            });
+            (found, unread)
+        })
+        .await;
+    // a second scene over the level would bake into the same files as the first: while one of
+    // the project's scenes does not read, none is made
+    if found.is_none()
+        && let Some(file) = unread.first()
+    {
+        let rel = file.strip_prefix(&root).unwrap_or(file).display().to_string().replace('\\', "/");
+        return Err(OverError::Other(format!(
+            "{rel} does not read, so nobody can say whether it is the project's scene over {level}: mend it (asset.check path={rel}) and open the level again."
+        )));
+    }
+    let refused = |(why, reply): (String, Value)| OverError::Refused(why, reply);
+    if let Some(file) = found {
+        let file = file.display().to_string();
+        let mut pairs = vec![("path", json!(file))];
+        pairs.extend(settle.iter().cloned());
+        call(editor, "scene.open", &pairs).await.map_err(refused)?;
+        return Ok(file);
+    }
+    let mut pairs = vec![("base", json!(level))];
+    pairs.extend(settle.iter().cloned());
+    call(editor, "scene.new", &pairs).await.map_err(refused)?;
+    // where the project keeps its scenes, under the first name nobody has
+    let dir = root.join("rawdata").join("levels");
+    let file = (1..)
+        .map(|n| if n == 1 { format!("{level}.scene") } else { format!("{level}_{n}.scene") })
+        .map(|name| dir.join(name))
+        .find(|f| {
+            std::fs::symlink_metadata(f).is_err() && std::fs::symlink_metadata(f.with_extension("")).is_err()
+        })
+        .unwrap_or_else(|| dir.join(format!("{level}.scene")));
+    let file = file.display().to_string();
+    call(editor, "scene.save", &[("path", json!(file))]).await.map_err(refused)?;
+    project.tree.mark_fs(&dir);
+    Ok(file)
 }
 
 /// A base scene of the library copied into the project (a scene the project has already is the
@@ -1041,6 +1282,11 @@ pub(crate) async fn bring_into_project(
     }
     for f in files {
         let result = match (cat.category, f.origin) {
+            // a level of the game is not copied: the project's scene lies over it
+            (model::SCENES, Origin::Game) => Err(format!(
+                "{} is a level of the game: Open starts the project's scene over it",
+                crate::catalog::stem(model::leaf_of(&f.path))
+            )),
             (model::SCENES, _) => {
                 bring_in_base_scene(editor, crate::catalog::stem(&f.path)).await.map(|_| ())
             }
@@ -1346,7 +1592,12 @@ mod tests {
         assert!(
             matches!(what_opens(&project, "levels\\e.scene"), Ok(Open::Scene(s)) if s.ends_with("e.scene"))
         );
-        assert!(what_opens(&project, "notes.txt").is_err_and(|e| e.starts_with("no viewer")));
+        // a text file opens in the Text tab; a file whose name says nothing is looked into first
+        let Ok(Open::Doc(t)) = what_opens(&project, "notes.txt") else { panic!() };
+        assert_eq!((t.kind.as_str(), t.path.as_deref()), ("text", Some("notes.txt")));
+        let Ok(Open::Doc(s)) = what_opens(&project, "scripts\\a.script") else { panic!() };
+        assert_eq!(s.kind, "text");
+        assert!(what_opens(&project, "data.bin").is_err_and(|e| e.starts_with("no viewer")));
         let mut tex = Catalog::empty(Source::Library, model::TEXTURES);
         tex.game_prefix = "textures".into();
         tex.add(crate::catalog::FileItem {

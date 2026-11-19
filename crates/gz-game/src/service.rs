@@ -334,8 +334,53 @@ pub async fn read_game_or_bundled(editor: &Editor, rel: &str) -> Result<(Vec<u8>
 }
 
 /// The spawn roster of the linked game, or the editor's own when no game is linked or its
-/// configs do not load - the settings stay the editor's own then.
+/// configs do not load - the settings stay the editor's own then. With a project open it is the
+/// roster of the game with the module in it: the sections the module's configs, patches and
+/// item assets make, and the ones its other assets become (a character).
 pub async fn spawn_roster(editor: &Editor) -> Arc<[SpawnSection]> {
+    let composed = crate::own::ComposedConfigs::get(editor).await;
+    let game = match &composed {
+        Some(tree) => {
+            let (cfg, tree) = (crate::own::ComposedConfigs::of(editor), tree.clone());
+            editor.exec.cpu(move || cfg.roster_of(&tree)).await
+        }
+        None => game_roster(editor).await,
+    };
+    // what the open project's assets become in the game (a module's characters) is spawned like
+    // the game's own
+    let own = crate::own::OwnSections::all(editor).await;
+    if !own.iter().any(|o| o.line("$spawn").is_some()) {
+        return game;
+    }
+    let ltx = match composed {
+        Some(tree) => Some(tree),
+        None => match GameLink::of(editor) {
+            Ok(link) => link.configs().await.ok(),
+            Err(_) => None,
+        },
+    };
+    let ltx = match ltx {
+        Some(l) => Some(l),
+        None => Bundled::of(editor).config_tree().await.ok().map(|t| t.ltx.clone()),
+    };
+    let mut all = game.to_vec();
+    for o in &own {
+        let Some(spawn) = o.line("$spawn") else { continue };
+        if all.iter().any(|s| s.section.eq_ignore_ascii_case(&o.name)) {
+            continue;
+        }
+        let class = ltx.as_ref().and_then(|l| crate::own::own_value(&own, l, &o.name, "class")).unwrap_or("");
+        all.push(SpawnSection {
+            section: o.name.clone(),
+            group: spawn::list_path(spawn.trim_matches('"')),
+            class: class.to_owned(),
+        });
+    }
+    Arc::from(all)
+}
+
+/// The spawnable sections of the game's configs alone.
+async fn game_roster(editor: &Editor) -> Arc<[SpawnSection]> {
     if let Ok(link) = GameLink::of(editor) {
         match link.spawn_sections().await {
             Ok(s) => return s,

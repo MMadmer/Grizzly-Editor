@@ -176,6 +176,9 @@ pub enum SceneCmd {
         label: String,
         /// The files now hold the scene: nothing of it is unsaved.
         clean: bool,
+        /// The scene file the reading is of: it goes in only while that scene is the open one
+        /// (code `another_scene` otherwise - the scene was switched while its files were read).
+        of: std::path::PathBuf,
     },
     /// Attaches a shape of the scene to a spawn point (it becomes the point's own) or, with no
     /// object, detaches it (the point's shape goes back into the scene). One undo step.
@@ -313,15 +316,42 @@ impl SceneState {
         self.serial += 1;
     }
 
-    /// A locked object (or one of a locked kind) is not changed.
-    fn check_editable(&self, id: ObjId) -> Result<(), CmdError> {
+    /// A locked object (or one of a locked kind) is not changed, and neither is one of the
+    /// level the scene lies over.
+    pub(crate) fn check_editable(&self, id: ObjId) -> Result<(), CmdError> {
         match self.get(id) {
+            Some(o) if o.marks.base => Err(self.level_s_own(o)),
             Some(o) if !self.changeable(o) => Err(CmdError::new(
                 "refused",
                 format!("'{}' is locked: unlock it (or its kind) to change it", o.name),
             )),
             _ => Ok(()),
         }
+    }
+
+    /// Why an object of the level the scene lies over is not changed.
+    fn level_s_own(&self, o: &Object) -> CmdError {
+        let what = if o.class == ObjClass::SpawnPoint {
+            "a scene only takes it out of the level (`removed = true`, or delete it)"
+        } else {
+            "a scene changes nothing of it"
+        };
+        CmdError::new(
+            "refused",
+            format!("'{}' is the level's own (the game's {}): {what}", o.name, self.meta.base.level),
+        )
+    }
+
+    /// Whether `new` is an object of the level with nothing changed but whether the scene takes
+    /// it out: the one change a scene makes of the level's own.
+    fn only_removes(&self, new: &Object) -> bool {
+        self.get(new.id).is_some_and(|old| {
+            old.marks.base && old.class == ObjClass::SpawnPoint && {
+                let mut same = (**old).clone();
+                same.marks.removed = new.marks.removed;
+                same == *new
+            }
+        })
     }
 
     fn edit_object(&mut self, id: ObjId, f: impl FnOnce(&mut Object)) -> Result<(), CmdError> {
@@ -342,6 +372,7 @@ impl SceneState {
             let (dr, ds) =
                 (after.xform.rotation - before.xform.rotation, after.xform.scale - before.xform.scale);
             for m in g.members.clone() {
+                self.check_editable(m)?;
                 self.edit_object(m, |mo| {
                     match e {
                         TransformEdit::Rotation(_) => set_rotation(mo, mo.rotation() + dr),
@@ -370,12 +401,16 @@ impl SceneState {
 
     /// The selection into a new group, its pivot where its first object stands.
     fn group_selection(&mut self, name: SmolStr) -> Result<ObjId, CmdError> {
-        let ids: Vec<ObjId> = self
-            .selected_in_order()
+        let selected = self.selected_in_order();
+        // the level's own stay where the level has them: a group is the scene's, and moving or
+        // deleting it would move or delete what it holds
+        let level = selected.iter().filter(|id| self.get(**id).is_some_and(|o| o.marks.base)).count();
+        let ids: Vec<ObjId> = selected
             .into_iter()
             .filter(|id| {
                 self.get(*id).is_some_and(|o| {
                     o.flags.visible
+                        && !o.marks.base
                         && o.flags.co & co::IN_GROUP == 0
                         && o.owner.is_none()
                         && o.class != ObjClass::Sector
@@ -384,7 +419,17 @@ impl SceneState {
             })
             .collect();
         if ids.is_empty() {
-            return Err(CmdError::invalid("Group can't be created."));
+            return Err(if level > 0 {
+                CmdError::new(
+                    "refused",
+                    format!(
+                        "the selection is the level's own (the game's {}): a group holds what the scene adds",
+                        self.meta.base.level
+                    ),
+                )
+            } else {
+                CmdError::invalid("Group can't be created.")
+            });
         }
         let pivot = ids
             .iter()
@@ -549,6 +594,16 @@ impl SceneState {
         let mut count = 0;
         for id in sel {
             let Some(o) = self.get(id) else { continue };
+            // a spawn point of the level the scene lies over is taken out of it
+            if o.marks.base && o.class == ObjClass::SpawnPoint {
+                if !o.marks.removed {
+                    let mut o2 = (**o).clone();
+                    o2.marks.removed = true;
+                    self.replace(o2);
+                    count += 1;
+                }
+                continue;
+            }
             if o.flags.co & co::IN_GROUP != 0 || !self.changeable(o) {
                 continue;
             }
@@ -577,7 +632,10 @@ impl SceneState {
         for id in &ids {
             if let Some(o) = self.get(*id) {
                 let mut o = (**o).clone();
+                // what is added is the scene's own, whatever it was a copy of
                 o.marks.authored = true;
+                o.marks.base = false;
+                o.marks.removed = false;
                 let top = o.owner.is_none();
                 self.replace(o);
                 if top {
@@ -645,8 +703,26 @@ impl State for SceneState {
                 Ok(SceneReply::Id(id))
             }
             SceneCmd::Delete(ids) => {
+                // nothing is deleted when one of them is the level's own and no spawn point
+                for id in &ids {
+                    if let Some(o) = self.get(*id)
+                        && o.marks.base
+                        && o.class != ObjClass::SpawnPoint
+                    {
+                        return Err(self.level_s_own(o));
+                    }
+                }
                 let mut n = 0;
                 for id in ids {
+                    if let Some(o) = self.get(id)
+                        && o.marks.base
+                    {
+                        if !o.marks.removed {
+                            self.edit_object(id, |o| o.marks.removed = true)?;
+                            n += 1;
+                        }
+                        continue;
+                    }
                     if self.get(id).is_some_and(|o| self.changeable(o)) {
                         self.delete(id);
                         n += 1;
@@ -857,7 +933,9 @@ impl State for SceneState {
                     if self.get(o.id).is_none() {
                         return Err(missing(o.id));
                     }
-                    self.check_editable(o.id)?;
+                    if !self.only_removes(&o) {
+                        self.check_editable(o.id)?;
+                    }
                     if self.find_any(&o.name).is_some_and(|x| x.id != o.id) {
                         return Err(CmdError::invalid("the name is used by another object"));
                     }
@@ -882,7 +960,9 @@ impl State for SceneState {
             }
             SceneCmd::MarkAuthored(on) => {
                 let mut n = 0;
-                for id in self.selected_in_order() {
+                // over a level of the game the mark is implied: nothing to set
+                let ids = if self.meta.base.is_set() { Vec::new() } else { self.selected_in_order() };
+                for id in ids {
                     if self.get(id).is_some_and(|o| o.marks.authored != on) {
                         self.edit_object(id, |o| o.marks.authored = on)?;
                         n += 1;
@@ -959,7 +1039,11 @@ impl State for SceneState {
                 cx.undoable(label);
                 Ok(SceneReply::Count(n))
             }
-            SceneCmd::Reload { state, label, clean } => {
+            SceneCmd::Reload { state, label, clean, of } => {
+                if self.meta.file.as_deref() != Some(of.as_path()) {
+                    cx.unchanged();
+                    return Err(CmdError::new("another_scene", "another scene is open now"));
+                }
                 let view = (self.selection.clone(), self.tools.mode, self.meta.file.clone());
                 let serial = self.serial + 1;
                 let next = self.next_id.max(state.next_id);
@@ -1060,6 +1144,7 @@ impl State for SceneState {
                 Ok(SceneReply::None)
             }
             SceneCmd::Motion { id, motion, flags, pose, label, merge } => {
+                self.check_editable(id)?;
                 self.edit_object(id, |o| {
                     o.motion = motion;
                     o.flags.co = flags & !(co::AUTHOR_PLACED | co::BASE_REMOVED);

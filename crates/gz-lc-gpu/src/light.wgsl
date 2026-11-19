@@ -26,7 +26,8 @@ struct Light {
     c: vec4<f32>,
     // attenuation 0, 1, 2, energy
     d: vec4<f32>,
-    // falloff, and a hemisphere light's `-direction * 0.001` as the CPU rounds it
+    // falloff, and a hemisphere light's `-direction * 0.001` as the CPU rounds it - or a spot
+    // light's cone: the cosines of half its outer and of half its inner angle
     e: vec4<f32>,
 }
 
@@ -58,6 +59,7 @@ const OPAQUE: u32 = 0xffffffffu;
 const LT_DIRECT: u32 = 0u;
 const LT_POINT: u32 = 1u;
 const LT_SECONDARY: u32 = 2u;
+const LT_SPOT: u32 = 3u;
 const LP_DONT_RGB: u32 = 2u;
 const LP_DONT_HEMI: u32 = 4u;
 const LP_DONT_SUN: u32 = 8u;
@@ -365,7 +367,21 @@ fn ray_of(pt: Point, q: u32) -> Ray {
     ray.what = RAY_TRACE;
     if phase == PHASE_RGB_POINT {
         ray.channel = 0u;
-        if kind == LT_POINT {
+        if kind == LT_POINT || kind == LT_SPOT {
+            // a spot light is a point light inside its cone: all of it within the inner cone,
+            // none outside the outer one, linear in the cosine between
+            var share = 1.0;
+            if kind == LT_SPOT {
+                let c = -exact_dot(tw.ldir, l.b.xyz);
+                if c <= l.e.y {
+                    ray.what = RAY_NONE;
+                    return ray;
+                }
+                let span = l.e.z - l.e.y;
+                if c < l.e.z && span > 1e-7 {
+                    share = (c - l.e.y) / span;
+                }
+            }
             let falloff = prm.a.z;
             if falloff == FALLOFF_LEVEL_LINEAR {
                 // the light of `-att`: its shadow is not read
@@ -376,6 +392,9 @@ fn ray_of(pt: Point, q: u32) -> Ray {
                 ray.coef = tw.d * l.d.w * (1.0 / att(l, r, tw.sq_d) - r * l.e.x) * l.c.xyz;
             } else {
                 ray.coef = tw.d * l.d.w / att(l, r, tw.sq_d) * l.c.xyz;
+            }
+            if kind == LT_SPOT {
+                ray.coef = ray.coef * share;
             }
         } else {
             // a secondary light

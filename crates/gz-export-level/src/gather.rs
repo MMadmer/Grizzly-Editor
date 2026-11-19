@@ -116,6 +116,12 @@ pub fn spawn_inputs(
             let v = spawn_visual(e, settings);
             if !v.is_empty() {
                 spawn_names.push(v);
+                // the section's own model beside it: whether an unseen model is the section's way
+                let own = settings
+                    .filter(|s| s.section_exist(e.section()))
+                    .and_then(|s| s.r_string(e.section(), "visual"))
+                    .map(config_visual);
+                spawn_names.extend(own);
             }
         }
     }

@@ -32,7 +32,7 @@ pub const OFF_MAP: f32 = 1.0;
 const GROUND_SIDE: f32 = 20.0;
 
 /// The checks: code, word, what it finds.
-pub const CHECKS: [(&str, &str, &str); 14] = [
+pub const CHECKS: [(&str, &str, &str); 17] = [
     ("S201", "floating", "an object more than 0.25 m above whatever is under it, touching nothing"),
     ("S202", "buried", "an object more than half under the ground"),
     ("S203", "overlap", "two objects standing in each other"),
@@ -47,6 +47,13 @@ pub const CHECKS: [(&str, &str, &str); 14] = [
     ("S212", "terrain_unmade", "a terrain whose model cannot be made from what its file says"),
     ("S213", "terrain_bare", "a terrain that wears the ground's look with no ground under it"),
     ("S214", "radio_playlist", "a radio bound to a playlist the module's mod.ltx does not declare"),
+    (
+        "S215",
+        "in_geometry",
+        "an object with a wall or a steep slope of a level or a terrain passing through its middle",
+    ),
+    ("S216", "ghost", "a static object none of whose faces stop a body"),
+    ("S217", "on_ghost", "an object standing on faces that are drawn and stop nothing"),
 ];
 
 /// `scene.audit`'s parameters.
@@ -63,8 +70,8 @@ pub struct AuditParams {
     pub area: Option<[f32; 4]>,
     /// Only these checks, by code (`S201`) or word (`floating`, `buried`, `overlap`, `duplicate`,
     /// `unsupported`, `off_ai_map`, `underground`, `way_off_ai_map`, `light_underground`,
-    /// `not_authored`, `terrain_border`, `terrain_unmade`, `terrain_bare`, `radio_playlist`). Left
-    /// out: all of them.
+    /// `not_authored`, `terrain_border`, `terrain_unmade`, `terrain_bare`, `radio_playlist`,
+    /// `in_geometry`, `ghost`, `on_ghost`). Left out: all of them.
     #[serde(default)]
     pub checks: Option<Vec<String>>,
     /// At most this many problems in the answer (200); `total` counts them all.
@@ -140,7 +147,13 @@ fn subjects(sc: &Scene<'_>, p: &AuditParams) -> Result<Vec<ObjId>, CmdError> {
                 .filter(|o| o.marks.authored || o.class == ObjClass::Terrain)
                 .map(|o| o.id)
                 .collect();
-            if own.is_empty() { sc.state.objects.keys().copied().collect() } else { own }
+            // over a level of the game the level's own is never the subject, even while the
+            // module adds nothing yet
+            if own.is_empty() && !sc.state.meta.base.is_set() {
+                sc.state.objects.keys().copied().collect()
+            } else {
+                own
+            }
         }
     };
     ids.sort_unstable_by_key(|id| id.0);
@@ -171,16 +184,84 @@ struct Solid<'a> {
 }
 
 fn solid<'a>(sc: &Scene<'a>, o: &'a Object) -> Option<Solid<'a>> {
-    let ObjData::SceneObject(d) = &o.data else { return None };
-    let local = sc.lib.cached(&d.reference)?.bounds;
-    let world = sc.world_box(o)?;
+    let local = match &o.data {
+        ObjData::SceneObject(d) => sc.lib.cached(&d.reference)?.bounds,
+        // what stands there in the game: the model the entity wears
+        ObjData::Spawn(_) => sc.lib.cached(&crate::objects::visual_ref(o)?)?.bounds,
+        _ => return None,
+    };
+    let world = crate::math::xform_box(&local, &o.world());
     Some(Solid { o, world, local })
 }
 
-/// S201 and S205: what an object stands on, or that it stands on nothing.
+/// The middle of a model's box: a tenth of its height off the bottom and the top, a quarter of
+/// its sides off each side. A face of the level in there passes through the object, not past it.
+fn core(local: &Aabb) -> Aabb {
+    let size = local.max - local.min;
+    let off = Vec3::new(size.x * 0.25, size.y * 0.1, size.z * 0.25);
+    Aabb::new(local.min + off, local.max - off)
+}
+
+/// S215: the standing faces of a ground-sized object - a level of the game, a terrain - that
+/// pass through the middle of an object: it stands in a wall or a steep slope.
+fn in_geometry(sc: &Scene<'_>, s: &Solid<'_>, partner: &Object) -> Option<Finding> {
+    let ob = super::rays::OBox::new(&core(&s.local), s.o.xform.matrix());
+    // a floor through an object is the buried check's (a pole a third in the ground is as it
+    // should be): here the faces that stand - walls, steep slopes
+    let tris: Vec<[Vec3; 3]> = super::rays::object_meets(sc, partner.id, &ob, Vec3::ZERO)
+        .into_iter()
+        .filter(|t| (t[1] - t[0]).cross(t[2] - t[0]).try_normalize().is_some_and(|n| n.y.abs() < 0.7))
+        .collect();
+    if tris.is_empty() {
+        return None;
+    }
+    // how much of the object's height the faces reach over
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    for t in &tris {
+        for q in t {
+            lo = lo.min(q.y);
+            hi = hi.max(q.y);
+        }
+    }
+    let (lo, hi) = (lo.max(s.world.min.y), hi.min(s.world.max.y));
+    Some(Finding {
+        code: "S215",
+        object: s.o.id,
+        text: format!(
+            "{} stands in a wall of {}: {} of its standing faces pass through the object's middle, from {:.2} to {:.2} m above its bottom",
+            s.o.name,
+            partner.name,
+            tris.len(),
+            (lo - s.world.min.y).max(0.0),
+            (hi - s.world.min.y).max(0.0)
+        ),
+    })
+}
+
+/// S216: a static object the module adds, none of whose faces stop a body.
+fn ghost(sc: &Scene<'_>, s: &Solid<'_>) -> Option<Finding> {
+    let ObjData::SceneObject(d) = &s.o.data else { return None };
+    let lo = sc.lib.cached(&d.reference)?;
+    if lo.solid.is_some() || lo.tris.is_empty() {
+        return None;
+    }
+    let uses = sc.lib.uses(&lo);
+    let stops = lo.tri_surface.iter().any(|t| uses.get(*t as usize).is_none_or(|u| u.collides));
+    (!stops).then(|| Finding {
+        code: "S216",
+        object: s.o.id,
+        text: format!(
+            "{} stops nothing: no surface of its model ({}) collides, a body walks through it",
+            s.o.name, d.reference
+        ),
+    })
+}
+
+/// S201, S205 and S217: what an object stands on, that it stands on nothing, or that what it
+/// stands on stops nothing.
 fn standing(sc: &Scene<'_>, s: &Solid<'_>) -> Option<Finding> {
     let except = [s.o.id];
-    let f = RayFilter { kinds: RayKinds::Meshes, only: None, except: &except };
+    let f = RayFilter { kinds: RayKinds::Solid, only: None, except: &except };
     let b = &s.world;
     let c = b.center();
     // its middle and its four corners pulled in a tenth, from just above its bottom
@@ -209,6 +290,23 @@ fn standing(sc: &Scene<'_>, s: &Solid<'_>) -> Option<Finding> {
     if !blocked(sc, &grown, &s.o.xform, &f).blocked.is_empty() {
         return None;
     }
+    // a floor that is drawn and stops nothing: the object looks placed and would fall through
+    let drawn = RayFilter { kinds: RayKinds::Meshes, only: None, except: &except };
+    if let Some(h) = ground::down(sc, Vec3::new(c.x, b.min.y + 0.05, c.z), GAP + 0.05, &drawn) {
+        return Some(Finding {
+            code: "S217",
+            object: s.o.id,
+            text: format!(
+                "{} stands on {} where its faces are drawn and stop nothing: a body falls through{}",
+                s.o.name,
+                name(sc, h.id),
+                match nearest {
+                    Some((gap, under)) => format!(" {gap:.2} m, down to {}", name(sc, under)),
+                    None => " and out of the level".to_owned(),
+                }
+            ),
+        });
+    }
     Some(match nearest {
         Some((gap, under)) => Finding {
             code: "S201",
@@ -229,7 +327,7 @@ fn standing(sc: &Scene<'_>, s: &Solid<'_>) -> Option<Finding> {
 /// S202: a floor passes through an object above its middle.
 fn buried(sc: &Scene<'_>, s: &Solid<'_>) -> Option<Finding> {
     let except = [s.o.id];
-    let f = RayFilter { kinds: RayKinds::Meshes, only: None, except: &except };
+    let f = RayFilter { kinds: RayKinds::Solid, only: None, except: &except };
     let b = &s.world;
     let c = b.center();
     let h = ground::down(sc, Vec3::new(c.x, b.max.y - 0.01, c.z), b.max.y - b.min.y, &f)?;
@@ -250,15 +348,28 @@ fn buried(sc: &Scene<'_>, s: &Solid<'_>) -> Option<Finding> {
 /// of one reach into the other's box and their boxes share more than a touch: how deep is the
 /// least their boxes share along an axis (models are shells, so the triangles alone do not say
 /// on which side the body is).
-fn overlaps(sc: &Scene<'_>, s: &Solid<'_>, seen: &mut FxHashSet<(u32, u32)>, out: &mut Vec<Finding>) {
+fn overlaps(
+    sc: &Scene<'_>,
+    s: &Solid<'_>,
+    want: &FxHashSet<&'static str>,
+    seen: &mut FxHashSet<(u32, u32)>,
+    out: &mut Vec<Finding>,
+) {
     let except = [s.o.id];
-    let f = RayFilter { kinds: RayKinds::Meshes, only: None, except: &except };
+    let f = RayFilter { kinds: RayKinds::Solid, only: None, except: &except };
     let size = |b: &Aabb| (b.max - b.min).min_element().max(0.01);
     for (id, _) in blocked(sc, &s.local, &s.o.xform, &f).blocked {
         let Some(partner) = sc.state.get(id) else { continue };
         let Some(other) = sc.world_box(partner) else { continue };
-        // what stands on the ground is not in it: a terrain is ground whatever its size
+        // what stands on the ground is not in it by its box: a terrain and a level are asked
+        // whether their faces pass through the object's middle
         if partner.class == ObjClass::Terrain || is_ground(&other) {
+            if want.contains("S215") {
+                out.extend(in_geometry(sc, s, partner));
+            }
+            continue;
+        }
+        if !want.contains("S203") {
             continue;
         }
         let shared = (s.world.max.min(other.max) - s.world.min.max(other.min)).min_element();
@@ -330,7 +441,7 @@ fn placement(o: &Object) -> Option<Placement> {
 
 /// Whether nothing is under a point within 50 m while something is above it: under the ground.
 fn under_the_ground(sc: &Scene<'_>, at: Vec3) -> Option<ObjId> {
-    let f = RayFilter { kinds: RayKinds::Meshes, only: None, except: &[] };
+    let f = RayFilter { kinds: RayKinds::Solid, only: None, except: &[] };
     let (hi, _) = sc.top()?;
     if hi <= at.y + 0.1 {
         return None;
@@ -338,6 +449,19 @@ fn under_the_ground(sc: &Scene<'_>, at: Vec3) -> Option<ObjId> {
     let above =
         ray_scene(sc.pick, sc.state, sc.lib, Vec3::new(at.x, hi, at.z), Vec3::NEG_Y, hi - at.y - 0.05, &f)?;
     ground::down(sc, at + Vec3::Y * 0.05, 50.0, &f).is_none().then_some(above.id)
+}
+
+/// Whether a way is one that is looked along, not walked: its name says so (`..._look`), or a
+/// stalker's order looks along it.
+fn looked_at(sc: &Scene<'_>, way: &Object) -> bool {
+    let name = way.name.to_lowercase();
+    if name.ends_with("_look") || name.contains("_look_") {
+        return true;
+    }
+    sc.state.of_class(ObjClass::SpawnPoint).any(|o| match &o.data {
+        ObjData::Spawn(d) => d.order.look.eq_ignore_ascii_case(&way.name),
+        _ => false,
+    })
 }
 
 /// Whether a spawn point's entity walks on the AI map.
@@ -402,7 +526,7 @@ pub fn audit_with(
         let f = &mut out.findings;
         if let Some(s) = solid(sc, o) {
             if !is_ground(&s.world) {
-                if (want.contains("S201") || want.contains("S205"))
+                if (want.contains("S201") || want.contains("S205") || want.contains("S217"))
                     && let Some(found) = standing(sc, &s)
                     && want.contains(found.code)
                 {
@@ -411,8 +535,11 @@ pub fn audit_with(
                 if want.contains("S202") {
                     f.extend(buried(sc, &s));
                 }
-                if want.contains("S203") {
-                    overlaps(sc, &s, &mut seen, f);
+                if want.contains("S203") || want.contains("S215") {
+                    overlaps(sc, &s, &want, &mut seen, f);
+                }
+                if want.contains("S216") {
+                    f.extend(ghost(sc, &s));
                 }
             }
             if want.contains("S204")
@@ -511,8 +638,10 @@ pub fn audit_with(
                 }
             }
             ObjData::Way(w) => {
+                // a path the eyes follow is walked by nobody: its points stand where one looks
                 if want.contains("S208")
                     && let Some(map) = &ai
+                    && !looked_at(sc, o)
                 {
                     let off: Vec<String> = w
                         .points
@@ -539,6 +668,8 @@ pub fn audit_with(
         }
         if want.contains("S210")
             && let Some(base) = base
+            // over a level of the game whatever the scene holds is the module's
+            && !sc.state.meta.base.is_set()
             && !o.marks.authored
             // a terrain is the module's own and ships with its piece, marked or not
             && !matches!(o.class, ObjClass::Sector | ObjClass::Portal | ObjClass::Group | ObjClass::Terrain)

@@ -181,6 +181,12 @@ fn reads_back(o: &Object, ent: &Entity, section: &str, props: &Value, settings: 
 /// A spawn's kept entity decoded once the configs are known; one that does not read stays kept
 /// and says why.
 pub fn resolve(o: &mut Object, settings: &dyn Settings) {
+    decode(o, settings);
+    // the zone's shape is said once: the entity and the attached object hold the same
+    crate::objects::sync_shape(o);
+}
+
+fn decode(o: &mut Object, settings: &dyn Settings) {
     let ObjData::Spawn(d) = &mut o.data else { return };
     if let Some(SpawnEntity::RawLtx { values, .. }) = &d.entity {
         if let Ok(e) = Entity::from_scene(values, settings) {

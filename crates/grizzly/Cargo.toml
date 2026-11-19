@@ -42,6 +42,8 @@ gz-update.workspace = true
 gz-publish = { path = "../gz-publish" }
 gz-catalog.workspace = true
 gz-pda.workspace = true
+gz-text.workspace = true
+gz-gamelib.workspace = true
 gz-screens.workspace = true
 gz-characters.workspace = true
 gz-items.workspace = true
@@ -63,6 +65,7 @@ gz-ui-level = { path = "../gz-ui-level" }
 gz-ui-viewport = { path = "../gz-ui-viewport" }
 gz-ui-graph = { path = "../gz-ui-graph" }
 gz-ui-world = { path = "../gz-ui-world" }
+gz-ui-text = { path = "../gz-ui-text" }
 serde_json.workspace = true
 tokio.workspace = true
 

@@ -66,8 +66,8 @@ fn u32_at(d: &[u8], off: usize) -> u32 {
     d.get(off..off + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// X-Ray's way of saying "there, but not drawn" - a model whose every child that
-/// names a texture names `glow\glow_ghost` (the stash's default).
+/// The game's way of saying "there, but not drawn" - a model whose every child that names a
+/// texture names `gz_fmt_ogf::UNDRAWN_TEXTURE` (the stash's default).
 #[must_use]
 pub fn ogf_is_ghost(data: &[u8]) -> bool {
     if data.len() < 16 {
@@ -85,7 +85,7 @@ pub fn ogf_is_ghost(data: &[u8]) -> bool {
             && !tex.is_empty()
         {
             let Some(end) = tex.iter().position(|b| *b == 0) else { return false };
-            if !tex[..end].eq_ignore_ascii_case(b"glow\\glow_ghost") {
+            if !tex[..end].eq_ignore_ascii_case(gz_fmt_ogf::UNDRAWN_TEXTURE.as_bytes()) {
                 return false;
             }
             seen += 1;

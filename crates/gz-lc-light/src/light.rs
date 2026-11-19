@@ -18,8 +18,13 @@ pub const LCONTROL_STATIC: &str = "$static";
 pub const LT_DIRECT: u16 = 0;
 pub const LT_POINT: u16 = 1;
 pub const LT_SECONDARY: u16 = 2;
+/// A point light inside a cone around its direction: full within the inner cone, falling to
+/// nothing at the outer one. X-Ray's compiler had no such light (it lit a spot light as a
+/// point light); this is the editor's own.
+pub const LT_SPOT: u16 = 3;
 
-/// `D3DLIGHT_DIRECTIONAL`.
+/// `D3DLIGHT_SPOT`, `D3DLIGHT_DIRECTIONAL`.
+const D3DLIGHT_SPOT: u32 = 2;
 const D3DLIGHT_DIRECTIONAL: u32 = 3;
 
 /// The size of a light record in `build.lights`.
@@ -43,6 +48,22 @@ pub struct RLight {
     pub attenuation1: f32,
     pub attenuation2: f32,
     pub energy: f32,
+    /// A spot light's cone: the cosines of half its outer and of half its inner angle. 0 for
+    /// every other kind.
+    pub cone_outer: f32,
+    pub cone_inner: f32,
+}
+
+/// How much of a spot light goes along `ldir` - the direction from the lit point towards the
+/// light: 1 inside the inner cone, 0 outside the outer one, linear in the cosine between.
+#[must_use]
+pub fn spot_share(l: &RLight, ldir: Vec3) -> f32 {
+    let c = -crate::math::dot(ldir, l.direction);
+    if c <= l.cone_outer {
+        return 0.0;
+    }
+    let span = l.cone_inner - l.cone_outer;
+    if c >= l.cone_inner || span <= EPS_S { 1.0 } else { (c - l.cone_outer) / span }
 }
 
 impl RLight {
@@ -50,7 +71,19 @@ impl RLight {
     /// an energy, the range stretched by a tenth.
     #[must_use]
     pub fn from_flight(l: &gz_fmt_level::Light) -> Self {
-        let kind = if l.kind == D3DLIGHT_DIRECTIONAL { LT_DIRECT } else { LT_POINT };
+        let kind = match l.kind {
+            D3DLIGHT_DIRECTIONAL => LT_DIRECT,
+            D3DLIGHT_SPOT => LT_SPOT,
+            _ => LT_POINT,
+        };
+        // `phi` is the whole outer angle and `theta` the whole inner one, as Direct3D names them
+        let (cone_outer, cone_inner) = if kind == LT_SPOT {
+            let outer = (l.phi * 0.5).clamp(0.0, std::f32::consts::FRAC_PI_2);
+            let inner = (l.theta * 0.5).clamp(0.0, outer);
+            (outer.cos(), inner.cos())
+        } else {
+            (0.0, 0.0)
+        };
         let [r, g, b, _] = l.diffuse;
         let mut e = (r + g + b) / 3.0;
         let mut c = Vec3::new(r, g, b);
@@ -75,6 +108,8 @@ impl RLight {
             attenuation2: l.attenuation2,
             falloff: 1.0 / (range * (l.attenuation0 + l.attenuation1 * range + l.attenuation2 * range2)),
             energy: e,
+            cone_outer,
+            cone_inner,
         }
     }
 
@@ -95,14 +130,19 @@ impl RLight {
         ] {
             w.w_f32(v);
         }
-        // the cached triangle as `R_Light()` leaves it
-        w.w_vec3(Vec3::ZERO);
+        // the cached triangle as `R_Light()` leaves it; a spot light's cone stands in its first
+        // corner, which nothing reads back as a triangle
+        if self.kind == LT_SPOT {
+            w.w_vec3(Vec3::new(self.cone_outer, self.cone_inner, 0.0));
+        } else {
+            w.w_vec3(Vec3::ZERO);
+        }
         w.w_vec3(Vec3::new(0.0, 0.0, EPS_S));
         w.w_vec3(Vec3::new(EPS_S, 0.0, 0.0));
     }
 
     fn read(r: &mut Reader<'_>) -> Result<Self> {
-        let l = Self {
+        let mut l = Self {
             kind: r.r_u16()?,
             level: r.r_u16()?,
             diffuse: r.r_vec3()?,
@@ -115,8 +155,14 @@ impl RLight {
             attenuation1: r.r_f32()?,
             attenuation2: r.r_f32()?,
             energy: r.r_f32()?,
+            cone_outer: 0.0,
+            cone_inner: 0.0,
         };
-        r.advance(36)?;
+        let corner = r.r_vec3()?;
+        if l.kind == LT_SPOT {
+            (l.cone_outer, l.cone_inner) = (corner.x, corner.y);
+        }
+        r.advance(24)?;
         Ok(l)
     }
 }
@@ -132,7 +178,7 @@ pub struct LightSet {
 fn select_into(dest: &mut Vec<RLight>, src: &[RLight], p: Vec3, r: f32) {
     dest.clear();
     for l in src {
-        if l.kind == LT_POINT && distance(p, l.position) > r + l.range {
+        if (l.kind == LT_POINT || l.kind == LT_SPOT) && distance(p, l.position) > r + l.range {
             continue;
         }
         dest.push(*l);
@@ -239,6 +285,36 @@ mod tests {
         assert_eq!(l.diffuse, Vec3::new(1.5, 0.75, 0.75));
         assert_eq!(l.range, 11.0);
         assert_eq!(l.falloff, 1.0 / 11.0);
+    }
+
+    #[test]
+    fn a_spot_light_keeps_its_cone_through_the_file_and_lights_inside_it() {
+        let f = gz_fmt_level::Light {
+            kind: 2,
+            diffuse: [1.0, 1.0, 1.0, 1.0],
+            direction: Vec3::NEG_Y,
+            range: 10.0,
+            attenuation0: 1.0,
+            phi: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+        let l = RLight::from_flight(&f);
+        assert_eq!(l.kind, LT_SPOT);
+        assert_eq!((l.cone_outer, l.cone_inner), (std::f32::consts::FRAC_PI_4.cos(), 1.0));
+        // straight under the light: all of it; at the edge of the cone and beyond: nothing
+        assert_eq!(spot_share(&l, Vec3::Y), 1.0);
+        let edge = Vec3::new(std::f32::consts::FRAC_PI_4.sin(), std::f32::consts::FRAC_PI_4.cos(), 0.0);
+        assert_eq!(spot_share(&l, edge), 0.0);
+        assert_eq!(spot_share(&l, Vec3::X), 0.0);
+        let half = spot_share(&l, Vec3::new(0.3, 0.953_939_2, 0.0));
+        assert!(half > 0.0 && half < 1.0, "{half}");
+        // an inner cone as wide as the outer one is a hard edge
+        let hard = RLight::from_flight(&gz_fmt_level::Light { theta: f.phi, ..f });
+        assert_eq!(spot_share(&hard, Vec3::new(0.3, 0.953_939_2, 0.0)), 1.0);
+        let set = LightSet { rgb: vec![l], ..LightSet::default() };
+        assert_eq!(LightSet::read_build_lights(&set.write_build_lights()).unwrap(), set);
+        // out of reach it is dropped like a point light
+        assert!(set.select(Vec3::new(50.0, 0.0, 0.0), 4.0).rgb.is_empty());
     }
 
     #[test]

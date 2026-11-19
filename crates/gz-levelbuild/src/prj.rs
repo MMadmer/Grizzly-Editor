@@ -130,7 +130,10 @@ impl Sectors {
     fn new(scene: &SceneState, lib: Lookup<'_>) -> Self {
         let mut list = Vec::new();
         let mut default = None;
-        for (i, o) in scene.of_class(ObjClass::Sector).enumerate() {
+        // over a level of the game the cells are the game's: a sector the module's scene holds is
+        // not built (`S222`), and a piece hangs on the level's sectors where it stands
+        let own = scene.of_class(ObjClass::Sector).filter(|_| !scene.meta.base.is_set());
+        for (i, o) in own.enumerate() {
             let ObjData::Sector(s) = &o.data else { continue };
             if s.default {
                 default = Some(i as u16);
@@ -318,6 +321,9 @@ struct Builder {
     log: Vec<Finding>,
     /// The faces made now keep the level's own light ([`gz_lc_light::KEEPS_LEVEL_LIGHT`]).
     keep_light: bool,
+    /// The shaders for models the scene's static surfaces named, each with the shader for level
+    /// geometry it was compiled with.
+    twins: Vec<(String, String)>,
 }
 
 struct Ctx<'a> {
@@ -397,6 +403,16 @@ impl Builder {
         sector: u16,
         allow_draft: bool,
     ) -> Result<u32> {
+        // a compiled model placed as a static object still names the shader it was made for as
+        // a model: level geometry is drawn with the library's shader for a level that treats the
+        // texture's alpha the same way - with the model's, the game draws nothing
+        let level = cx.engine.level_shader(esh);
+        if !level.eq_ignore_ascii_case(esh)
+            && !self.twins.iter().any(|(was, _)| was.eq_ignore_ascii_case(esh))
+        {
+            self.twins.push((esh.to_owned(), level.to_owned()));
+        }
+        let esh = level;
         let draft = allow_draft
             && cx.quality == QUALITY_DRAFT
             && cx.engine.xrlc_flags(csh).is_some_and(|f| f & xrlc_flags::RENDERING != 0);
@@ -792,8 +808,10 @@ impl Builder {
             ..Light::default()
         };
         let controller = self.light_control(&control);
+        // the sectors a light of the level's own file shines in: only a point light is written
+        // there (below), so no other kind is asked for one - or refused for standing in none
         let mut dyn_sectors: Vec<u16> = Vec::new();
-        if e.flags & light_flags::AFFECT_DYNAMIC != 0 {
+        if e.flags & light_flags::AFFECT_DYNAMIC != 0 && e.kind == LT_POINT {
             if sectors.list.is_empty() {
                 dyn_sectors.push(sectors.default);
             } else {
@@ -819,14 +837,13 @@ impl Builder {
                 }
             }
         }
-        if e.kind != LT_POINT {
-            return Err(BuildError::new("Invalid light type."));
-        }
+        // every kind is baked: a point light, a spot light inside its cone, a directional one
+        // from its direction
         if e.flags & light_flags::AFFECT_STATIC != 0 {
             let soft = e
                 .fuzzy
                 .as_ref()
-                .filter(|_| e.flags & light_flags::POINT_FUZZY != 0)
+                .filter(|_| e.kind == LT_POINT && e.flags & light_flags::POINT_FUZZY != 0)
                 .map(|f| f.points.as_slice())
                 .filter(|p| !p.is_empty());
             match soft {
@@ -846,7 +863,11 @@ impl Builder {
                 None => self.lights_static.push(BuildLight { controller, light }),
             }
         }
-        if e.flags & light_flags::AFFECT_DYNAMIC != 0 {
+        // what shines in the game from the level's own file is a point light: the game loads
+        // every light of that file as one, and takes a directional one for the level's sun. A
+        // spot light that shines in the game is the level things' (`gz-export-level`'s
+        // `things`), a directional one is the scene's sun setting and nothing else.
+        if e.flags & light_flags::AFFECT_DYNAMIC != 0 && e.kind == LT_POINT {
             let mut s = [0u16; 16];
             for (slot, v) in s.iter_mut().zip(&dyn_sectors) {
                 *slot = *v;
@@ -950,7 +971,34 @@ fn authored_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
         }
     }
     terrains_box(scene, lib, &mut b);
+    for p in own_mark_points(scene) {
+        b.modify(p);
+    }
     b.is_valid().then_some(b)
+}
+
+/// The corners of the wallmarks a scene over a level of the game paints: the module's own, part
+/// of its piece.
+fn own_mark_points(scene: &SceneState) -> Vec<Vec3> {
+    let Some(part) = scene.bulk.wallmarks.as_ref().filter(|_| scene.meta.base.is_set()) else {
+        return Vec::new();
+    };
+    crate::wallmarks::read(&part.raw)
+        .iter()
+        .flat_map(|slot| slot.marks.iter().flat_map(|m| m.verts.iter().map(|(p, _, _)| *p)))
+        .collect()
+}
+
+/// Whether a scene over a level of the game paints wallmarks of its own.
+#[must_use]
+pub fn has_own_marks(scene: &SceneState) -> bool {
+    // asked for every status: the first mark answers, no list of corners is made
+    scene
+        .bulk
+        .wallmarks
+        .as_ref()
+        .filter(|_| scene.meta.base.is_set())
+        .is_some_and(|part| crate::wallmarks::read(&part.raw).iter().any(|slot| !slot.marks.is_empty()))
 }
 
 fn build(
@@ -963,7 +1011,7 @@ fn build(
 ) -> Result<Compiled> {
     let level_box = if piece {
         authored_box(scene, lib).ok_or_else(|| {
-            BuildError::new("The scene has no static object or terrain of the module's own.")
+            BuildError::new("The scene has no static object, terrain or wallmark of the module's own.")
         })?
     } else {
         level_box(scene, lib)
@@ -1106,8 +1154,11 @@ fn build(
         // the Wallmark tool's marks: faces of their own material, after the objects
         // the X-Ray SDK leaves a mark face's game material and smoothing group as the
         // allocation held them; they are 0 here.
+        // In a piece: the marks of a scene that lies over a level of the game are the module's
+        // own - the level's are in the game's level - and ship as faces of the piece. A scene
+        // that is the whole level keeps them the level build's.
         if class == ObjClass::Wallmark
-            && !piece
+            && (!piece || scene.meta.base.is_set())
             && let Some(part) = &scene.bulk.wallmarks
         {
             for slot in crate::wallmarks::read(&part.raw) {
@@ -1171,6 +1222,13 @@ fn build(
         lod_textures = Some((color, normal));
     }
 
+    if !b.twins.is_empty() {
+        let said: Vec<String> = b.twins.iter().map(|(was, now)| format!("{was} -> {now}")).collect();
+        b.log.info(format!(
+            "Static surfaces that name a shader for models are compiled with the shader for level geometry of the same look: {}.",
+            said.join(", ")
+        ));
+    }
     let p = &opts.build;
     let project = BuildProject {
         version: XRCL_CURRENT_VERSION,
@@ -1648,5 +1706,40 @@ mod piece_tests {
             none.replace(o);
         }
         assert!(compile_piece_until(&none, &look, &engine, crate::NEVER).is_err());
+    }
+
+    /// Every kind of light is baked; of the lights that shine in the game the level's own file
+    /// carries the point lights alone.
+    #[test]
+    fn every_kind_of_light_is_baked_and_only_point_lights_shine_from_the_levels_own_file() {
+        use gz_scene::objects::{LT_DIRECT, LT_SPOT, LightData};
+        let (engine, _) = fixture();
+        let mut s = terrain_fixture::scene(false);
+        let both = light_flags::AFFECT_STATIC | light_flags::AFFECT_DYNAMIC;
+        for (name, kind, cone) in
+            [("lamp", LT_POINT, 0.0f32), ("beam", LT_SPOT, 1.0), ("moon", LT_DIRECT, 0.0)]
+        {
+            let d = LightData { kind, flags: both, cone, range: 9.0, ..LightData::default() };
+            let mut o = Object::new(ObjClass::Light, name, ObjData::Light(d));
+            o.xform.position = Vec3::new(1.0, 3.0, 1.0);
+            s.insert(o);
+        }
+        let lib = terrain_fixture::library(&s);
+        let look = crate::files::lookup(lib.clone());
+        let built = compile_until(&s, &look, &engine, &|_| None, crate::NEVER).unwrap().project;
+        let at = |l: &gz_fmt_level::Light| l.position == Vec3::new(1.0, 3.0, 1.0);
+        // baked: the three of them, each of its own kind, the spot with its cone
+        let mut baked: Vec<(u32, f32)> = built
+            .lights_static
+            .iter()
+            .filter(|l| at(&l.light))
+            .map(|l| (l.light.kind, l.light.phi))
+            .collect();
+        baked.sort_by_key(|l| l.0);
+        assert_eq!(baked, [(LT_POINT, 0.0), (LT_SPOT, 1.0), (LT_DIRECT, 0.0)]);
+        // in the game from the level's own file: the point light alone
+        let shine: Vec<u32> =
+            built.lights_dynamic.iter().filter(|l| at(&l.light.light)).map(|l| l.light.light.kind).collect();
+        assert_eq!(shine, [LT_POINT]);
     }
 }

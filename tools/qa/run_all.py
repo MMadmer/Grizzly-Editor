@@ -68,6 +68,7 @@ SUITES: dict[str, dict] = {
     "test_assets": {"args": ["--project", OD], "timeout": 120},
     "test_pda": {"args": ["--project", OD], "timeout": 120},
     "test_screens": {"args": ["--project", OD], "timeout": 120},
+    "test_text": {"args": [], "timeout": 120},
     "test_world": {"args": ["--project", TEST], "timeout": 120},
     "test_properties": {"args": ["--project", TEST], "timeout": 120},
     "test_scene_tools": {"args": ["--project", TEST], "timeout": 120},
@@ -75,6 +76,9 @@ SUITES: dict[str, dict] = {
     # an agent's level design on Escape: the scene's answers, its files, the audit, models, pictures, a terrain and
     # the piece that carries its cut (about a minute; the build of the piece is a quarter of it)
     "test_level_design": {"args": ["--project", TEST], "timeout": 300},
+    # the game as the editor's library and a scene over a level of the game: seconds when the library is current,
+    # the first reading of the game when it never was (minutes)
+    "test_game_library": {"args": ["--project", TEST], "timeout": 900},
     # the compiler's regression net: two small scenes at draft quality from a cold start, against tools/qa/golden
     "test_level_compile": {"args": ["--project", TEST], "timeout": 120},
     "test_previews": {"args": ["--project", OD], "timeout": 120},

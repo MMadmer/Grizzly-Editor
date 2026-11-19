@@ -543,7 +543,10 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
     // not editable by itself, but the switch that makes it so
     let changeable = state.changeable(o) && o.editable();
     for r in &mut out {
-        if !changeable && r.key != "locked" && r.key != "group_editable" && r.key != "hidden" {
+        if o.marks.base {
+            // of the level's own a scene says one thing: that it takes a spawn point out
+            r.enabled = r.key == "removed";
+        } else if !changeable && r.key != "locked" && r.key != "group_editable" && r.key != "hidden" {
             r.enabled = false;
         }
     }
@@ -1061,6 +1064,12 @@ pub fn world_rows(state: &SceneState) -> Vec<Row> {
         if preset && !custom {
             r.enabled = false;
             r.help.push_str(" Set by the quality; custom sets it by hand.");
+        }
+        if f.key == "base" {
+            // what a scene lies over is the scene's from its start: every object it holds of
+            // the level would have to go or come with a change
+            r.enabled = false;
+            r.help.push_str(" Chosen when the scene is made (New Scene over a level).");
         }
         out.push(r);
     }
@@ -1750,6 +1759,12 @@ pub fn set_object(
 /// Sets one row of Level Settings: the level options and the kinds' settings after.
 pub fn set_world(state: &SceneState, k: &str, p: &Parsed) -> Result<(LevelOptions, Vec<ToolPart>), String> {
     let f = crate::format::SCENE_FIELDS.iter().find(|f| f.key == k).ok_or("is no row of Level Settings")?;
+    if k == "base" {
+        return Err(
+            "is the scene's from its start: `scene.new base=<level>` starts a scene over a level, and the `.scene` file's `base` key is read when the scene opens"
+                .to_owned(),
+        );
+    }
     let mut s = state.clone();
     if k == "level.path" {
         // the build wipes `gamedata\levels\<this>`: one folder name, never a path

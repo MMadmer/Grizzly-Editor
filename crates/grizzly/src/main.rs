@@ -131,6 +131,7 @@ fn main() -> ExitCode {
     gz_nq::install(&editor);
     gz_release::install(&editor);
     gz_pda::install(&editor);
+    gz_text::install(&editor);
     gz_screens::install(&editor);
     gz_characters::install(&editor);
     gz_items::install(&editor);
@@ -145,6 +146,8 @@ fn main() -> ExitCode {
     };
     gz_update::install(&editor, start);
     gz_scene::install(&editor);
+    // the game as the editor's library: a run that stays up keeps it current by itself
+    gz_gamelib::install(&editor, !cli.commandlet());
     gz_export_level::install(&editor);
     gz_ui_content::install_hooks(&editor);
     // a project handed over by a second start asks about unsaved work in the window
@@ -272,6 +275,8 @@ fn build_registry(preview: bool) -> Registry {
         // after gz-release: the real release.catalog replaces its key-only stand-in
         gz_catalog::register(&mut registry);
     }
+    gz_text::register(&mut registry);
+    gz_gamelib::register(&mut registry);
     gz_screens::register(&mut registry);
     gz_world::register(&mut registry);
     gz_scene::register(&mut registry);
@@ -289,6 +294,7 @@ fn build_registry(preview: bool) -> Registry {
     gz_ui_viewport::register(&mut registry);
     gz_ui_graph::register(&mut registry);
     gz_ui_world::register(&mut registry);
+    gz_ui_text::register(&mut registry);
     registry.install_jobs();
     // last: it lists what the areas registered
     registry.install_help();
@@ -312,6 +318,7 @@ fn install_ui(shell: &mut gz_app::ShellBuilder, preview: bool) {
     gz_ui_viewport::install(shell);
     gz_ui_graph::install(shell);
     gz_ui_world::install(shell);
+    gz_ui_text::install(shell);
 }
 
 /// How the shell reads the open project: the project area's own answer.

@@ -1,0 +1,28 @@
+[package]
+name = "gz-ui-text"
+description = "The Text tab: a text file of the project in the kit's code editor - scripts with LuaJIT's checks, completion and Go to Definition, configs, XML, JSON - and Markdown with its preview."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-task.workspace = true
+gz-editor.workspace = true
+gz-project.workspace = true
+gz-asset.workspace = true
+gz-text.workspace = true
+gz-ui.workspace = true
+gz-app.workspace = true
+egui.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true

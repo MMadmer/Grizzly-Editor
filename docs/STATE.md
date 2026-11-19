@@ -23,6 +23,17 @@ What the suites hold, beyond what their names say:
   place or a machine; Collect Library Assets; a second start hands its project over to the running editor.
 - **Assets are text** (`test_assets`): a file opened and saved unchanged is byte for byte the same; an edit beside
   the editor is followed; unsaved edits rebase onto the file's; comments and unknown keys survive.
+- **Text files** (`test_text`; `gz-text`'s, `gz-ui`'s `code` and `markdown` tests): a script, a config, a patch,
+  XML, Markdown and a file whose name says nothing open from the Content Browser in the Text tab, a binary file in
+  none; a Windows-1251 config with CRLF and a file with mixed line endings are saved byte for byte unchanged, a
+  UTF-8 file is read as UTF-8; a syntax error written outside is a problem at its line and column, the same in
+  `asset.check`, and goes when the file is fixed; Go to Symbol, find, a line to the caret, the three Markdown
+  views; `script.lookup` over the project's and the linked game's scripts, and a script of the game read-only.
+  The editor's keys (Enter's indent, Tab and Shift+Tab, Ctrl+/, Ctrl+S, completion as a word is typed and Enter
+  taking it) are typed into the kit's `code` in headless frames; a 120 KB Markdown text lays out under a twentieth
+  of its blocks a frame.
+- **Play in a project without a scene** (`test_text` F, a dry run; `test_play_game --scene none`): the module built
+  into Play's root, no level staged, a new game at the game's own start.
 - **The scene's own files** (`gz-scene`'s corpus test, `test_scene_tools`): the 35 base scenes of the library import,
   are written as `.scene`, read back equal and written again unchanged; a moved object changes one line of one file;
   a file edited outside is one undo step.
@@ -186,6 +197,46 @@ What the suites hold, beyond what their names say:
 
 ## 2. Not proven by a run
 
+- **The game library and a scene over a level** (`docs/GAME_LIBRARY.md`) are proven by unit tests (`gz-scene`'s
+  `base.rs`, `facts.rs`, the audit's; `gz-pix`'s `raster.rs`; `gz-export-level`'s `things.rs`; `gz-fmt-mesh`'s
+  compiled model), by a run over the real game (the first reading of 62 thousand files in about 19 s, 33 levels
+  with passports) and by one module (`agro_base`: a base in Agroprom's east wing, 67 objects of its own over
+  `l03_agroprom`, an audit with no finding, built and started in the game with its 9 characters, 12 spawn points
+  of the level taken out, 16 level things and its piece attached). `tools/qa/test_game_library.py` drives them
+  over the linked game on a copy (the library's answers, a scene over `l01_escape` with its guards, its files
+  and its pictures, the build of what the module adds; in a window, so the level's picture is on the graphics
+  card); a machine without a linked game notes it and checks nothing. The first run of that suite found two
+  things no windowless run had: a level as one model is past what a graphics device takes as a buffer (the
+  editor stopped; a mesh is pages of 32 MB now) and the piece of a module over Escape could not be built (a
+  texture of the level the editor's data has no description of; the compiler reads it from the game now). Not looked at
+  in the game by an eye: how the module's lights, effects and people look and behave there. Not measured:
+  what a scene over the largest levels costs in memory in a window (the level's model, its collision and its
+  pages on the card).
+- **What a module places, finished** (`docs/GAME_LIBRARY.md` 7): a model asset over a model of the game
+  (`source = "game:..."`, or an `.ogf` of the project; a dynamic one is the same file said again,
+  `gz_fmt_ogf::restate`), every section the module makes as a spawn section (`gz_game::ComposedConfigs`: the
+  items area's composed tree is the scene's settings), the game's levels in Library > Base Scenes, a baked
+  spot light on the processor and the card (`gz-lc-light`'s `LT_SPOT`), and - through `overlay.things`, with
+  the game's `xms_level_things`, `xms_glows` and its loaders - glows, fog volumes and sound environments over a
+  level of the game and on a level of the module's own, wallmarks in the module's piece, the level's own fog
+  volumes, sound environments and grass in the level's scene and passport. `test_game_library.py` phases D, E
+  and F hold the editor's half; in the game (a new game on Agroprom with the control module, pictures taken
+  through a probe module on a hidden desktop): the things are read (`[level things] ... 22 things`), the fog
+  profile is read, the sound environment boxes are merged with the level's 24 faces, the spot light lights the
+  ground, the wallmark lies on it, the glow is drawn. Two things only the game showed: the game's own
+  `effects\glow` shader draws nothing of a picture in the world (it is made for vertices already on the
+  screen), and a face-culling state said before a shader is lost to the shader's own.
+- **Not built: the grass of a module over a level of the game.** A level's details are one file the game reads
+  whole (`level.details`: at most 63 plants, one grid of slots, an atlas of its own, lit by the detail
+  compiler against the level's build), and the game's grass is far from the stock one (blades, seasons,
+  offloads) - an overlay means a merge in the detail manager's load, an atlas per module and the detail
+  compiler run over a level the module does not build. It is said, not hidden: details painted over a level
+  of the game are `S223`, and nothing of them ships.
+- A level of the module's own built before static surfaces that name a shader for models were compiled with
+  the shader for level geometry keeps such surfaces until its geometry is built again: only the module's piece
+  of a level of the game is made stale by that change (`PIECE_MAKING` in `gz-levelbuild`'s fingerprints) - a
+  whole level's light is hours, and a level without such a surface is the same bytes either way.
+
 - The Russian of what the tour does not bring up: a notice, a toast, a confirmation, an error state, a problem
   sentence a surface shows only in a state the tour does not reach. Their words are in the catalogs as far as
   the translator's list, `tools/rust/i18n_missing.py`, finds them (a heuristic: it lists data and the cards'
@@ -248,6 +299,12 @@ What the suites hold, beyond what their names say:
   files and their names say; its author has not read it.
 - A hostile save: a module's object record and spawn range are checked before they are used, a kept task
   record is read as the original game reads its own, with no check.
+
+- The Text tab typed into by a person: completion's list, Go to Definition by F12 and by Ctrl and a click, Alt+Up
+  and Down, the Edit menu's rows - each is held in headless frames or through `text.view` and `script.lookup`, and
+  no run pressed the keys in the window (a QA editor takes no synthetic input).
+- A Markdown file's links clicked in the window (a file of the project, a heading, a web address); the preview's
+  picture of every Markdown element beside a browser's.
 
 ## 3. Decisions
 

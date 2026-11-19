@@ -10,7 +10,7 @@ use gz_project::asset_kind::MediaKind;
 #[must_use]
 pub fn source_extensions(kind: MediaKind) -> &'static [&'static str] {
     match kind {
-        MediaKind::Model => &["glb", "gltf", "obj", "object"],
+        MediaKind::Model => &["glb", "gltf", "obj", "object", "ogf"],
         MediaKind::Texture => &["png", "jpg", "jpeg", "tga", "bmp", "dds"],
         MediaKind::Sound => &["wav", "ogg"],
     }
@@ -21,6 +21,26 @@ pub fn source_extensions(kind: MediaKind) -> &'static [&'static str] {
 pub fn kind_of_source(name: &str) -> Option<MediaKind> {
     let ext = Path::new(name).extension()?.to_str()?.to_ascii_lowercase();
     MediaKind::ALL.into_iter().find(|k| source_extensions(*k).contains(&ext.as_str()))
+}
+
+/// What a model's `source` starts with when it names a compiled model of the game.
+pub const GAME_PREFIX: &str = "game:";
+
+/// The engine name of the game's model a `source` names (`game:dynamics/box/box_wood_01.ogf`
+/// is `dynamics\box\box_wood_01`), back slashes, lower case, without the extension. `None` for a
+/// source that is a file of the project.
+#[must_use]
+pub fn game_model(source: Option<&str>) -> Option<String> {
+    let name = source?.trim().strip_prefix(GAME_PREFIX)?.trim().replace('/', "\\").to_ascii_lowercase();
+    Some(name.strip_suffix(".ogf").unwrap_or(&name).trim_matches('\\').to_owned())
+}
+
+/// Whether an engine name is a plain name under `meshes`: no drive, no root, no step up.
+#[must_use]
+pub fn plain_game_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(':')
+        && name.split('\\').all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 /// FNV-1a: stable on every machine.

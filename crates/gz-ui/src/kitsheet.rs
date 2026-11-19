@@ -14,6 +14,7 @@ use crate::form;
 use crate::grid::{self, PropFlags, PropertyGrid, number, text_field};
 use crate::icons::Icon;
 use crate::list::{Column, NavRowSpec, nav_row, table_headers, table_headers_ruled};
+use crate::markdown::markdown_view;
 use crate::menu::{MenuItem, menu_item, popup_body, popup_frame};
 use crate::pick::{Combo, PickItem, PickList};
 use crate::rows::{Col, ItemRows, Table, cell_text};
@@ -27,6 +28,18 @@ use crate::text::{self, Clip};
 use crate::theme::{Tone, metrics, palette};
 use crate::toolbar::{Toolbar, ToolbarStyle};
 use crate::units::em;
+
+/// The Markdown preview's sample: a block of every kind.
+const MARKDOWN_SAMPLE: &str = "# Night 7\n\
+    A module's **quest** opens with a *briefing*, a ~~draft~~ and the task `nq.night7.start`. \
+    See [the format](docs/nq/NQ_FORMAT.md) or [the tasks](#tasks).\n\n\
+    ## Tasks\n\n\
+    - [x] Meet the trader\n- [ ] Bring the medkit\n  1. Find it\n  2. Carry it back\n\n\
+    > The author's note: the trader leaves at dawn.\n\n\
+    | Item | Count | Price |\n|:--|:--:|--:|\n| Bread | 2 | 40 |\n| Medkit | 1 | 350 |\n\n\
+    ```lua\nnq.give(\"medkit\", 1) -- a long line scrolls sideways rather than wrapping, the way code reads best\n```\n\n\
+    ---\n\n\
+    ![The trader's hut](pictures/hut.png)\n";
 
 /// What the sheet's live widgets hold between frames.
 #[derive(Clone, Debug)]
@@ -478,6 +491,17 @@ pub fn sheet(ui: &mut Ui) {
             s.selected = Some(r);
         }
     });
+
+    heading(ui, "Markdown");
+    egui::Frame::NONE
+        .stroke(Stroke::new(1.0, p.border_subtle))
+        .corner_radius(CornerRadius::same(metrics::RADIUS))
+        .show(ui, |ui| {
+            ui.set_height(em(20.0));
+            let mut goto = 0;
+            let _ = markdown_view(ui, "kitsheet.markdown", MARKDOWN_SAMPLE, &mut goto);
+        });
+    note(ui, "Only what is in view is laid out. A link goes back to the caller; an anchor link scrolls.");
 
     heading(ui, "Lists");
     let cols = [Column::new("Name", em(8.0)), Column::new("Count", em(4.0)), Column::new("On", em(3.0))];

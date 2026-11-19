@@ -171,7 +171,7 @@ SOFTWARE.
 Rust crates
 ===========
 
-The two programs link 289 third-party crates (their normal dependencies for Windows). Each is
+The two programs link 291 third-party crates (their normal dependencies for Windows). Each is
 listed with the license its manifest states; the license files the crates ship follow, each text
 once with the crates that carry it.
 
@@ -345,6 +345,7 @@ presser 0.3.1 - MIT OR Apache-2.0 - https://github.com/EmbarkStudios/presser
 primefield 0.14.0 - Apache-2.0 OR MIT - https://github.com/RustCrypto/elliptic-curves
 primeorder 0.14.0 - Apache-2.0 OR MIT - https://github.com/RustCrypto/elliptic-curves
 profiling 1.0.18 - MIT OR Apache-2.0 - https://github.com/aclysma/profiling
+pulldown-cmark 0.13.6 - MIT - https://github.com/raphlinus/pulldown-cmark
 pxfm 0.1.30 - BSD-3-Clause OR Apache-2.0 - https://github.com/awxkee/pxfm
 quick-error 2.0.1 - MIT/Apache-2.0 - http://github.com/tailhook/quick-error
 rand_core 0.10.1 - MIT OR Apache-2.0 - https://github.com/rust-random/rand_core
@@ -410,6 +411,7 @@ tracing-core 0.1.36 - MIT - https://github.com/tokio-rs/tracing
 try-lock 0.2.5 - MIT - https://github.com/seanmonstar/try-lock
 type-map 0.5.1 - MIT/Apache-2.0 - https://github.com/kardeiz/type-map
 typenum 1.20.1 - MIT OR Apache-2.0 - https://github.com/paholg/typenum
+unicase 2.10.0 - MIT OR Apache-2.0 - https://github.com/seanmonstar/unicase
 unicode-general-category 1.1.0 - Apache-2.0 - https://github.com/yeslogic/unicode-general-category
 unicode-ident 1.0.27 - (MIT OR Apache-2.0) AND Unicode-3.0 - https://github.com/dtolnay/unicode-ident
 unicode-properties 0.1.5 - (MIT OR Apache-2.0) AND Unicode-3.0 - https://github.com/unicode-rs/unicode-properties
@@ -754,9 +756,10 @@ Carried by:
   rayon 1.12.0, rayon-core 1.13.0, renderdoc-sys 1.1.0, rustc-hash 1.1.0, safe_arch 0.7.4,
   scopeguard 1.2.0, sec1 0.8.1, self_cell 1.3.0, serdect 0.4.3, sha2 0.11.1, signature 3.0.0,
   smallvec 1.16.5, smol_str 0.2.2, smol_str 0.3.7, socket2 0.6.5, spki 0.8.1,
-  stable_deref_trait 1.2.1, static_assertions 1.1.0, tinyvec 1.13.3, unicode-properties 0.1.5,
-  unicode-segmentation 1.13.3, unicode-width 0.2.3, url 2.5.8, utf8_iter 1.1.0, utf_types 1.0.0,
-  uuid 1.29.2, weezl 0.1.12, wnaf 0.14.1, zeroize 1.9.1, zune-core 0.5.3, zune-jpeg 0.5.15
+  stable_deref_trait 1.2.1, static_assertions 1.1.0, tinyvec 1.13.3, unicase 2.10.0,
+  unicode-properties 0.1.5, unicode-segmentation 1.13.3, unicode-width 0.2.3, url 2.5.8,
+  utf8_iter 1.1.0, utf_types 1.0.0, uuid 1.29.2, weezl 0.1.12, wnaf 0.14.1, zeroize 1.9.1,
+  zune-core 0.5.3, zune-jpeg 0.5.15
 ----------------------------------------------------------------------------------------------------
 
 Apache License
@@ -6485,7 +6488,7 @@ THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------------------
 Carried by:
-  hyper 1.12.0
+  hyper 1.12.0, unicase 2.10.0
 ----------------------------------------------------------------------------------------------------
 
 Copyright (c) 2014-2026 Sean McArthur
@@ -9382,6 +9385,34 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+
+----------------------------------------------------------------------------------------------------
+Carried by:
+  pulldown-cmark 0.13.6
+----------------------------------------------------------------------------------------------------
+
+The MIT License
+
+Copyright 2015 Google Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------------------------------

@@ -67,6 +67,10 @@ pub fn group_text(
                     continue;
                 }
                 let mut moved = (**o).clone();
+                // an object of the level copied out is written whole: the line a scene says of
+                // the level's own (`removed`) is the scene file's alone
+                moved.marks.base = false;
+                moved.marks.removed = false;
                 crate::apply::translate(&mut moved, -pivot);
                 items.push(object_value(&cx, &moved, &dflt)?);
             }

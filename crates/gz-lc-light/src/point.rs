@@ -7,7 +7,7 @@ use glam::Vec3;
 
 use crate::color::ColorC;
 use crate::data::BuildTexture;
-use crate::light::{LT_DIRECT, LT_POINT, LT_SECONDARY, LightSet, RLight};
+use crate::light::{LT_DIRECT, LT_POINT, LT_SECONDARY, LT_SPOT, LightSet, RLight, spot_share};
 use crate::math::{distance_sqr, dot, mad, normalize_safe};
 use crate::mesh::FaceId;
 use crate::ray::{LightCache, NO_TRI, RayModel};
@@ -96,7 +96,9 @@ pub fn light_point(
     if flags & LP_DONT_RGB == 0 {
         for (i, l) in lights.rgb.iter().enumerate() {
             let mut cached = slot(rgb, i);
-            let kind = if t.falloff == Falloff::Details && l.kind != LT_DIRECT { LT_POINT } else { l.kind };
+            // the detail compiler takes a secondary light as a point light
+            let kind =
+                if t.falloff == Falloff::Details && l.kind == LT_SECONDARY { LT_POINT } else { l.kind };
             match kind {
                 LT_DIRECT => {
                     let ldir = -l.direction;
@@ -109,8 +111,13 @@ pub fn light_point(
                     c.rgb.y += scale * l.diffuse.y;
                     c.rgb.z += scale * l.diffuse.z;
                 }
-                LT_POINT => {
+                LT_POINT | LT_SPOT => {
                     let Some((sq_d, ldir, d)) = towards(l, p, n) else { continue };
+                    // a spot light is a point light inside its cone
+                    let share = if kind == LT_SPOT { spot_share(l, ldir) } else { 1.0 };
+                    if share <= 0.0 {
+                        continue;
+                    }
                     let r = sq_d.sqrt();
                     let scale = d * l.energy * t.trace(&mut cached, hits, pnew, ldir, r, skip);
                     let a = match t.falloff {
@@ -125,6 +132,7 @@ pub fn light_point(
                             scale / (l.attenuation0 + l.attenuation1 * r + l.attenuation2 * sq_d)
                         }
                     };
+                    let a = if kind == LT_SPOT { a * share } else { a };
                     c.rgb.x += a * l.diffuse.x;
                     c.rgb.y += a * l.diffuse.y;
                     c.rgb.z += a * l.diffuse.z;

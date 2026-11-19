@@ -235,6 +235,7 @@ mod tests {
                 uses: Vec::new(),
                 dynamic: false,
                 parts: false,
+                game: None,
                 excluded: false,
                 error: None,
             }],

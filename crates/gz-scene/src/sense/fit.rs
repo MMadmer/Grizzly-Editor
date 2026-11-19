@@ -54,8 +54,16 @@ fn model_of(sc: &Scene<'_>, p: &QueryParams, what: &str) -> Result<Model, CmdErr
     let name = p.object.as_deref().unwrap_or_default().trim();
     let o =
         sc.state.find_any(name).ok_or_else(|| CmdError::not_found(format!("no object is named {name}")))?;
+    // a spawn point stands there as the model its entity wears
+    if let Some(r) = crate::objects::visual_ref(o) {
+        let lo = sc
+            .lib
+            .cached(&r)
+            .ok_or_else(|| CmdError::not_found(format!("the model of {name} ({r}) could not be read")))?;
+        return Ok(Model { local: lo.bounds, xform: o.xform, itself: Some(o.id) });
+    }
     let ObjData::SceneObject(d) = &o.data else {
-        return Err(CmdError::invalid(format!("{name} is no scene object with a model")));
+        return Err(CmdError::invalid(format!("{name} is no object with a model")));
     };
     let lo = sc.lib.cached(&d.reference).ok_or_else(|| {
         CmdError::not_found(format!("the model of {name} ({}) could not be read", d.reference))
@@ -110,8 +118,13 @@ pub(super) struct Placed {
     bottom: f32,
 }
 
+/// How far above the point a search for a free place starts, metres: the floor a person at the
+/// point stands on is found, not the storey above.
+const HEAD: f32 = 1.5;
+
 fn filter<'a>(lists: &'a Lists, except: &'a [ObjId]) -> RayFilter<'a> {
-    RayFilter { kinds: RayKinds::Meshes, only: lists.only.as_deref(), except }
+    // what a model meets is what stops a body
+    RayFilter { kinds: RayKinds::Solid, only: lists.only.as_deref(), except }
 }
 
 /// The solid objects a model at `x` meets, each with how deep, metres.
@@ -246,7 +259,10 @@ pub(super) fn free(sc: &Scene<'_>, p: &QueryParams) -> Result<Value, CmdError> {
     }
     let lists = Lists::of(sc.state, p)?;
     let f = filter(&lists, &lists.except);
-    let Some((from, _)) = sc.top() else { return Ok(json!({ "spots": [] })) };
+    // from just above the point: the floor of the storey it is on. `top` asks from above
+    // everything instead (the highest floor: a roof, open ground)
+    let Some((highest, _)) = sc.top() else { return Ok(json!({ "spots": [] })) };
+    let from = if p.top { highest } else { (near.y + HEAD).min(highest) };
     // a grid around the point, nearest first; at most about 160 steps across
     let step = (spacing * 0.5).clamp(0.25, 2.0).max(2.0 * radius / 160.0);
     let n = (radius / step).ceil() as i32;
@@ -291,5 +307,7 @@ pub(super) fn free(sc: &Scene<'_>, p: &QueryParams) -> Result<Value, CmdError> {
     }
     let spots: Vec<Value> =
         spots.iter().map(|(at, d)| json!({ "position": v3(*at), "distance": r4(*d) })).collect();
-    Ok(json!({ "spots": spots }))
+    // the height the floors were looked for under: ground that rises over it within the radius
+    // (a slope, the next storey) is not offered, and whoever asked can see why
+    Ok(json!({ "spots": spots, "below": r4(from) }))
 }

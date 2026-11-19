@@ -73,6 +73,10 @@ pub struct Items {
     lookups: Query<(), GameLookups>,
     /// Moves with every change of a watched file the project's watcher reports.
     changes: Arc<RevCounter>,
+    /// The list of the files a roster reads, for the state of the file tree and of the manifest
+    /// it was made from: whoever asks for the composed configs asks for the list first, and the
+    /// scene's settings, the spawn roster and the sections' index all do, for every check.
+    listed: parking_lot::Mutex<Option<(Rev, Rev, Arc<Files>)>>,
 }
 
 /// The files a roster reads, project-relative: the items, the tables, the module's configs, its
@@ -102,6 +106,7 @@ impl Items {
             catalog: Query::new(editor.exec.clone()),
             lookups: Query::new(editor.exec.clone()),
             changes: follow_files(editor, &project),
+            listed: parking_lot::Mutex::new(None),
             project,
         }))
     }
@@ -127,7 +132,20 @@ impl Items {
         self.manifest.snapshot().manifest().map(|m| m.id.clone()).unwrap_or_default()
     }
 
-    fn files(&self, tree: &FileTree, rules: &[String]) -> Files {
+    /// The files a roster reads, listed once per state of the file tree and of the manifest.
+    fn files(&self, tree: &FileTree, rules: &[String]) -> Arc<Files> {
+        let at = (tree.rev(), self.manifest.snapshot().rev);
+        if let Some((tree_rev, manifest_rev, files)) = &*self.listed.lock()
+            && (*tree_rev, *manifest_rev) == at
+        {
+            return files.clone();
+        }
+        let files = Arc::new(self.list_files(tree, rules));
+        *self.listed.lock() = Some((at.0, at.1, files.clone()));
+        files
+    }
+
+    fn list_files(&self, tree: &FileTree, rules: &[String]) -> Files {
         let shipped = |r: &RelPath| !gz_mod::outside_build(rules, r.as_str());
         let items: Vec<RelPath> =
             tree.files_with_extension("itemasset").into_iter().filter(shipped).collect();
@@ -301,6 +319,19 @@ impl Items {
                 )
             })
             .await
+    }
+
+    /// The game's config tree with the module laid over it, as the tree stands with every change
+    /// marked so far - `None` for a module that makes or changes no config section (no item
+    /// asset, no config, no patch): the game's own tree is the answer then, and nothing is
+    /// composed for it.
+    pub async fn composed(&self, editor: &Editor) -> Option<Arc<Ltx>> {
+        self.project.tree.refresh().await;
+        let files = self.files(&self.project.tree.snapshot(), &self.rules());
+        if files.items.is_empty() && files.configs.is_empty() && files.patches.is_empty() {
+            return None;
+        }
+        Some(self.roster(editor).await.composition.ltx.clone())
     }
 
     /// The roster once the file tree holds every change marked so far: what a command reads

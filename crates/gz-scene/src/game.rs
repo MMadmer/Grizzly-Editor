@@ -6,20 +6,37 @@ use std::sync::Arc;
 
 use gz_editor::Editor;
 use gz_entities::Settings;
-use gz_game::{Bundled, GameLink, SpawnSection};
+use gz_game::{Bundled, ComposedConfigs, GameLink, OwnSection, OwnSections, SpawnSection};
 use gz_ltx::Ltx;
 use gz_vfs::GameFiles;
 
-/// The game's settings over the linked game's `system.ltx` tree (or the editor's own copy).
+/// The game's settings over the linked game's `system.ltx` tree (or the editor's own copy) -
+/// with a project open, over that tree as a game with the module in it reads it.
 pub struct GameSettings {
     ltx: Arc<Ltx>,
     files: Option<Arc<GameFiles>>,
+    /// The sections the open project's assets become in the game (a module's characters): read
+    /// as the game's own.
+    own: Vec<OwnSection>,
 }
 
 impl GameSettings {
     #[must_use]
     pub fn new(ltx: Arc<Ltx>, files: Option<Arc<GameFiles>>) -> Self {
-        Self { ltx, files }
+        Self { ltx, files, own: Vec::new() }
+    }
+
+    /// The settings with the sections the open project's assets become in the game.
+    #[must_use]
+    pub fn with_own(mut self, own: Vec<OwnSection>) -> Self {
+        self.own = own;
+        self
+    }
+
+    /// The project file a section is made of, when it is one of the project's own.
+    #[must_use]
+    pub fn origin_of(&self, section: &str) -> Option<&str> {
+        self.own.iter().find(|o| o.name.eq_ignore_ascii_case(section)).map(|o| o.origin.as_str())
     }
 
     /// The tree itself.
@@ -86,14 +103,11 @@ impl GameSettings {
 impl Settings for GameSettings {
     fn section_exist(&self, section: &str) -> bool {
         self.ltx.section_exist(&section.to_ascii_lowercase())
+            || self.own.iter().any(|o| o.name.eq_ignore_ascii_case(section))
     }
 
     fn r_string(&self, section: &str, key: &str) -> Option<&str> {
-        let s = section.to_ascii_lowercase();
-        if !self.ltx.line_exist(&s, key) {
-            return None;
-        }
-        Some(self.ltx.r_string_raw(&s, key).ok().flatten().unwrap_or(""))
+        gz_game::own::own_value(&self.own, &self.ltx, section, key)
     }
 
     /// A file under `$game_config$`. Blocking: entities are made on the IO pool.
@@ -105,16 +119,22 @@ impl Settings for GameSettings {
 }
 
 /// The configs of the linked game, or the editor's own when no game is linked; `None` when
-/// neither loads.
+/// neither loads. A module that makes or changes config sections (an item asset, a config, a
+/// patch) is in them: the tree is the one its game would read.
 pub async fn settings(editor: &Editor) -> Option<Arc<GameSettings>> {
+    let own = OwnSections::all(editor).await;
+    let composed = ComposedConfigs::get(editor).await;
     if let Ok(link) = GameLink::of(editor)
         && let Ok(ltx) = link.configs().await
     {
         let files = link.files().await.ok();
-        return Some(Arc::new(GameSettings::new(ltx, files)));
+        return Some(Arc::new(GameSettings::new(composed.unwrap_or(ltx), files).with_own(own)));
+    }
+    if let Some(ltx) = composed {
+        return Some(Arc::new(GameSettings::new(ltx, None).with_own(own)));
     }
     match Bundled::of(editor).config_tree().await {
-        Ok(tree) => Some(Arc::new(GameSettings::new(tree.ltx.clone(), None))),
+        Ok(tree) => Some(Arc::new(GameSettings::new(tree.ltx.clone(), None).with_own(own))),
         Err(_) => None,
     }
 }

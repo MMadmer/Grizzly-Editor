@@ -2,12 +2,72 @@
 
 How a place in a level is built by editing text files: what to ask the editor, what to write, how to know it is
 right. Everything here works over MCP, over the socket and from a shell (`Grizzly-Cmd.exe run <command> ...`,
-no window) - only the lit pictures (`shot.viewport`, `shot.models`) need a window. `help about=level-design` prints
-the short form (section 9, the same text).
+no window) - only the pictures the graphics card draws (`shot.viewport`, `shot.models`) need a window, and
+`shot.scene`, `asset.preview` and `asset.thumbnail` draw the same things on the processor without one.
+`help about=level-design` prints the short form (section 9, the same text). `docs/GAME_LIBRARY.md` is the
+contract of what the editor knows of the game.
 
 A scene cannot be seen by whoever writes it as text. So the work is a loop: **look** (numbers and pictures),
 **write** (the scene's files and assets), **settle** (onto the ground), **check** (the audit, a picture), and only
 then **build** and **play**. Never write coordinates from memory: ask where the ground is.
+
+## 0. A level of the game: read it, then lie over it
+
+The editor keeps everything of the linked game described as text (`game.library` answers the folder): every
+model with its exact size, collision and bones, every texture, sound, particle effect, spawn section, material,
+and every level as a scene with a passport. Read before placing:
+
+| Question | Ask |
+|---|---|
+| What levels, models, sounds, effects, sections are there? | `asset.find kind=level \| model \| texture \| sound \| particle \| section \| material \| lightanim \| sound_env query=<words>` - `size=[min,max]` (the longest side, metres), `collides=`, `class=` (a section's kind: `npc`, `item`, `anomaly`, ...), paged. |
+| What exactly is this one? | `asset.card ref=<name> [kind=]` - for a model its box, pivot, surfaces, collision share, floors, bones with their shapes and mass; for a level its passport. |
+| What is this level like? | `asset.card ref=<level> kind=level`: the ground, every structure with its box and its `floors` (height, rectangle, clear height `ceiling` or `sky`, `ai_nodes`, `walkable`), the materials, the entities by section. A building's storeys are read here, not guessed from a picture. |
+| What does it look like? | `asset.preview ref=<model>` (a sheet of its sides with a scale bar), `asset.thumbnail refs=[...]` (many models at once, to choose from), `asset.preview ref=<level> kind=level`. |
+| What does a config or a script of the game say? | `game.search text=<words>`, `game.read path=<file>`. |
+
+A module that adds to a level of the game writes a scene **over** it - two lines:
+
+```lua
+-- rawdata/levels/agroprom_base.scene
+return {
+  scene = 2,
+  base = "l03_agroprom",
+}
+```
+
+The level's own objects (its geometry with its collision as `level_geometry`, every spawn point of the game by
+its name, its paths, lights, sounds, effects, its AI map) then stand in the scene, read from the game; the
+scene's files hold only what the module adds. `scene.objects own=true` lists the module's part; an object of the
+level answers `level = true` and cannot be changed. To take a spawn point of the level out of the game (an
+anomaly in the yard), `scene.delete objects=<name>` or one line of `spawns.lua`:
+`{ name = "agr_zone_mine_electric_strong_0002", removed = true }`.
+
+What a module places over a level:
+
+- **static objects** by `ref`: a library object, a model asset of the project, or any compiled model of the
+  game (`ref = "dynamics\\box\\box_wood_01.ogf"`); the build compiles them into the module's piece of the level.
+  A model of the game in another dress is a model asset over it (`source = "game:dynamics/box/box_wood_01.ogf"`
+  with the `surfaces` that change, section 4): static it is compiled like any model, `kind = "dynamic"` it is
+  a physics object the game spawns.
+- **spawn points** by `section`: any section of the game (`asset.find kind=section`), the module's own
+  characters (`section = "<module>_<id>"` of `characters/<id>.npcasset`) with an `order`
+  (`order = { kind = "guard", look = "<way>" }`), and the module's own items and whatever else it makes a
+  section of (`section = "<module>_<id>"` of `items/<id>.itemasset`; `game.lookup type=spawn_section` lists them
+  with the game's). No quest is needed to put a person or a thing somewhere.
+- **zones** with one `shape`: `shape = { shapes = { { kind = "box", size = { 20, 6, 12 } } } }`.
+- **lights**: `lightmap = true` bakes one into the module's piece (a point light, a spot light inside its
+  `cone`, a directional one), `dynamic = true` makes a point or a spot light shine in the game.
+- **glows** (`glows.lua`: a `texture` and a `radius` at a place - the halo of a lamp), **fog volumes**
+  (`fog.lua`: an emitter's box by `pos` and `scale`, the `occlusion` boxes of its `group`), **sound
+  environments** (`environments` of `sounds.lua`: a box with `inner` and `outer`, `asset.find kind=sound_env`),
+  **sound sources**, **particle effects** and **environment modifiers** (`point = "env_mod"`).
+- **wallmarks** are painted, not written: `scene.wallmarks action=set texture=<wm\\...>` then `action=add
+  start=<x,y,z> dir=<x,y,z>` lays one where the ray meets the level; they ship as faces of the module's piece.
+
+Lights that shine, sounds, effects, environment modifiers, glows, fog volumes and sound environments the build
+writes into the module's `levels\<level>\overlay.things`, and the game puts them beside the level's own. What a
+module cannot add to a level of the game says so in the check: sectors, portals and the level's bounds (`S222`),
+grass painted as details and an AI map painted over the level's (`S223`).
 
 ## 1. What is where: look before writing
 
@@ -15,14 +75,14 @@ then **build** and **play**. Never write coordinates from memory: ask where the 
 |---|---|
 | What does this place look like from above, and where is everything? | `shot.map position=<x,0,z> size=<m>` - every object in a colour of its own with its name, a grid in metres with coordinates in the margins, spawn points, lights, ways and volumes as signs (`signs=false` leaves them out). `below=<height>` starts the view under that height: what is under a roof or under the trees' crowns. `legend` lists the objects with their colour, middle and area, the largest first (100 rows, `legend=<n>` for more; `legend_total` counts them all); a pixel reads back to metres through `px_per_m` and `map` (`x = area.x0 + (px - map.left) / px_per_m`, `z = area.z1 - (py - map.top) / px_per_m`). |
 | How high is the ground, and how does it slope? | `shot.map mode=height` (colours, contour lines, the heights written where grid lines cross), or `scene.query action=heights area=<x0,z0,x1,z1> step=<m>` for the numbers: rows from `z0` up, each from `x0`, `null` where nothing is; at most 257 x 257 samples (a bigger request is refused naming a step that fits). |
-| What is under these points? | `scene.query action=ground positions=[[x,y,z],...] top=true` - the floor, its normal and slope, the object and its surface (texture, game material). Up to 1024 points a call. `top` starts above everything: under a tree that is its crown, so add `only=<the ground's object>` for the ground itself. |
+| What is under these points? | `scene.query action=ground positions=[[x,y,z],...]` - the floor under each point and the ceiling over it, the floor's normal and slope, the object and its surface (a collision face of a level answers its game material). It reads what stops a body, from the point down: a point inside a room answers that room's floor. `top=true` starts above everything instead (a roof, open ground). Up to 1024 points a call. |
 | What is in this box? | `scene.query action=box min=<x,y,z> max=<x,y,z>` (or `position=` + `size=`; `exact=true` tests triangles); `scene.objects near=<x,y,z> radius=<m> sort=distance bounds=true` or `box=` for the objects' own boxes. |
-| Is there a clear line between two points? | `scene.query action=ray from=<x,y,z> to=<x,y,z>` - the first thing in the way, with its surface; `all=true` for every one, nearest first. |
+| Is there a clear line between two points? | `scene.query action=ray from=<x,y,z> to=<x,y,z>` - the first thing in the way, with its surface; `all=true` for every one, nearest first. What stands in the level is in the way - objects, terrains, the bodies of spawn points; a volume (a zone's shape, a sound environment, a fog volume) is not, and is met only with `volumes=true`, each under its `kind`. |
 | How big is this model, what are its surfaces? | `model.info refs=<ref,...>` - the box in model space, the size, triangles, every surface with its texture, shaders and game material. `model.list query=<text> sizes=true` finds models; `shot.models refs=...` shows up to 16 side by side with their sizes. |
 | Would this model fit here? Where does it stand? | `scene.query action=fit ref=<model> position=<x,y,z> rotation=<...>` - `fits`, what blocks it and how deep, the ground under it, `gap`, and `rest`: the position at which it stands on the ground (on the highest point under its box). `except=<names>` leaves objects out - the object itself, when it is already written. |
-| Where near here is there room for it? | `scene.query action=free ref=<model> position=<x,y,z> radius=<m> count=<n>` - spots where it fits, standing on the ground, nearest first. |
+| Where near here is there room for it? | `scene.query action=free ref=<model> position=<x,y,z> radius=<m> count=<n>` - spots where it fits, standing on the floor of the point's height (the storey the point is on; `top=true`: the highest floor), nearest first. The answer's `below` is the height floors were looked for under - 1.5 m over the point: ground that rises past it within the radius (a slope) is not offered, so ask again from a point further up. `size=[x,y,z]` instead of `ref` asks for a box - a person is `[0.7, 1.8, 0.7]`. |
 | Can a creature walk here, and get from A to B? | `scene.query action=ai positions=[...]`, or `from=` + `to=` (`reachable`, `length`); `shot.map mode=ai` shows the nodes. |
-| What does it really look like? | `shot.viewport view=<top, front, back, left, right, iso> objects=<names>` (or `area=`), or `position=` + `target=`: a lit picture from a camera of its own, the author's camera untouched (`heading=<degrees>` turns the `iso` view about what it frames; 45 left out); `labels=true` writes the names in and answers their pixels; a flat view answers its `camera.px_per_m`. |
+| What does it really look like? | `shot.scene view=<top, front, back, left, right, iso> objects=<names>` (or `area=`), or `position=` + `target=`: the scene drawn on the processor, no window - what the scene holds of its own named where it is seen, `legend` with each one's pixel and whether it is seen, `camera` for reading a pixel back. `cut=<height>` leaves out what is wholly above it: `view=top area=<x0,z0,x1,z1> cut=<a storey's ceiling>` is that storey's plan. With a window, `shot.viewport` takes the same camera and answers the lit, textured picture (`heading=<degrees>` turns its `iso` view; `labels=true`). |
 
 Positions are metres, rotations degrees, `[x, y, z]`; +Y is up. On a map +X is right and +Z is up.
 
@@ -39,10 +99,12 @@ those. One object is one entry of a list - one line is fine:
 ```
 
 - **Names, not numbers.** A name is unique in the scene; groups, sectors, ways and quests call an object by it.
-- **`ref`** is a library object (`statics\\barrel\\bochka_wood1`) or a model asset of the project by its path
-  (`models/yard/hut.meshasset`, section 4).
-- **`authored = true`** on a level of the game: the object is the module's and ships. Without it the object is
-  taken for the game's own and does not ship - the audit says so (`S210`).
+- **`ref`** is a library object (`statics\\barrel\\bochka_wood1`), a compiled model of the game
+  (`dynamics\\box\\box_wood_01.ogf`) or a model asset of the project by its path (`models/yard/hut.meshasset`,
+  section 4).
+- **Whose it is.** In a scene over a level (`base`, section 0) everything the files hold is the module's and
+  ships; nothing is marked. In a scene that holds a whole level imported from an X-Ray SDK scene, the module's
+  objects say `authored = true` - without it an object is taken for the game's own and does not ship (`S210`).
 - The editor follows the files: an open scene re-reads a file the moment it is written, and the change is one undo
   step. A file that does not parse **changes nothing** - the scene keeps what it had, the problem (`syntax`) has the
   file, line and column, `scene.save` leaves that file as it is and answers it under `skipped`, and the scene comes
@@ -75,7 +137,7 @@ kind=model|texture|sound`).
 
 | Kind | File | Source | The module ships |
 |---|---|---|---|
-| Model | `*.meshasset` (`mesh = 1`) | `.glb`, `.gltf`, `.obj`, `.object`, or `parts` written in it | static: nothing of its own - it is compiled into the level (the piece); dynamic: `meshes\<name>.ogf` and the asset |
+| Model | `*.meshasset` (`mesh = 1`) | `.glb`, `.gltf`, `.obj`, `.object`, a compiled `.ogf` of the project or of the game (`source = "game:<name>.ogf"`), or `parts` written in it | static: nothing of its own - it is compiled into the level (the piece); dynamic: `meshes\<name>.ogf` and the asset |
 | Texture | `*.texasset` (`tex = 1`) | `.png`, `.jpg`, `.tga`, `.bmp`, `.dds` | `textures\<name>.dds` and the asset |
 | Sound | `*.sndasset` (`snd = 1`) | `.wav`, `.ogg` | `sounds\<name>.ogg` and the asset |
 
@@ -155,9 +217,43 @@ return {
 - `level.inspect part=cuts|ai_edits|pieces` reads what the build wrote; the game's log says `* [cuts] <level>: ...`
   and `* [ai edits] <level>: ...`.
 
+### What the game makes of it
+
+- **A model of the game placed as a static object** (`ref = "<name>.ogf"`, or a static `.meshasset` over one)
+  is compiled into the level's geometry. Its parts name the shader the model was made for (`models\model`);
+  the build compiles such a surface with the game's shader for level geometry that treats the texture's alpha
+  the same way and says which in the step's `notes` - nothing to write. `asset.find kind=shader` says what
+  each shader is for (`draws`: `level`, `model`, `other`; `as_level` for a model's).
+- **A model the game draws nothing for** (`invisible` on its card: a stash's case, a collider) is there and
+  unseen. A stash is such a case put inside something that is drawn - a crate, a locker; anything else that
+  wears one is `S224`.
+- **A glow** is a picture that faces the viewer: `texture`, `radius` in metres, or `fixed_size = true` and a
+  `radius` that is a share of half the screen's height. It is drawn like a lens flare; `shader =
+  "effects\\sun"` hides it by depth as well. No other shader draws one (`S225`).
+- **A fog volume** is a simulated mist in a box. The game's own profiles (`environment/fog/*.ltx`) are made for
+  its undergrounds - dense, and lit in full: in the open such a volume is a white lump. A mist under the sky
+  takes a profile of the module's own (`gamedata\configs\environment\fog\<name>.ltx`, named from `configs`)
+  with a low `Density` (0.1) and `Hemi` (0.2); a file that is no profile is `S220` with what it lacks.
+- **Taking a spawn point of the level out** (`{ name, removed = true }`) changes the game's own world for the
+  module's mode: a new game with the module has none of them, and a save made in it keeps them out for a game
+  without the module too. The build says how many it takes out.
+- **Seeing it in the game**: the game's own QA starts a built module on a hidden desktop and takes pictures at
+  the places asked (its `tools/qa/module`); a model that is not drawn, a light that does not reach, a mist that
+  is a lump are seen there and nowhere else.
+
 ## 6. Is it right: check before building
 
-- `asset.check` - the files: syntax, unknown models, bad values, with positions.
+- `asset.check` - the files: syntax, unknown models, bad values, with positions. A sound, a particle effect, a
+  light animation, a sound environment, a texture, a compiled model or a fog profile that neither the game nor
+  the project has is `S220` at its key with the nearest names; a directional light asked to shine in the game
+  is `S221` (the game's one directional light is the level's sun); over a level of the game a sector, a portal
+  or a bound of the level is `S222` and painted details or a painted AI map are `S223` (the game takes none of
+  them from a module); an object whose model the game draws nothing for is `S224` at its line - the model's
+  card says `invisible`, and a section whose own model is such (a stash is an unseen case inside something
+  drawn) is not reported; a glow that names a shader no glow is drawn with is `S225` (the game draws a glow
+  like a lens flare, or like the sun with `effects\sun`); a fog profile that is a file and no profile - no
+  `[volume]` that counts its emitters, an emitter without a key the game reads - is `S220` with what it
+  lacks; a key that is nearly a key of the kind (`type` for `kind`) is a warning that names the key meant.
 - `scene.audit` - where things stand, every finding a warning at the object's line of its file:
 
   | Code | Word | What |
@@ -176,6 +272,12 @@ return {
   | `S212` | `terrain_unmade` | a terrain whose model cannot be made from what its file says |
   | `S213` | `terrain_bare` | a terrain that wears the ground's look (`surface = "ground"`) with no ground under it |
   | `S214` | `radio_playlist` | a radio bound (`radio = { plays = ... }`) to a playlist of the module that `mod.ltx` does not declare |
+  | `S215` | `in_geometry` | a wall or a steep slope of the level (or of a terrain) passes through its middle |
+  | `S216` | `ghost` | a static object none of whose faces stop a body |
+  | `S217` | `on_ghost` | it stands on faces that are drawn and stop nothing: a body falls through |
+
+  The audit reads what stops a body - a level's collision, the faces of a model that collide - and a spawn
+  point is the model its entity wears: a crate, a lamp, a stalker stands, floats and overlaps like any object.
 
   Left out, it checks the objects marked `authored` and every terrain (on a level of the game what the module
   adds), else every object; `objects=` or `area=` choose, `checks=` narrows (codes or words), `limit=` caps the answer.
@@ -243,32 +345,50 @@ The text `help about=level-design` prints:
 Building a place in a level from text files: look, write, settle, check, build, play.
 docs/LEVEL_DESIGN.md is the whole guide. Metres, degrees, [x, y, z]; +Y up; on a map +X right, +Z up.
 
+The game - read before placing (docs/GAME_LIBRARY.md):
+  asset.find kind=level|model|texture|sound|particle|section|material query=...   what there is
+  asset.card ref=<name> [kind=level]     everything known of one; a level's passport: structures, floors
+  asset.preview ref=...   asset.thumbnail refs=[...]   pictures of models without a window
+  A scene over a level:  return { scene = 2, base = "<level>" }  - the files hold only what the module adds;
+  spawns.lua { name = "<a spawn of the level>", removed = true } takes it out; scene.objects own=true
+
 Look - never write a coordinate from memory:
   shot.map position=<x,0,z> size=<m> [mode=objects|height|ai] [highlight=...]
                                    a map from above; legend, px_per_m and map turn pixels into metres
   scene.query action=heights area=<x0,z0,x1,z1> step=<m>      the ground's heights (257 x 257 at most)
   scene.query action=ground positions=[[x,y,z],...] top=true  floor, slope, object, surface
-  scene.query action=ray from=... to=... [all=true]           what is in the way
+  scene.query action=ray from=... to=... [all=true] [volumes=true]   what is in the way
   scene.query action=box min=... max=...  |  scene.objects near=... radius=... bounds=true  |  scene.get objects=...
   scene.query action=fit ref=<model> position=...            fits, blocked_by, rest (where it stands)
   scene.query action=free ref=<model> position=... radius=...  spots where it fits
   scene.query action=ai positions=... | from=... to=...        the AI map
   model.info refs=...  model.list query=... sizes=true  shot.models refs=...  preview.model path=...
-  shot.viewport view=top|iso|... objects=... labels=true | position=... target=...   a lit picture
+  shot.scene view=top area=<x0,z0,x1,z1> cut=<height> | position=... target=...     the scene, no window
+  shot.viewport view=top|iso|... objects=... labels=true | position=... target=...   a lit picture (a window)
 
 Write - the scene is <name>.scene and a folder of Lua files; the editor follows every write:
-  objects.lua   { name = "crate_01", ref = "<library ref or models/x.meshasset>", pos = {...}, authored = true }
+  objects.lua   { name = "crate_01", ref = "<library ref, <model>.ogf or models/x.meshasset>", pos = {...} }
+  spawns.lua    { name = "guard", section = "<a section, or <module>_<character or item id>>", pos = {...},
+                  order = { kind = "guard" } }   zones: shape = { shapes = { { kind = "box", size = {...} } } }
+  lights.lua    { name, pos, rot, kind = "point"|"spot"|"directional", cone, range, lightmap, dynamic }
+  glows.lua     { name, pos, texture, radius }      fog.lua  { name, pos, scale, kind, group, profile }
+  sounds.lua    sources { name, pos, sound }   environments { name, pos, scale, inner, outer }
+  wallmarks     scene.wallmarks action=set texture=... then action=add start=... dir=...
   groups.lua    a group with ref = "<x.group>" and no members is a prefab: placed when read
   terrain.lua   { name, pos, size, cell, base = "ground", edits = {...}, surface = "ground", cut = true }
                 (scene.place kind=terrain places one; the edits go in the file)
-  models        *.meshasset (a source or parts), *.texasset, *.sndasset; asset.import from=... to=...
-                brings .glb/.gltf/.obj/pictures/sounds in; file.create kind=model|texture|sound
+  models        *.meshasset (a source, source = "game:<model>.ogf", or parts), *.texasset, *.sndasset;
+                asset.import from=... to=... brings .glb/.gltf/.obj/.ogf/pictures/sounds in;
+                file.create kind=model|texture|sound
   A file that does not parse changes nothing: the problem has its line, scene.save answers it skipped
   (and unwritten, when the scene holds changes of its objects: they go over the file once it reads).
 
 Settle:  scene.align action=drop|surface objects=... [offset=<m>], then scene.save (only changed lines).
-Check:   asset.check   scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S214 radio_playlist)
+Check:   asset.check (S220 a name nobody has, S221-S223 what the game does not take, S224 a model nobody sees,
+         S225 a glow's shader)
+         scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S217 on_ghost)
 Build:   level.status   level.build   level.inspect part=pieces|cuts|ai_edits   mod.build (answers media)   mod.info
+         level.inspect part=visuals piece=main [shader=<text>]   what the module's piece of the level holds
 Play:    level.play
 ```
 <!-- /level-design topic -->

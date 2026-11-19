@@ -26,7 +26,7 @@ pub use particles::{
     Particles, effect_flags,
 };
 pub use senv::{SoundEnvironment, SoundEnvironments};
-pub use shaders::{Blender, MatrixDef, ShaderXrlc, Shaders, ShadersXrlc, WaveForm};
+pub use shaders::{Blender, BlenderProp, Draws, MatrixDef, ShaderXrlc, Shaders, ShadersXrlc, WaveForm};
 
 use gz_chunk::{Reader, Writer};
 use smol_str::SmolStr;

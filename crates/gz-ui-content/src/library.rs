@@ -3,7 +3,9 @@
 //! index and the editor's library (Preferences > Library). Built on the pools; a frame never
 //! waits for one.
 //!
-//! - Objects, Groups, Base Scenes: the library's `rawdata` folders (the game holds none).
+//! - Objects, Groups: the library's `rawdata` folders (the game holds none).
+//! - Base Scenes: the library's `rawdata\levels`, and under `game` the levels of the linked game -
+//!   a level opens the project's scene over it, or starts one (`docs/GAME_LIBRARY.md`, 8).
 //! - Textures, Sounds: the game's `textures` / `sounds` first, then what only the library has -
 //!   the order a scene resolves them in (`docs/ASSETS.md` section 9).
 //! - Particles: the effects and groups of the library's `particles.xr` (`file.list`).
@@ -202,10 +204,53 @@ async fn particles(editor: &Arc<Editor>) -> Catalog {
     c
 }
 
+/// The folder of Base Scenes that lists the linked game's levels.
+pub(crate) const GAME_LEVELS: &str = "game";
+
+/// The level of the game a Base Scenes entry is, when it is one: `game\<level>.scene`.
+#[must_use]
+pub(crate) fn game_level(cat: &Catalog, path: &str) -> Option<String> {
+    if cat.source != Source::Library || cat.category != model::SCENES {
+        return None;
+    }
+    let f = cat.file(path)?;
+    (f.origin == Origin::Game).then(|| crate::catalog::stem(model::leaf_of(&f.path)).to_owned())
+}
+
+/// The library's base scenes and, under `game`, the levels of the linked game.
+async fn base_scenes(editor: &Arc<Editor>) -> Catalog {
+    let root = gz_project::library_root(editor);
+    let mut cat = editor.exec.io(move || from_library(&root, model::SCENES)).await;
+    let source = gz_scene::base::BaseLevels::of(editor).get();
+    let mut levels = editor.exec.io(move || source.map(|s| s.names()).unwrap_or_default()).await;
+    levels.sort();
+    if levels.is_empty() {
+        return cat;
+    }
+    // the game's levels are listed whether the library holds scenes or not
+    cat.note = None;
+    for level in levels {
+        cat.add(FileItem {
+            path: SmolStr::new(format!("{GAME_LEVELS}\\{level}.scene")),
+            size: 0,
+            asset: None,
+            origin: Origin::Game,
+            label: Some(level.clone()),
+            note: Some(SmolStr::new(
+                "A level of the game. Open: the project's scene over it, or a new one - a scene that holds what the module adds.",
+            )),
+            companions: Vec::new(),
+            published: None,
+        });
+    }
+    cat.sort();
+    cat
+}
+
 /// The game's revision a kind's catalog depends on (0 for the kinds that never read the game).
 #[must_use]
 pub(crate) fn reads_game(category: usize) -> bool {
-    matches!(category, model::TEXTURES | model::SOUNDS | model::SPAWNS)
+    matches!(category, model::TEXTURES | model::SOUNDS | model::SPAWNS | model::SCENES)
 }
 
 /// Builds the catalog of a Library kind. The game is read (and mounted, the first time) for the
@@ -215,6 +260,7 @@ pub(crate) async fn build(editor: &Arc<Editor>, category: usize) -> Catalog {
     match category {
         model::PARTICLES => particles(editor).await,
         model::SPAWNS => spawn_sections(editor).await,
+        model::SCENES => base_scenes(editor).await,
         model::TEXTURES | model::SOUNDS => {
             let game = match Project::of(editor) {
                 Ok((_, p)) if !p.game_root().is_empty() => editor.exec.io(move || p.game_files().ok()).await,

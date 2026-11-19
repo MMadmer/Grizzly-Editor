@@ -127,6 +127,11 @@ struct InspectParams {
     /// visuals: only those whose shader table entry holds this text (any case).
     #[serde(default)]
     shader: Option<String>,
+    /// visuals: the visuals of this piece of the level (`pieces\<name>`) in place of the level's
+    /// own. What a module adds to a level of the game is the piece `main`; a level built in
+    /// streaming cells has one a cell (`part=pieces` names them).
+    #[serde(default)]
+    piece: Option<String>,
     /// Skip this many rows first.
     #[serde(default)]
     offset: Option<usize>,
@@ -140,6 +145,7 @@ struct Query {
     bounds: Option<Aabb>,
     sector: Option<u32>,
     shader: Option<String>,
+    piece: Option<String>,
     offset: usize,
     limit: usize,
 }
@@ -161,6 +167,7 @@ async fn inspect(ed: Arc<Editor>, p: InspectParams) -> Reply {
         },
         sector: p.sector,
         shader: p.shader.as_ref().map(|s| s.to_lowercase()),
+        piece: p.piece.as_ref().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
         offset: p.offset.unwrap_or(0),
         limit: p.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
     };
@@ -434,7 +441,42 @@ fn read_graph(dir: &Path) -> Result<Option<gz_fmt_spawn::GameGraph>, String> {
 
 // ------------------------------------------------------------------------------------- the parts
 
+/// The visuals of one piece of the level: the piece's own file read as the game reads it.
+fn piece_visuals(pieces: &Path, name: &str, q: &Query) -> Result<Value, String> {
+    let known = || -> String {
+        let names: Vec<String> = piece_folders(pieces)
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        if names.is_empty() { "it has none".to_owned() } else { format!("it has: {}", names.join(", ")) }
+    };
+    // a piece is a folder of the level's pieces by its plain name
+    let plain = !name.contains(['/', '\\', ':']) && name != "." && name != "..";
+    let dir = pieces.join(name);
+    if !plain || !dir.join("piece").is_file() {
+        return Err(format!("{} holds no piece '{name}' ({}).", show(pieces), known()));
+    }
+    let bytes = read_file(&dir, "piece")?.ok_or_else(|| format!("{} has no piece file.", show(&dir)))?;
+    let level = parse("piece", CompiledLevel::read_piece(&bytes))?;
+    let mut out = visuals(&level, q);
+    if let Value::Object(o) = &mut out {
+        o.insert("folder".into(), json!(show(&dir)));
+        o.insert("part".into(), json!(q.part.name()));
+        o.insert("piece".into(), json!(name));
+    }
+    Ok(out)
+}
+
 fn read_part(dir: &Path, pieces: &Path, q: &Query) -> Result<Value, String> {
+    if let Some(name) = &q.piece {
+        if q.part != Part::Visuals {
+            return Err(
+                "piece: with part=visuals - a piece holds visuals; its row of part=pieces says the rest."
+                    .to_owned(),
+            );
+        }
+        return piece_visuals(pieces, name, q);
+    }
     if matches!(q.part, Part::Pieces | Part::Cuts | Part::AiEdits) {
         // the module's files of the level, beside its pieces
         let module = pieces.parent().unwrap_or(dir);
@@ -1143,6 +1185,21 @@ mod tests {
         let s = call(&rt, &ed, json!({ "folder": folder }));
         assert_eq!(s["pieces"][0]["name"], "main", "{s}");
         assert_eq!(p["cut"], false);
+        // the piece's own visuals, read as the level's are; a piece the level has not is named
+        let v = call(&rt, &ed, json!({ "folder": folder, "part": "visuals", "piece": "main" }));
+        assert_eq!(
+            (v["ok"].clone(), v["total"].clone(), v["piece"].clone()),
+            (json!(true), json!(2), json!("main")),
+            "{v}"
+        );
+        assert!(v["visuals"][0]["shader_name"].is_string(), "{v}");
+        let none = call(&rt, &ed, json!({ "folder": folder, "part": "visuals", "piece": "cell_9_9" }));
+        assert_eq!(none["ok"], false, "{none}");
+        assert!(none["error"].as_str().unwrap().contains("it has: main"), "{none}");
+        let out = call(&rt, &ed, json!({ "folder": folder, "part": "visuals", "piece": "..\\main" }));
+        assert_eq!(out["ok"], false, "{out}");
+        let wrong = call(&rt, &ed, json!({ "folder": folder, "part": "sectors", "piece": "main" }));
+        assert!(wrong["error"].as_str().unwrap().contains("part=visuals"), "{wrong}");
         // a cut of the level beside it: the module's piece carries it
         fs::write(dir.path().join("overlay.cut"), gz_terrain::write_cuts(&[])).unwrap();
         let r = call(&rt, &ed, json!({ "folder": folder, "part": "pieces" }));

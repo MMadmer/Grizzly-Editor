@@ -292,6 +292,60 @@ impl SpawnData {
     }
 }
 
+/// A zone has one shape and two holders: the attached shape object is what the scene edits, the
+/// files say (`shape`) and every export bakes; the entity carries the same for whoever reads
+/// the entity. A point that has only the entity's shapes (a level of the game read from its
+/// spawn, a file that says `props.shapes`) gets the object made from them, where the point
+/// stands; a point with the object gives its shapes to an entity that says none. An entity that
+/// says shapes of its own beside the object (an X-Ray SDK scene's) keeps them as they are.
+pub fn sync_shape(o: &mut Object) {
+    let xform = o.xform;
+    let crate::model::ObjData::Spawn(d) = &mut o.data else { return };
+    let Some(SpawnEntity::Decoded(e)) = &mut d.entity else { return };
+    match &d.attached {
+        Some(a) => {
+            let crate::model::ObjData::Shape(s) = &a.data else { return };
+            if e.shapes().is_empty() && !s.shapes.is_empty() {
+                // a kind that holds no shape keeps none: nothing to say
+                let _ = Arc::make_mut(e).set_shapes(&super::shape::entity_shapes(a.xform.scale, &s.shapes));
+            }
+        }
+        None => {
+            let shapes = super::shape::shape_defs(e.shapes());
+            if !shapes.is_empty() {
+                let mut a = Object::new(
+                    crate::class::ObjClass::Shape,
+                    "",
+                    crate::model::ObjData::Shape(super::ShapeData { shapes, usage: 0 }),
+                );
+                a.xform = xform;
+                d.attached = Some(Arc::new(a));
+            }
+        }
+    }
+}
+
+/// The model a spawn point's entity wears, as a reference of the scene's library (the game's
+/// compiled model, `dynamics\\box\\box_wood_01.ogf`): what stands there in the game - a crate, a
+/// lamp, a stalker. `None` for a point without an entity or an entity without a model.
+#[must_use]
+pub fn visual_ref(o: &Object) -> Option<String> {
+    let crate::model::ObjData::Spawn(d) = &o.data else { return None };
+    if d.kind != PointKind::Spawn {
+        return None;
+    }
+    let name = d.entity.as_ref()?.entity()?.visual_name()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let name = if name.len() > 4 && name[name.len() - 4..].eq_ignore_ascii_case(".ogf") {
+        &name[..name.len() - 4]
+    } else {
+        name
+    };
+    Some(format!("{}.ogf", name.replace('/', "\\")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -482,6 +482,15 @@ pub fn parse_scene(
         n.data = crate::objects::default_data(n.class);
         state.replace(n);
     }
+    // a zone's shape is said once: a point whose entity says no shapes takes its shape object's
+    let zones: Vec<_> = state.of_class(crate::class::ObjClass::SpawnPoint).cloned().collect();
+    for zone in zones {
+        let mut synced = (*zone).clone();
+        crate::objects::sync_shape(&mut synced);
+        if synced != *zone {
+            state.replace(synced);
+        }
+    }
     Ok(LoadedScene { state, warnings })
 }
 

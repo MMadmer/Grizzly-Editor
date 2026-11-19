@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CRATES = ROOT / "crates"
 UI = ["gz-ui", "gz-app", "gz-ui-app", "gz-ui-content", "gz-ui-graph", "gz-ui-level", "gz-ui-mod", "gz-ui-pda",
-      "gz-ui-previews", "gz-ui-release", "gz-ui-viewport", "gz-ui-world", "gz-particles"]
+      "gz-ui-previews", "gz-ui-release", "gz-ui-text", "gz-ui-viewport", "gz-ui-world", "gz-particles"]
 
 LIT = re.compile(r'(?<![A-Za-z0-9_#])(?:r(#*)"(.*?)"\1|"((?:[^"\\]|\\.)*)")', re.S)
 # what a literal that is no word of the window looks like

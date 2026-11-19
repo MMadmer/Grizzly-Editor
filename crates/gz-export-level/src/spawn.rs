@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use gz_base::{Finding, Findings};
 use gz_entities::{Entity, Settings, Shape};
-use gz_scene::math::{Mat4, Vec3, get_xyz};
+use gz_scene::math::{Vec3, get_xyz};
 use gz_scene::objects::radio::RadioCx;
 use gz_scene::objects::{CF_SPHERE, PointKind, SpawnEntity};
 use gz_scene::{ObjClass, ObjData, Object, SceneState};
@@ -42,6 +42,10 @@ pub struct SpawnInput<'a> {
     pub radio: Option<&'a RadioCx>,
     /// The `.xspawn` on disk, for the merge (empty when there is none).
     pub old_text: &'a str,
+    /// The linked game loads a module's piece of a level (`level-pieces`): a static object of the
+    /// module is geometry of that piece, compiled by the level build with its collision, and no
+    /// object of this layer - written here as well it would stand in the game twice.
+    pub statics_in_piece: bool,
 }
 
 /// The counts and lines the result dialog and `level.export kind=spawn` report.
@@ -159,6 +163,11 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         if crate::gather::is_model_asset(&so.reference) && !matches!(asset, Some(Some(_))) {
             continue;
         }
+        // any other static object too, where the game loads the module's piece: the piece
+        // carries its picture, its light and its collision
+        if input.statics_in_piece && !so.visual_mode() && !matches!(asset, Some(Some(_))) {
+            continue;
+        }
         let op = unique_op(&replaced, &o.name);
         let visual = match asset {
             Some(Some(name)) => name.clone(),
@@ -182,8 +191,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             }
         };
         if !reachable {
-            out.log.warn(format!(
-                "[XMS] spawn export: visual '{visual}' of '{op}' is neither in the game nor in the project - op skipped, it would crash the game"
+            out.warn(format!(
+                "'{op}' is not baked: its model '{visual}' is neither in the game nor in the project, and an object without its model stops the game"
             ));
             out.result.missing += 1;
             out.result.skipped += 1;
@@ -266,7 +275,10 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         }
         let Some(entity) = entity_of(raw, input.settings) else {
             // the configs that read the entity are not there: nothing of it can be baked safely
-            out.log.warn(format!("[XMS] spawn export: '{}' ({sp_section}) cannot be read without the linked game's configs - op skipped", o.name));
+            out.warn(format!(
+                "'{}' ({sp_section}) is not baked: it cannot be read without the linked game's configs",
+                o.name
+            ));
             out.result.skipped += 1;
             continue;
         };
@@ -301,8 +313,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
                     staged_now.insert(vname.clone());
                 }
                 Found::Missing => {
-                    out.log.warn(format!(
-                        "[XMS] spawn export: visual '{vname}' of '{op}' exists neither in the game, the project, nor the editor's data - op skipped, it would crash the game"
+                    out.warn(format!(
+                        "'{op}' is not baked: its model '{vname}' is neither in the game, the project, nor the editor's data, and an object without its model stops the game"
                     ));
                     out.result.missing += 1;
                     out.result.skipped += 1;
@@ -314,8 +326,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         // no model anywhere is the same crash spelled differently; a section with its own
         // default (the inventory_box ghost) is fine without a line
         if vname.is_empty() && section_visual.is_none() && object.and_then(|ob| ob.physic()).is_some() {
-            out.log.warn(format!(
-                "[XMS] spawn export: '{op}' ({sp_section}) has no model at all - op skipped, it would crash the game; pick one in Model\\Visual"
+            out.warn(format!(
+                "'{op}' ({sp_section}) is not baked: it has no model at all, and an object without one stops the game - give it one (`props.visual`)"
             ));
             out.result.missing += 1;
             out.result.skipped += 1;
@@ -330,11 +342,17 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         );
         if !vname.is_empty() {
             let _ = write!(fresh, "visual    = {vname}\r\n");
-            // a collision-only model (named *collider*) is invisible by design
-            if !vname.contains("collider") && bytes.as_deref().is_some_and(ogf_is_ghost) {
+            // a collision-only model (named *collider*) is unseen by design, and so is the model
+            // of a section whose own model is unseen (a stash's case)
+            let own_way = section_visual
+                .map(config_visual)
+                .and_then(|own| input.visuals.spawns.get(&own))
+                .and_then(|own| own.bytes.as_deref())
+                .is_some_and(ogf_is_ghost);
+            if !vname.contains("collider") && !own_way && bytes.as_deref().is_some_and(ogf_is_ghost) {
                 out.result.invisible += 1;
-                out.log.warn(format!(
-                    "[XMS] spawn export: '{op}' keeps '{vname}', a model the engine draws nothing for - the object works but stays invisible in game; pick a real mesh in Model\\Visual"
+                out.warn(format!(
+                    "'{op}' wears '{vname}', a model the game draws nothing for: the object works and nobody sees it"
                 ));
             }
         }
@@ -660,18 +678,7 @@ pub fn merge_spawn_text(old: &str, replaced: &[String], fresh: &str) -> String {
 /// attached shape. Exposed for the level build's restrictor checks.
 #[must_use]
 pub fn entity_shapes(scale: Vec3, shapes: &[gz_scene::objects::ShapeDef]) -> Vec<Shape> {
-    let s_matrix = gz_scene::math::scale_matrix(scale);
-    shapes
-        .iter()
-        .map(|sh| {
-            if sh.kind == CF_SPHERE {
-                Shape::Sphere { center: s_matrix.transform_tiny(sh.center()), radius: sh.radius() * scale.x }
-            } else {
-                let b: Mat4 = sh.matrix().mul_a43(&s_matrix);
-                Shape::Box { i: b.row(0), j: b.row(1), k: b.row(2), c: b.c() }
-            }
-        })
-        .collect()
+    gz_scene::objects::entity_shapes(scale, shapes)
 }
 
 #[cfg(test)]
@@ -800,6 +807,7 @@ mod tests {
             game_patrols: &patrols,
             radio: None,
             old_text: "",
+            statics_in_piece: false,
         };
         let bake = bake(&input).unwrap();
         let text = bake.text.clone().unwrap_or_default();
@@ -814,6 +822,26 @@ mod tests {
         let bake = super::bake(&input).unwrap();
         let text = bake.text.clone().unwrap_or_default();
         assert!(bake.stage.is_empty() && !text.contains("[obj:"), "{text}");
+        // a game that loads the module's piece: a static object the piece compiles is no object of
+        // this layer whatever its model is, a dynamic model asset still is
+        let mut both = s.clone();
+        both.insert(authored(
+            Object::new(
+                ObjClass::SceneObject,
+                "box",
+                ObjData::SceneObject(SceneObjectData::library("props_box.ogf")),
+            ),
+            Vec3::new(4.0, 2.0, 3.0),
+        ));
+        let mut found = visuals.clone();
+        found.props.insert("props_box.ogf".into(), Found::Game);
+        let with_piece =
+            SpawnInput { scene: &both, visuals: &found, statics_in_piece: true, mirror: false, ..input };
+        let text = super::bake(&with_piece).unwrap().text.unwrap_or_default();
+        assert!(!text.contains("[obj:box]") && text.contains("[obj:crate]"), "{text}");
+        let without = SpawnInput { statics_in_piece: false, ..with_piece };
+        let text = super::bake(&without).unwrap().text.unwrap_or_default();
+        assert!(text.contains("[obj:box]"), "a game without pieces gets the prop as an object: {text}");
         assert!(crate::gather::is_model_asset("Models/Hut.MeshAsset"));
         assert!(!crate::gather::is_model_asset("meshes/props/box.ogf"));
         assert!(!crate::gather::is_model_asset(".meshasset"));
@@ -841,6 +869,7 @@ mod tests {
             game_patrols: &patrols,
             radio: None,
             old_text: "",
+            statics_in_piece: false,
         };
         let bake = bake(&input).unwrap();
         let expected = format!(
@@ -894,6 +923,7 @@ mod tests {
             game_patrols: &patrols,
             radio: None,
             old_text: "[obj:hand_made]\r\nop        = add\r\n\r\n[obj:guard]\r\nop = add\r\n",
+            statics_in_piece: false,
         };
         let bake = bake(&input).unwrap();
         let r = &bake.result;
@@ -901,6 +931,7 @@ mod tests {
         assert_eq!(
             r.warnings,
             [
+                "'box_1' is not baked: its model 'props\\box' is neither in the game nor in the project, and an object without its model stops the game",
                 "'guard' patrols 'nowhere', which is neither a way path of this level nor a path of the game",
                 "way path 'walk_1' is left out - the game has a path of that name; rename yours",
             ]
@@ -909,6 +940,71 @@ mod tests {
         // the hand-written op stays, the exported one is rewritten
         assert!(text.starts_with("[obj:hand_made]\r\nop        = add\r\n\r\n[obj:start]\r\n"));
         assert_eq!(text.matches("[obj:guard]").count(), 1);
+    }
+
+    /// An object whose model nobody sees is named in the bake's warnings - unless its section's
+    /// own model is unseen too (a stash is an unseen case inside something drawn): that is the
+    /// section's way and nothing is said.
+    #[test]
+    fn an_unseen_model_is_named_unless_it_is_the_sections_way() {
+        fn chunk(id: u32, body: &[u8]) -> Vec<u8> {
+            let mut v = id.to_le_bytes().to_vec();
+            v.extend_from_slice(&u32::try_from(body.len()).unwrap().to_le_bytes());
+            v.extend_from_slice(body);
+            v
+        }
+        fn model(texture: &[u8]) -> crate::visuals::SpawnVisual {
+            let mut file = chunk(1, &[0u8; 8]);
+            file.extend(chunk(9, &chunk(0, &chunk(2, texture))));
+            crate::visuals::SpawnVisual { found: Found::Game, bytes: Some(Arc::from(file)) }
+        }
+        let sections = |crate_model: &'static str, stash_model: &'static str| {
+            settings()
+                .section("physic_object", &[("class", "O_PHYS_S"), ("visual", crate_model)])
+                .section("inventory_box", &[("class", "S_INVBOX"), ("visual", stash_model)])
+        };
+        // both are placed wearing the second case, on sections whose own models differ
+        let placed = sections("dynamics\\case_2.ogf", "dynamics\\case_2.ogf");
+        let st = sections("dynamics\\barrel.ogf", "dynamics\\case_1.ogf");
+        let mut s = SceneState::default();
+        for (name, section) in [("crate", "physic_object"), ("stash", "inventory_box")] {
+            let mut sd = SpawnData::of_kind(PointKind::Spawn);
+            sd.entity = Some(SpawnEntity::Decoded(Arc::new(Entity::create(section, &placed).unwrap())));
+            s.insert(authored(
+                Object::new(ObjClass::SpawnPoint, name, ObjData::Spawn(Box::new(sd))),
+                Vec3::ZERO,
+            ));
+        }
+        let unseen: &[u8] = b"glow\\glow_ghost\0default\0";
+        let mut visuals = Visuals::default();
+        visuals.spawns.insert("dynamics\\case_1".into(), model(unseen));
+        visuals.spawns.insert("dynamics\\case_2".into(), model(unseen));
+        visuals.spawns.insert("dynamics\\barrel".into(), model(b"props\\barrel\0models\\model\0"));
+        let patrols = HashSet::new();
+        let input = SpawnInput {
+            scene: &s,
+            level: "l01".into(),
+            selected_only: false,
+            section: None,
+            mode: None,
+            mirror: true,
+            visuals: &visuals,
+            settings: Some(&st),
+            game_patrols: &patrols,
+            radio: None,
+            old_text: "",
+            statics_in_piece: false,
+        };
+        let bake = bake(&input).unwrap();
+        let text = bake.text.clone().unwrap_or_default();
+        assert!(text.contains("[obj:crate]") && text.contains("[obj:stash]"), "{text}");
+        assert_eq!(bake.result.invisible, 1);
+        assert_eq!(
+            bake.result.warnings,
+            [
+                "'crate' wears 'dynamics\\case_2', a model the game draws nothing for: the object works and nobody sees it"
+            ]
+        );
     }
 
     /// A radio's Plays rides in its custom data as `[xms_radio]`, keyed by the module; a playlist
@@ -958,6 +1054,7 @@ mod tests {
             game_patrols: &patrols,
             radio: Some(&radio),
             old_text: "",
+            statics_in_piece: false,
         };
         let bake = bake(&input).unwrap();
         let cd = |op: &str| {
@@ -1009,6 +1106,7 @@ mod tests {
             game_patrols: &patrols,
             radio: None,
             old_text: "",
+            statics_in_piece: false,
         };
         let b = bake(&input).unwrap();
         assert_eq!(b.result.names, ["box_1", "box-1", "box_1_2"]);

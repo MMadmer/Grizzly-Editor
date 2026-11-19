@@ -156,6 +156,13 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     );
     line("targets ONE game mode: set `[module] target = default` (the ordinary game) or `mode = <id>`.");
     line("");
+    line(
+        "A level of the game is worked on as a scene over it (`base = \"<level>\"`: the files hold only what the",
+    );
+    line(
+        "module adds): `Grizzly-Cmd.exe help level-design` is the guide, `run asset.find kind=level` lists levels.",
+    );
+    line("");
     line("## Commands");
     line("");
     line("`Grizzly-Cmd.exe` is in the editor's folder (or on PATH); run it in this folder:");
@@ -171,11 +178,15 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line("");
     line("## Building a place in a level");
     line("");
+    line("A scene is `<name>.scene` and a folder of Lua files (`objects.lua`, `terrain.lua`, ...); with");
     line(
-        "A scene is `<name>.scene` and a folder of Lua files (`objects.lua`, `terrain.lua`, ...); models, textures",
+        "`base = \"<level>\"` it lies over a level of the game and holds what the module adds. A spawn point takes any",
     );
     line(
-        "and sounds are `.meshasset`, `.texasset` and `.sndasset` beside their sources. Look before writing, never",
+        "section - the module's characters and items are `<module>_<id>`. Models, textures and sounds are `.meshasset`,",
+    );
+    line(
+        "`.texasset` and `.sndasset` beside their sources (`source = \"game:<model>.ogf\"` dresses a model of the game). Never",
     );
     line(
         "write a coordinate from memory: `shot.map` (a map from above), `scene.query` (the ground, heights, rays,",
@@ -225,7 +236,7 @@ mod tests {
         }
         let text = text(root, "Night.grizzly", "7c1e6c1e-5c0f-4f6e-9f43-2d5b1c9a0e11");
         let lines = text.lines().count();
-        assert!((20..=44).contains(&lines), "{lines} lines:\n{text}");
+        assert!((20..=49).contains(&lines), "{lines} lines:\n{text}");
         assert!(text.contains(".tradeasset") && text.contains("reference trader"), "{text}");
         assert!(text.starts_with("# Night Watch\n"), "{text}");
         assert!(text.contains("module `night`"), "{text}");

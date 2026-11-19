@@ -882,6 +882,7 @@ mod tests {
             uses: uses.iter().map(|u| rel(u)).collect(),
             dynamic: false,
             parts: false,
+            game: None,
             excluded: false,
             error: None,
         }

@@ -209,6 +209,10 @@ return {
   { "Trader", "Торговец" },
   { "Leads To", "Куда ведёт" },
 
+  -- the Markdown preview: an image it does not draw
+  { "[picture: {alt}]", "[изображение: {alt}]" },
+  { "[picture]", "[изображение]" },
+
   -- the theme picker (Preferences > Interface > Theme)
   { "Search themes", "Поиск тем" },
   { "Dark", "Тёмные", ctx = "pick.group" },

@@ -38,8 +38,12 @@ pub fn register(reg: &mut Registry) {
         scene_open,
     );
     reg.cmd(
-        Spec::write("scene.new", "Starts an empty scene with no file; the kinds' eyes and locks stay.")
-            .destroys_with(&["discard"]),
+        Spec::write(
+            "scene.new",
+            "Starts a scene with no file: empty, or over a level of the game (base); the kinds' eyes and locks stay.",
+        )
+        .destroys_with(&["discard"])
+        .example("base=l03_agroprom"),
         scene_new,
     );
     reg.cmd(
@@ -269,6 +273,13 @@ pub(crate) fn brief(s: &SceneState, o: &Object) -> Value {
     if o.flags.locked {
         m.insert("locked".into(), json!(true));
     }
+    // over a level of the game: whose the object is, and whether the scene takes it out
+    if o.marks.base {
+        m.insert("level".into(), json!(true));
+    }
+    if o.marks.removed {
+        m.insert("removed".into(), json!(true));
+    }
     if let Some(g) = o.owner.and_then(|id| s.get(id)) {
         m.insert("group".into(), json!(g.name.as_str()));
     }
@@ -373,6 +384,11 @@ async fn scene_open(ed: Arc<Editor>, p: OpenParams, _o: Origin) -> Reply {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct NewParams {
+    /// The level of the game the scene lies over (`asset.find kind=level` lists them): the
+    /// level's own objects stand in it, and a save writes only what the module adds. Left out:
+    /// an empty scene, a level of the module's own.
+    #[serde(default)]
+    base: Option<String>,
     /// Save the open scene's unsaved changes first.
     #[serde(default)]
     save: bool,
@@ -385,10 +401,36 @@ async fn scene_new(ed: Arc<Editor>, p: NewParams, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
     svc.recovery.can_replace_scene().map_err(CmdError::invalid)?;
     wait_scene_jobs(&ed).await;
+    // the level is read before anything of the open scene goes
+    let level = match p.base.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+        Some(name) => {
+            let source = crate::base::BaseLevels::of(&ed)
+                .get()
+                .ok_or_else(|| CmdError::new("no_game", "no game library is at hand to read a level from"))?;
+            let settings = crate::game::settings(&ed).await;
+            let wanted = name.to_owned();
+            let found = ed
+                .exec
+                .io(move || {
+                    let st = settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
+                    source.level(&wanted, st)
+                })
+                .await
+                .map_err(|why| CmdError::new("not_found", format!("the level '{name}': {why}")))?;
+            Some((name.to_owned(), found))
+        }
+        None => None,
+    };
     settle_scene(&ed, &svc, p.save, p.discard).await?;
-    crate::edit::new_scene(&ed, &svc, o).await?;
+    crate::edit::new_scene(&ed, &svc, level.as_ref().map(|(n, l)| (n.as_str(), l)), o).await?;
     svc.set_opened();
-    Ok(json!({ "file": Value::Null, "objects": 0 }))
+    let state = svc.store.snapshot();
+    svc.prefetch_library(&ed, &state).await;
+    Ok(json!({
+        "file": Value::Null,
+        "base": level.as_ref().map(|(n, _)| n.as_str()),
+        "objects": state.objects.len(),
+    }))
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -529,7 +571,7 @@ pub(crate) fn convert_file(
     settings: crate::sdk::SyncSettings<'_>,
     watch: Option<&gz_project::ProjectWatch>,
 ) -> Result<(PathBuf, Vec<String>), String> {
-    let opened = service::open_files(root, level, settings)?;
+    let opened = service::open_files(root, level, settings, None)?;
     let scene = opened.state.meta.file.clone().unwrap_or_else(|| level.with_extension(format::EXT));
     let plan = format::write(&opened.state, None, settings)?;
     service::commit(&scene, &plan.files, watch)?;
@@ -639,6 +681,9 @@ fn kinds_json(s: &SceneState) -> Value {
                 m.insert("kind".into(), json!(c.key()));
                 m.insert("label".into(), json!(c.label_plural()));
                 m.insert("objects".into(), json!(s.count(*c)));
+                if s.meta.base.is_set() {
+                    m.insert("own".into(), json!(s.of_class(*c).filter(|o| !o.marks.base).count()));
+                }
                 if !p.visible {
                     m.insert("hidden".into(), json!(true));
                 }
@@ -649,6 +694,24 @@ fn kinds_json(s: &SceneState) -> Value {
             })
             .collect(),
     )
+}
+
+/// The level of the game the scene lies over: its name, whether the game library gave it, how
+/// many objects are the level's and the scene's own, and what the scene takes out.
+fn base_json(s: &SceneState) -> Value {
+    if !s.meta.base.is_set() {
+        return Value::Null;
+    }
+    let level = s.objects.values().filter(|o| o.marks.base).count();
+    let removed: Vec<&str> =
+        s.objects.values().filter(|o| o.marks.base && o.marks.removed).map(|o| o.name.as_str()).collect();
+    json!({
+        "level": s.meta.base.level.as_str(),
+        "at_hand": s.meta.base.state.is_some(),
+        "level_objects": level,
+        "own_objects": s.objects.len() - level,
+        "removed": removed,
+    })
 }
 
 async fn info_reply(ed: &Arc<Editor>, svc: &Arc<SceneService>, summary: bool) -> Reply {
@@ -664,6 +727,7 @@ async fn info_reply(ed: &Arc<Editor>, svc: &Arc<SceneService>, summary: bool) ->
         "selected": s.selection.len(),
         "mode": s.tools.mode.word(),
         "level": s.meta.level.level_path.as_str(),
+        "base": base_json(&s),
         "kinds": kinds_json(&s),
         "camera": camera_json(&s),
         "load": {
@@ -701,6 +765,10 @@ struct ObjectsParams {
     /// Only the selected objects.
     #[serde(default)]
     selected: bool,
+    /// Over a level of the game: only what the scene holds of its own - what the module adds -
+    /// and not the level's objects (which answer `level: true`).
+    #[serde(default)]
+    own: bool,
     /// At most this many (default 100).
     #[serde(default)]
     limit: Option<usize>,
@@ -814,6 +882,7 @@ async fn scene_objects(ed: Arc<Editor>, p: ObjectsParams, _o: Origin) -> Reply {
     let matches = |o: &Object| {
         (query.is_empty() || o.name.to_lowercase().contains(&query))
             && (!p.selected || s.is_selected(o.id))
+            && (!p.own || !o.marks.base)
             && placed(o)
     };
     let shown_brief = |o: &Object| brief_boxed(&s, o, boxes.get(&o.id), p.bounds);
@@ -1134,6 +1203,12 @@ fn set_key(
     rows: &[MergedRow],
     cx: &PropCx<'_>,
 ) -> Result<Effect, String> {
+    if o.marks.base && key != "removed" {
+        return Err(format!(
+            "is the level's own (the game's {}): a scene only takes a spawn point of the level out (`removed`)",
+            s.meta.base.level
+        ));
+    }
     // a key of the files that holds a table takes one (`order = { kind = "guard" }`)
     if let Some(f) = fields::object_field(o.class, key)
         && matches!(f.ty, fields::Ty::Table(_) | fields::Ty::Range)
@@ -1730,6 +1805,8 @@ async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Ori
     let on_disk = settings.clone();
     let root = svc.root.clone();
     let d = dir.clone();
+    let levels = crate::base::BaseLevels::of(ed).get();
+    let again = levels.clone();
     let opened = ed
         .exec
         .io(move || {
@@ -1738,6 +1815,7 @@ async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Ori
                 &root,
                 &file,
                 settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync)),
+                levels.as_deref(),
             )
         })
         .await;
@@ -1750,6 +1828,7 @@ async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Ori
             });
             opened.state.meta.imported = None;
             svc.prefetch_library(ed, &opened.state).await;
+            let _turn = svc.turn().await;
             match svc.store.send(SceneCmd::Replace(Box::new(opened.state), ReplaceKind::Recovered), o).await {
                 Ok(_) => {
                     svc.forget_files();
@@ -1763,12 +1842,12 @@ async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Ori
                             .io(move || {
                                 let st = on_disk.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
                                 real.is_file()
-                                    .then(|| service::open_files(&root, &real, st))
+                                    .then(|| service::open_files(&root, &real, st, again.as_deref()))
                                     .and_then(Result::ok)
                             })
                             .await;
-                        if let Some(service::Opened { files: Some(files), problems, .. }) = there {
-                            svc.attach_files(files, problems);
+                        if let Some(service::Opened { files: Some(files), problems, stamp, .. }) = there {
+                            svc.attach_files(files, problems, stamp);
                         }
                     }
                     svc.store.send(SceneCmd::Touch, o).await.map(|_| ()).map_err(|e| e.message)

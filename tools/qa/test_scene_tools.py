@@ -231,7 +231,7 @@ def phase_f() -> None:
           "F and its folder holds a Lua file per kind", short(files))
     with open(main, encoding="utf-8") as f:
         head = f.read()
-    check(head.lstrip().startswith("return") and "scene = 1" in head, "F the .scene is Lua data with its version",
+    check(head.lstrip().startswith("return") and "scene = 2" in head, "F the .scene is Lua data with its version",
           head[:200])
     opened = cmd("scene.open", path=SCENE, timeout=300)
     check(opened.get("ok") and opened.get("imported") is None and opened.get("file") == SCENE,

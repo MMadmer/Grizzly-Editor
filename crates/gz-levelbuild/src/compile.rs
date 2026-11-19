@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use gz_base::{Finding, Severity};
 use gz_editor::{Editor, JobCtx, JobError, json};
-use gz_lc::{AssetTextures, Input, Log, Options, Sources};
+use gz_lc::{AssetTextures, GameData, Input, Log, Options, Sources};
 use gz_lc_light::{Ctl, Lighter, Report as Progress};
 use gz_media::Index;
 use gz_project::asset_kind::MediaKind;
@@ -121,6 +121,13 @@ pub async fn run(editor: &Arc<Editor>, req: Request, ctx: &JobCtx) -> Result<ser
     {
         let index = media.fresh_index().await;
         sources = sources.with_assets(asset_textures(media.root().to_path_buf(), index));
+    }
+    // a level of the game wears textures only the game has: read from it, never written
+    if let Ok((_, project)) = gz_project::Project::of(editor) {
+        let p = project.clone();
+        if let Ok(files) = editor.exec.io(move || p.game_files()).await {
+            sources = sources.with_game(GameData(Arc::new(move |path: &str| files.read(path).ok())));
+        }
     }
     editor.log.info(format!(
         "Compiling {} on {threads} threads, the light baked on {on}; data from {}.",
@@ -402,7 +409,8 @@ pub(crate) mod tests {
 
         // the compiler's textures: the asset first, the folder (empty here) for the rest
         let empty = root.join("no_textures");
-        let sources = Sources { game_data: empty.clone(), textures: empty, assets: None }.with_assets(assets);
+        let sources = Sources { game_data: empty.clone(), textures: empty, assets: None, game: None }
+            .with_assets(assets);
         let raw = gz_fmt_level::BuildTexture {
             name: "od\\wall".into(),
             width: 64,

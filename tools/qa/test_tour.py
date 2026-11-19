@@ -40,6 +40,23 @@ from qa import check, cmd
 SIZES = ((1707, 912, 1.5), (1280, 720, 1.0))
 # what a tab of each kind opens on: nothing for a tool tab, a file of the linked game for the rest
 FILES = {"model": "dynamics\\weapons\\wpn_ak74\\wpn_ak74"}
+# the Markdown file the Text tab is pictured on
+TOUR_MARKDOWN = """# The tour's notes
+
+A paragraph with **strong**, *emphasis*, `code` and [a link](https://example.com).
+
+- a list
+  - nested
+- [x] a task
+
+| Key | Value |
+|-----|-------|
+| cost | 1200 |
+
+```lua
+local function f(x) return x * 2 end
+```
+"""
 # the item the Items tab is opened on, as a change of it
 ITEM = "wpn_ak74"
 
@@ -133,6 +150,12 @@ def open_tab(kind: str, project: str) -> dict:
                 w.setframerate(22050)
                 w.writeframes(b"\0\0" * 4410)
         return cmd("preview.sound", open=True, path=rel)
+    if kind == "text":
+        # a Markdown file of the project in the Text tab: its text beside its preview
+        rel = "qa_tour_text.md"
+        with open(os.path.join(project, rel), "w", encoding="utf-8", newline="\n") as f:
+            f.write(TOUR_MARKDOWN)
+        return cmd("text.view", path=rel, mode="split")
     if kind == "items":
         # the tab is pictured with a form up: a change of an item of the linked game
         shown = cmd("items.view", select=ITEM)

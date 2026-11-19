@@ -190,7 +190,8 @@ fn can_play(cx: &ActionCx<'_>) -> Enabled {
     if running(cx.editor) {
         return Enabled::Off(BUSY);
     }
-    with_scene(cx)
+    // a project without a scene plays its module in a new game
+    with_project(cx)
 }
 
 fn can_stop(cx: &ActionCx<'_>) -> Enabled {

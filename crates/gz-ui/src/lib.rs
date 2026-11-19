@@ -58,6 +58,8 @@
 //! - [`state::banner`], [`state::banner_list`] - a toned bar, with a list and an action per item
 //! - [`drop`] - typed drag payloads ([`drop::Payload`]) and drop zones ([`drop::Zone`])
 //! - [`text::fit`] - a cut text kept per text, face and width, for what is drawn every frame
+//! - [`markdown::markdown_view`] - a text drawn as Markdown, read-only, laid out only where it is
+//!   seen; a clicked link and the source line at the top come back in [`markdown::MarkdownOut`]
 //! - [`upload::Tiled`] - a big picture that reaches the GPU a few tiles a frame
 
 pub mod audit;
@@ -72,6 +74,7 @@ pub mod theme;
 
 pub mod card;
 pub mod check;
+pub mod code;
 pub mod dialog;
 pub mod drop;
 pub mod file_dialog;
@@ -79,6 +82,7 @@ pub mod form;
 pub mod grid;
 pub mod kitsheet;
 pub mod list;
+pub mod markdown;
 pub mod menu;
 pub mod pick;
 pub mod rank;
@@ -116,5 +120,5 @@ pub use search::SearchField;
 pub use section::{Section, SectionResponse};
 pub use tabs::{PanelTab, TabResponse, TabStyle, tab_strip};
 pub use text::Clip;
-pub use theme::{Palette, THEMES, Theme, Tone, metrics, palette};
+pub use theme::{Palette, Syntax, THEMES, Theme, Tone, metrics, palette};
 pub use toolbar::{Toolbar, ToolbarStyle};

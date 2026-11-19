@@ -1826,7 +1826,25 @@ async fn wallmarks_cmd(ed: Arc<Editor>, p: WallmarkParams, o: Origin) -> Reply {
                 None => None,
             };
             let (draw, width, height, rotate) = (p.draw, p.width, p.height, p.rotate);
-            let (shader, texture) = (p.shader.clone().map(SmolStr::new), p.texture.clone().map(SmolStr::new));
+            // a name of the game as the game spells it: back slashes, no blanks around it
+            let spelled =
+                |s: &Option<String>| s.as_deref().map(|v| SmolStr::new(v.trim().replace('/', "\\")));
+            let (shader, texture) = (spelled(&p.shader), spelled(&p.texture));
+            // a texture nobody has draws nothing: said before a mark wears it
+            if let Some(t) = texture.as_deref().filter(|t| !t.is_empty())
+                && let Some(names) = crate::names::NameSources::names(&ed).await
+                && names.has("texture", t) == Some(false)
+            {
+                let near = names.nearest("texture", t);
+                let hint = if near.is_empty() {
+                    "`asset.find kind=texture` lists what there is".to_owned()
+                } else {
+                    format!("nearest: {}", near.join(", "))
+                };
+                return Err(CmdError::not_found(format!(
+                    "neither the game nor the project has the texture '{t}': {hint}"
+                )));
+            }
             marks_edit(&ed, &svc, o, move |w, _, _| {
                 if let Some(v) = draw {
                     w.flags =

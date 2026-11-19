@@ -39,6 +39,53 @@ pub fn install(editor: &Editor) {
             let _ = Characters::of(&ed).await;
         });
     });
+    // a character is a spawn section of the game: the scene places it like any other
+    gz_game::OwnSections::of(editor).add(Arc::new(|ed| {
+        Box::pin(async move {
+            let Ok(svc) = Characters::of(ed).await else { return Vec::new() };
+            let module = svc.manifest().snapshot().manifest().map(|m| m.id.clone()).unwrap_or_default();
+            sections(&module, &svc.fresh_roster().await.resolved)
+        })
+    }));
+}
+
+/// The sections the game makes of a module's characters (the game's `xms_characters`): the
+/// spawn section `<module>_<id>` over `stalker`, and its squad. A template is none.
+#[must_use]
+pub fn sections(module: &str, characters: &[Character]) -> Vec<gz_game::OwnSection> {
+    let mut out = Vec::new();
+    for c in characters.iter().filter(|c| !c.is_abstract) {
+        let gid = crate::model::game_id(module, &c.id);
+        let community = if c.community.is_empty() { "stalker" } else { c.community.as_str() };
+        let mut lines = vec![
+            ("$spawn".to_owned(), format!("\"npc\\{module}\\{}\"", c.id)),
+            ("character_profile".to_owned(), gid.clone()),
+            ("community".to_owned(), community.to_owned()),
+        ];
+        if !c.spec_rank.is_empty() {
+            lines.push(("spec_rank".to_owned(), c.spec_rank.clone()));
+        }
+        // the look is the profile's in the game; the editor draws the model the character wears
+        if !c.visual.is_empty() {
+            lines.push(("visual".to_owned(), c.visual.clone()));
+        }
+        let origin = c.file.replace('\\', "/");
+        out.push(gz_game::OwnSection {
+            name: gid.clone(),
+            parent: "stalker".to_owned(),
+            lines,
+            origin: origin.clone(),
+        });
+        if c.squad {
+            out.push(gz_game::OwnSection {
+                name: format!("{gid}_squad"),
+                parent: "online_offline_group".to_owned(),
+                lines: vec![("faction".to_owned(), community.to_owned()), ("npc".to_owned(), gid)],
+                origin,
+            });
+        }
+    }
+    out
 }
 
 /// The character kind of `gz-asset`.

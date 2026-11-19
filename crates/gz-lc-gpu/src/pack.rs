@@ -4,7 +4,8 @@
 
 use glam::{Vec2, Vec3};
 use gz_lc_light::{
-    BuildTexture, Falloff, LT_DIRECT, LT_POINT, LT_SECONDARY, LightSet, Opacity, RLight, RayModel, Sample,
+    BuildTexture, Falloff, LT_DIRECT, LT_POINT, LT_SECONDARY, LT_SPOT, LightSet, Opacity, RLight, RayModel,
+    Sample,
 };
 use rayon::prelude::*;
 
@@ -223,12 +224,19 @@ pub(crate) struct PackedLights {
 }
 
 fn gpu_light(l: &RLight, kind: u16) -> GpuLight {
+    // the last row's tail: a hemisphere light's `-direction * 0.001`; a spot light, which is
+    // never one of the hemisphere's, keeps its cone there
+    let tail = if kind == LT_SPOT {
+        [l.cone_outer, l.cone_inner, 0.0]
+    } else {
+        [-l.direction.x * 0.001, -l.direction.y * 0.001, -l.direction.z * 0.001]
+    };
     [
         [l.position.x, l.position.y, l.position.z, f32::from(kind)],
         [l.direction.x, l.direction.y, l.direction.z, l.range],
         [l.diffuse.x, l.diffuse.y, l.diffuse.z, l.range2],
         [l.attenuation0, l.attenuation1, l.attenuation2, l.energy],
-        [l.falloff, -l.direction.x * 0.001, -l.direction.y * 0.001, -l.direction.z * 0.001],
+        [l.falloff, tail[0], tail[1], tail[2]],
     ]
 }
 
@@ -239,7 +247,7 @@ pub(crate) fn lights(set: &LightSet, falloff: Falloff, opacity: Opacity, cull: b
     // the static lights: the directional ones, then those that fall off (the detail compiler
     // takes a secondary light as a point light); a kind neither knows lights nothing
     let kind_of = |l: &RLight| {
-        if falloff == Falloff::Details && l.kind != LT_DIRECT { LT_POINT } else { l.kind }
+        if falloff == Falloff::Details && l.kind == LT_SECONDARY { LT_POINT } else { l.kind }
     };
     for l in set.rgb.iter().filter(|l| kind_of(l) == LT_DIRECT) {
         lights.push(gpu_light(l, LT_DIRECT));
@@ -247,15 +255,17 @@ pub(crate) fn lights(set: &LightSet, falloff: Falloff, opacity: Opacity, cull: b
     let rgb_pt = lights.len();
     for l in set.rgb.iter() {
         let k = kind_of(l);
-        if k == LT_POINT || k == LT_SECONDARY {
+        if k == LT_POINT || k == LT_SECONDARY || k == LT_SPOT {
             lights.push(gpu_light(l, k));
             points.push((l.position, l.range2.max(0.0).sqrt()));
         }
     }
     let sun = lights.len();
-    lights.extend(set.sun.iter().map(|l| gpu_light(l, l.kind)));
+    // the sun's and the hemisphere's sets take whatever is no directional light as a point light
+    let plain = |l: &RLight| if l.kind == LT_DIRECT { LT_DIRECT } else { LT_POINT };
+    lights.extend(set.sun.iter().map(|l| gpu_light(l, plain(l))));
     let hemi = lights.len();
-    lights.extend(set.hemi.iter().map(|l| gpu_light(l, l.kind)));
+    lights.extend(set.hemi.iter().map(|l| gpu_light(l, plain(l))));
     let end = lights.len();
     if lights.is_empty() {
         lights.push([[0.0; 4]; 5]);

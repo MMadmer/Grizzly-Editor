@@ -827,7 +827,7 @@ mod tests {
         rec.bind(&dir);
         let snap = Snapshot {
             files: vec![
-                ("a.scene".into(), b"return { scene = 1 }".to_vec()),
+                ("a.scene".into(), b"return { scene = 2 }".to_vec()),
                 ("a/objects.lua".into(), b"return {}".to_vec()),
             ],
         };

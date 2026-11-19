@@ -830,8 +830,10 @@ def library_maintenance(lib: str) -> None:
     ran = cmd("ui.palette", action="run", id="library.rewrite_descriptions")
     for _ in range(3):
         cmd("ui.list")
-    check(ran.get("ok") and open(path, "rb").read() == tampered and not cmd("job.list", running=True).get("jobs"),
-          "K the action Rewrite Texture Descriptions asks first: answered No, nothing is written", json.dumps(ran)[:300])
+    left = [j for j in cmd("job.list", running=True).get("jobs") or [] if j.get("kind") != "game_library"]
+    check(ran.get("ok") and open(path, "rb").read() == tampered and not left,
+          "K the action Rewrite Texture Descriptions asks first: answered No, nothing is written",
+          json.dumps([ran, open(path, "rb").read() == tampered, left])[:400])
     os.remove(os.path.join(lib, *ogg.split("/")))
     os.remove(os.path.join(lib, "gamedata", "sounds", "qa", "qa_orphan.~ogg"))
     with open(os.path.join(lib, *orphan.split("/")), "wb") as f:

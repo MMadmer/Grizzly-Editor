@@ -1104,7 +1104,7 @@ fn motion_defs(obj: &Object, w: &mut Writer) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use gz_fmt_object::{
@@ -1207,7 +1207,7 @@ mod tests {
         assert_eq!(v.desc.map(|d| (d.source_file, d.build_time)), Some(("a.object".into(), 0)));
     }
 
-    fn skeleton() -> Object {
+    pub(crate) fn skeleton() -> Object {
         let mut obj = object();
         obj.flags = ObjectFlags::DYNAMIC;
         let shape = BoneShape { kind: 2, sphere_radius: 0.5, ..BoneShape::default() };

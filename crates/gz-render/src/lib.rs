@@ -59,6 +59,10 @@
 //! Coordinates are the engine's: left-handed, Y up, a camera looks along +Z, clockwise faces are
 //! front faces. Depth is reversed (1 at the near plane).
 
+// whether the graphics runtime's types may cross threads is worked out through every type they
+// hold: one level more of the crate's own (a mesh's pages) and the default depth is not enough
+#![recursion_limit = "256"]
+
 mod assets;
 mod camera;
 mod color;
@@ -70,6 +74,7 @@ mod material;
 mod math;
 mod mesh;
 mod packet;
+mod paging;
 mod renderer;
 mod skin;
 mod targets;

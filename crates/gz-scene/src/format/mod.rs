@@ -1,6 +1,6 @@
 //! The scene's own files (`docs/assets/SCENE.md`, the contract in `docs/ASSETS.md` section 7).
 //!
-//! A scene is `<name>.scene` - Lua data with the header `scene = 1`: the level's options, its
+//! A scene is `<name>.scene` - Lua data with the header `scene = 2`: the level's options, its
 //! build settings, the sun, the light controls, the camera, the kinds' eyes and locks - and the
 //! folder `<name>\` beside it: one Lua data file per kind of object (`objects.lua`,
 //! `lights.lua`, ... - a file only while it holds something) and the painted layers as binary
@@ -39,10 +39,17 @@ use values::*;
 pub const EXT: &str = "scene";
 /// The header key, and the version this editor writes and the newest it reads.
 pub const HEADER: &str = "scene";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// The steps that lift an older `.scene` to [`VERSION`]: the first lifts version 1 to 2 (the
 /// scene kind's `KindOps.migrations`, the same list `gz-asset` applies).
-pub const MIGRATIONS: &[gz_asset::Migration] = &[];
+pub const MIGRATIONS: &[gz_asset::Migration] = &[version_2];
+
+/// Version 2 added `base` (a scene over a level of the game, whose `spawns.lua` may hold entries
+/// that only take a spawn point of the level out). A scene of version 1 says neither: nothing of
+/// it changes, and an editor that knows only version 1 refuses a scene that may say them.
+fn version_2(_: &mut LuaDoc) -> Result<(), gz_luadata::LuaDataError> {
+    Ok(())
+}
 
 /// A chain of migration steps: `steps[i]` lifts version `first + i` to `first + i + 1`, up to
 /// `current`.
@@ -115,6 +122,38 @@ pub fn file_of(class: ObjClass) -> Option<(&'static str, &'static str)> {
     CLASS_FILES.iter().find_map(|f| f.lists.iter().find(|(_, c)| *c == class).map(|(l, _)| (f.file, *l)))
 }
 
+/// The level of the game a scene file lies over (`base`), read from the `.scene` alone - no part
+/// file is opened. `None` for a scene of the module's own, and for a file that does not read.
+/// Blocking.
+#[must_use]
+pub fn base_of_file(scene: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(scene).ok()?;
+    let value = gz_luadata::parse(&text).ok()?;
+    let base = value.get("base").and_then(Value::as_str)?.trim();
+    (!base.is_empty()).then(|| base.to_owned())
+}
+
+/// The level a scene file is of, as [`crate::model::SceneMeta::level_name`] answers it for the
+/// scene open: the level of the game it lies over, else its own name. Blocking.
+#[must_use]
+pub fn level_of_file(scene: &std::path::Path) -> String {
+    base_of_file(scene)
+        .unwrap_or_else(|| scene.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())
+}
+
+/// The level a scene file is of, when the file reads: `None` for a file that is not there or
+/// does not parse - which level such a scene lies over nobody can say. Blocking.
+#[must_use]
+pub fn level_of_readable_file(scene: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(scene).ok()?;
+    let value = gz_luadata::parse(&text).ok()?;
+    let base = value.get("base").and_then(Value::as_str).map(str::trim).filter(|b| !b.is_empty());
+    Some(match base {
+        Some(base) => base.to_owned(),
+        None => scene.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+    })
+}
+
 /// `<dir>\<stem>\`: the scene's folder.
 #[must_use]
 pub fn folder_of(scene: &std::path::Path) -> std::path::PathBuf {
@@ -145,6 +184,7 @@ pub fn scene_rules() -> DiffRules {
         "",
         &[
             HEADER,
+            "base",
             "level",
             "build",
             "sun",
@@ -220,6 +260,24 @@ fn sun_mut(s: &mut SceneState) -> Option<&mut [f32; 2]> {
 
 /// The keys of the `.scene` (dotted: `level.path` is `path` of the table `level`).
 pub static SCENE_FIELDS: &[Field<SceneState>] = &[
+    Field {
+        key: "base",
+        label: "Level of the Game",
+        group: "Level",
+        unit: "",
+        ty: Ty::Pick("game_level"),
+        default: "\"\"",
+        help: "The level of the game the scene lies over: the level's own objects are read from the game and never written, and the scene's files hold what the module adds.",
+        applies: |_| true,
+        get: |s| text(&s.meta.base.level),
+        set: |s, v| {
+            let level = SmolStr::new(as_text(v)?.trim());
+            if s.meta.base.level != level {
+                s.meta.base = crate::model::Backdrop { level, state: None, pending: Vec::new() };
+            }
+            Ok(())
+        },
+    },
     level!(
         "level.path",
         "Level Folder",
@@ -635,7 +693,7 @@ pub static SCENE_FIELDS: &[Field<SceneState>] = &[
         get: |s| {
             let mut t = Table::new();
             for l in layers::LAYERS {
-                if layers::has(l, &s.bulk) {
+                if layers::own(l, s) {
                     t.put(l.key, l.file);
                 }
             }
@@ -754,12 +812,20 @@ fn put_dotted(t: &mut Table, key: &str, v: Value) {
 /// The `.scene`'s value of a state: the header, then every key that is not its default.
 #[must_use]
 pub fn scene_value(s: &SceneState) -> Value {
-    let base = SceneState::default();
+    // over a level of the game a key says what differs from the level
+    let default;
+    let base: &SceneState = match &s.meta.base.state {
+        Some(level) => level,
+        None => {
+            default = SceneState::default();
+            &default
+        }
+    };
     let mut t = Table::new();
     t.put(HEADER, int(VERSION));
     for f in SCENE_FIELDS {
         let v = (f.get)(s);
-        if v.is_nil() || v.is_empty() && v.is_table() || gz_luadata::data_eq(&v, &(f.get)(&base)) {
+        if v.is_nil() || v.is_empty() && v.is_table() || gz_luadata::data_eq(&v, &(f.get)(base)) {
             continue;
         }
         put_dotted(&mut t, f.key, v);
@@ -785,6 +851,13 @@ pub fn default_object(class: ObjClass) -> Object {
 /// default.
 pub fn object_value(cx: &Cx<'_>, o: &Object, base: &Object) -> Result<Value, String> {
     let mut t = Table::new();
+    // of the level's own a scene says one thing: that it takes it out
+    if o.marks.base {
+        t.put("name", text(&o.name));
+        t.put("removed", true);
+        return Ok(Value::Table(t));
+    }
+    let based = cx.state.meta.base.is_set();
     let entity = if o.class == ObjClass::SpawnPoint { spawn::entity_text(o, cx.settings)? } else { None };
     for f in fields::object_fields(o.class) {
         let applies = (f.applies)(o);
@@ -800,10 +873,31 @@ pub fn object_value(cx: &Cx<'_>, o: &Object, base: &Object) -> Result<Value, Str
         if !applies && (special || common) {
             continue;
         }
+        // over a level of the game whatever the scene holds is the module's: not said
+        if based && f.key == "authored" {
+            continue;
+        }
         let v = match (o.class, f.key) {
             (ObjClass::Light, "control") => fields::light_control(cx.state, o),
             (ObjClass::Group, "members") => fields::group_members(cx.state, o),
-            (ObjClass::SpawnPoint, "props") => entity.as_ref().map_or(Value::Nil, |e| e.props.clone()),
+            (ObjClass::SpawnPoint, "props") => {
+                let mut props = entity.as_ref().map_or(Value::Nil, |e| e.props.clone());
+                // a zone's shape is the point's `shape`: the entity's copy of it is not said twice
+                if let (ObjData::Spawn(d), Value::Table(t)) = (&o.data, &mut props)
+                    && let Some(SpawnEntity::Decoded(e)) = &d.entity
+                    && let Some(a) = &d.attached
+                    && let ObjData::Shape(s) = &a.data
+                    // to the bit: a shape that is -0 where the object says 0 is another packet
+                    && format!("{:?}", e.shapes())
+                        == format!("{:?}", crate::objects::entity_shapes(a.xform.scale, &s.shapes))
+                {
+                    t.fields.retain(|(k, _)| k != "shapes");
+                    if t.fields.is_empty() && t.arr.is_empty() {
+                        props = Value::Nil;
+                    }
+                }
+                props
+            }
             (ObjClass::SpawnPoint, "raw") => {
                 entity.as_ref().and_then(|e| e.raw.as_deref()).map_or(Value::Nil, values::hex)
             }
@@ -848,6 +942,54 @@ fn at_item(
     p.in_file(file.clone()).at(s.line, s.column, s.end_line, s.end_column)
 }
 
+/// What other tools and habits call a key of the scene's files.
+const OTHER_WORDS: [(&str, &str); 14] = [
+    ("type", "kind"),
+    ("position", "pos"),
+    ("location", "pos"),
+    ("rotation", "rot"),
+    ("angles", "rot"),
+    ("reference", "ref"),
+    ("model", "ref"),
+    ("visual", "ref"),
+    ("radius", "range"),
+    ("distance", "range"),
+    ("colour", "color"),
+    ("intensity", "brightness"),
+    ("sound_name", "sound"),
+    ("effect", "ref"),
+];
+
+/// The key of a kind an unknown key most likely means: another word for it, or one a letter or
+/// two off.
+fn meant_key(class: ObjClass, key: &str) -> Option<&'static str> {
+    let keys: Vec<&'static str> = fields::object_fields(class).map(|f| f.key).collect();
+    let low = key.to_ascii_lowercase();
+    if let Some((_, k)) = OTHER_WORDS.iter().find(|(w, k)| *w == low && keys.contains(k)) {
+        return Some(k);
+    }
+    // the letters that differ, by the plain edit distance
+    let distance = |a: &str, b: &str| -> usize {
+        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+        let mut row: Vec<usize> = (0..=b.len()).collect();
+        for (i, ca) in a.iter().enumerate() {
+            let mut last = row[0];
+            row[0] = i + 1;
+            for (j, cb) in b.iter().enumerate() {
+                let now = row[j + 1];
+                row[j + 1] = (last + usize::from(ca != cb)).min(now + 1).min(row[j] + 1);
+                last = now;
+            }
+        }
+        row[b.len()]
+    };
+    keys.into_iter()
+        .map(|k| (distance(&low, k), k))
+        .filter(|(d, k)| *d <= 2 && *d * 3 <= k.len().max(low.len()))
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, k)| k)
+}
+
 /// An item of a list as an object, with what is wrong with it.
 fn object_of(item: &Value, class: ObjClass, problems: &mut Vec<(Option<&'static str>, Problem)>) -> Object {
     let mut o = default_object(class);
@@ -865,9 +1007,22 @@ fn object_of(item: &Value, class: ObjClass, problems: &mut Vec<(Option<&'static 
                     ));
                 }
             }
+            // a key that is nearly one of the kind's is a slip: said as a warning with the key meant
             None => problems.push((
                 None,
-                Problem::note("unknown_key", format!("unknown key '{k}' of a {} (kept)", class.label())),
+                match meant_key(class, k) {
+                    Some(meant) => Problem::warning(
+                        "unknown_key",
+                        format!(
+                            "unknown key '{k}' of a {} (kept, not read): did you mean '{meant}'?",
+                            class.label()
+                        ),
+                    ),
+                    None => Problem::note(
+                        "unknown_key",
+                        format!("unknown key '{k}' of a {} (kept)", class.label()),
+                    ),
+                },
             )),
         }
     }
@@ -1063,7 +1218,20 @@ pub fn read(
     dir: &RelPath,
     settings: Option<&(dyn Settings + Sync)>,
 ) -> Result<Read, Refused> {
-    read_with(texts, main, dir, settings, None, &CHAIN)
+    read_with(texts, main, dir, settings, None, None, &CHAIN)
+}
+
+/// [`read_over`] with the levels of the game a scene may lie over (`base`): the level's objects
+/// stand under the scene's own.
+pub fn read_based(
+    texts: &Texts,
+    main: &RelPath,
+    dir: &RelPath,
+    settings: Option<&(dyn Settings + Sync)>,
+    keep: Option<Keep<'_>>,
+    levels: Option<&dyn crate::base::BaseSource>,
+) -> Result<Read, Refused> {
+    read_with(texts, main, dir, settings, keep, levels, &CHAIN)
 }
 
 /// [`read`] over an open scene: what a file that does not parse gave is taken from `keep`.
@@ -1074,7 +1242,7 @@ pub fn read_over(
     settings: Option<&(dyn Settings + Sync)>,
     keep: Option<Keep<'_>>,
 ) -> Result<Read, Refused> {
-    read_with(texts, main, dir, settings, keep, &CHAIN)
+    read_with(texts, main, dir, settings, keep, None, &CHAIN)
 }
 
 /// [`read_over`] through a migration chain.
@@ -1084,6 +1252,7 @@ pub fn read_with(
     dir: &RelPath,
     settings: Option<&(dyn Settings + Sync)>,
     keep: Option<Keep<'_>>,
+    levels: Option<&dyn crate::base::BaseSource>,
     chain: &Chain,
 ) -> Result<Read, Refused> {
     let (mut scene_doc, mut scene_v) =
@@ -1136,6 +1305,27 @@ pub fn read_with(
         }
     }
     let mut state = SceneState::default();
+    // the level of the game the scene lies over: its objects first, the scene's keys over its own
+    let based = scene_v.get("base").and_then(Value::as_str).map(str::trim).filter(|b| !b.is_empty());
+    if let (Some(level), Some(source)) = (based, levels) {
+        match source.level(level, settings) {
+            Ok(found) => state = crate::base::over(&found, level),
+            Err(why) => {
+                let s = scene_doc.nearest_span(&[Seg::key("base")]);
+                problems.push(at_span(
+                    Problem::error(
+                        "S060",
+                        format!(
+                            "the level '{level}' the scene lies over is not at hand: {why}. The scene holds only what its own files say until it is"
+                        ),
+                    ),
+                    main,
+                    s,
+                ));
+            }
+        }
+    }
+    let based = based.is_some();
     for f in SCENE_FIELDS {
         if let Some(v) = get_dotted(&scene_v, f.key)
             && let Err(why) = (f.set)(&mut state, v)
@@ -1173,6 +1363,8 @@ pub fn read_with(
         members: Vec<(usize, Vec<(SmolStr, gz_luadata::Span)>)>,
         /// The groups with a `ref` and no `members`.
         unplaced: Vec<usize>,
+        /// The entries that only take a spawn point of the level out.
+        stubs: Vec<usize>,
     }
     let parts: Vec<Result<Part, (&'static str, Box<Problem>)>> = CLASS_FILES
         .par_iter()
@@ -1197,6 +1389,7 @@ pub fn read_with(
                 controls: Vec::new(),
                 members: Vec::new(),
                 unplaced: Vec::new(),
+                stubs: Vec::new(),
             };
             for (k, _) in v.fields() {
                 if !cf.lists.iter().any(|(l, _)| l == k) {
@@ -1227,6 +1420,22 @@ pub fn read_with(
                         part.problems.push(at_item(&rel, &part.doc, list, name.as_deref(), i, key, p));
                     }
                     let n = part.objects.len();
+                    // over a level of the game: an entry with no section that says `removed`
+                    // is no spawn point of the scene's, it takes the level's of that name out
+                    if based
+                        && *class == ObjClass::SpawnPoint
+                        && item.get("removed").and_then(Value::as_bool) == Some(true)
+                        && item.get("section").is_none()
+                    {
+                        part.stubs.push(n);
+                        if item.fields().iter().any(|(k, _)| k != "name" && k != "removed") {
+                            let p = Problem::warning(
+                                "S062",
+                                "an entry that takes a spawn point of the level out says `name` and `removed` alone: its other keys are not read",
+                            );
+                            part.problems.push(at_item(&rel, &part.doc, list, name.as_deref(), i, None, p));
+                        }
+                    }
                     if *class == ObjClass::Light
                         && let Some(c) = item.get("control").and_then(Value::as_str)
                     {
@@ -1293,6 +1502,40 @@ pub fn read_with(
         problems.append(&mut part.problems);
         let mut ids = Vec::with_capacity(part.objects.len());
         for (i, (_, mut o, span)) in part.objects.into_iter().enumerate() {
+            if part.stubs.contains(&i) {
+                let found = state.find(ObjClass::SpawnPoint, &o.name).filter(|b| b.marks.base).cloned();
+                match found {
+                    Some(b) => {
+                        if !b.marks.removed {
+                            let mut taken = (*b).clone();
+                            taken.marks.removed = true;
+                            state.replace(taken);
+                        }
+                        ids.push(b.id);
+                    }
+                    None => {
+                        // without the level nobody can tell: the entry stays as it is written
+                        if state.meta.base.state.is_some() {
+                            problems.push(at_span(
+                                Problem::warning(
+                                    "S061",
+                                    format!(
+                                        "the level '{}' has no spawn point '{}': the entry takes nothing out",
+                                        state.meta.base.level, o.name
+                                    ),
+                                ),
+                                &rel,
+                                span,
+                            ));
+                        }
+                        if !state.meta.base.pending.contains(&o.name) {
+                            state.meta.base.pending.push(o.name.clone());
+                        }
+                        ids.push(ObjId::default());
+                    }
+                }
+                continue;
+            }
             if let Some((_, c)) = part.controls.iter().find(|(n, _)| *n == i)
                 && let ObjData::Light(d) = &mut o.data
             {
@@ -1353,6 +1596,19 @@ pub fn read_with(
         for cf in CLASS_FILES.iter().filter(|cf| broken.contains(&cf.file)) {
             for (_, class) in cf.lists {
                 for o in k.state.of_class(*class) {
+                    // the level's own stand in the scene already: the file says only which of
+                    // them the scene takes out
+                    if o.marks.base {
+                        let there = state.find(*class, &o.name).filter(|b| b.marks.base).cloned();
+                        if let Some(b) = there
+                            && b.marks.removed != o.marks.removed
+                        {
+                            let mut b = (*b).clone();
+                            b.marks.removed = o.marks.removed;
+                            state.replace(b);
+                        }
+                        continue;
+                    }
                     let mut o = (**o).clone();
                     o.owner = None;
                     o.flags.co &= !co::IN_GROUP;
@@ -1478,7 +1734,8 @@ fn class_file_value(
             .par_iter()
             .map(|id| -> Result<(Value, Option<Value>), String> {
                 let o = cx.state.get(*id).ok_or_else(|| format!("object {} is gone", id.0))?;
-                match base.and_then(|b| b.find(*class, &o.name)) {
+                // what the files held of it: one of the level's own was written only as taken out
+                match base.and_then(|b| b.find(*class, &o.name)).filter(|b| SceneState::written(b)) {
                     Some(b) if Arc::ptr_eq(b, o) && same_context(cx.state, base, o) => {
                         let mut t = Table::new();
                         t.put("name", text(&o.name));
@@ -1509,7 +1766,9 @@ fn class_file_value(
         // what the base held and the state no longer does
         if let Some(b) = base {
             for bo in b.of_class(*class) {
-                if cx.state.find(*class, &bo.name).is_none() {
+                if SceneState::written(bo)
+                    && !cx.state.find(*class, &bo.name).is_some_and(|o| SceneState::written(o))
+                {
                     let mut t = Table::new();
                     t.put("name", text(&bo.name));
                     olds.push(Value::Table(t));
@@ -1574,7 +1833,8 @@ pub fn write(
     // files, a zone's shape inside its spawn point
     let mut by: FxHashMap<ObjClass, Vec<ObjId>> = FxHashMap::default();
     for c in ObjClass::ALL {
-        by.insert(c, state.by_class[c.index()].iter().copied().collect());
+        // the level's own are not the scene's to write, but those it takes out
+        by.insert(c, state.of_class(c).filter(|o| SceneState::written(o)).map(|o| o.id).collect());
     }
     let mut docs = Vec::new();
     let broken: Vec<&'static str> = files.map(|f| f.broken.clone()).unwrap_or_default();
@@ -1584,15 +1844,64 @@ pub fn write(
         }
         let ids: Vec<Vec<ObjId>> =
             cf.lists.iter().map(|(_, c)| by.get(c).cloned().unwrap_or_default()).collect();
-        let empty = ids.iter().all(Vec::is_empty);
         let had = files.and_then(|f| f.docs.iter().find(|d| d.file == cf.file));
+        // the lines that take out a spawn point the scene holds no object for are lines of the
+        // file: one that has a document keeps them itself, one made anew is given them
+        let carried: &[SmolStr] = if had.is_none() && cf.lists.iter().any(|(_, c)| *c == ObjClass::SpawnPoint)
+        {
+            &state.meta.base.pending
+        } else {
+            &[]
+        };
+        let empty = ids.iter().all(Vec::is_empty) && carried.is_empty();
         if empty {
+            // over a level of the game a file may hold entries the scene holds no object for
+            // (they name what the level has not, or the level is not at hand): the file goes
+            // only when nothing is left in it
+            if let (Some(d), true) = (had, state.meta.base.is_set()) {
+                let (old, mut new, changed) = class_file_value(&cx, cf, &ids, base)?;
+                // a list the scene holds nothing of any more is emptied item by item: an entry
+                // the scene never held stays in it
+                if let (Value::Table(o), Value::Table(n)) = (&old, &mut new) {
+                    for (list, _) in &o.fields {
+                        if n.get(list).is_none() {
+                            n.put(list, Value::Table(Table::new()));
+                        }
+                    }
+                }
+                let mut doc = d.doc.clone();
+                let written =
+                    changed && doc.apply_diff(&old, &new, &class_rules(cf)).map_err(|e| e.message)?;
+                if doc.value().fields().iter().any(|(_, list)| !list.arr().is_empty()) {
+                    if written {
+                        out.push(Out {
+                            file: cf.file.to_owned(),
+                            bytes: Some(doc.text().as_bytes().to_vec()),
+                        });
+                    }
+                    docs.push(Doc { file: cf.file, doc });
+                    continue;
+                }
+            }
             if had.is_some() || files.is_none() {
                 out.push(Out { file: cf.file.to_owned(), bytes: None });
             }
             continue;
         }
-        let (old, new, changed) = class_file_value(&cx, cf, &ids, base.filter(|_| had.is_some()))?;
+        let (old, mut new, changed) = class_file_value(&cx, cf, &ids, base.filter(|_| had.is_some()))?;
+        if !carried.is_empty()
+            && let Some(top) = new.table_mut()
+            && let Some((list, _)) = cf.lists.iter().find(|(_, c)| *c == ObjClass::SpawnPoint)
+        {
+            let mut items = top.get(list).map(|v| v.arr().to_vec()).unwrap_or_default();
+            for name in carried {
+                let mut stub = Table::new();
+                stub.put("name", text(name));
+                stub.put("removed", true);
+                items.push(Value::Table(stub));
+            }
+            top.put(list, Value::Table(Table { arr: items, fields: Vec::new() }));
+        }
         match had {
             Some(d) => {
                 let mut doc = d.doc.clone();
@@ -1611,8 +1920,8 @@ pub fn write(
     }
     // the painted layers
     for l in layers::LAYERS {
-        let now = layers::has(l, &state.bulk);
-        let was = base.is_some_and(|b| layers::has(l, &b.bulk));
+        let now = layers::own(l, state);
+        let was = base.is_some_and(|b| layers::own(l, b));
         let same = base.is_some_and(|b| match l.class {
             ObjClass::AiMap => opt_ptr_eq(&b.bulk.ai_map, &state.bulk.ai_map),
             ObjClass::DetailObjects => opt_ptr_eq(&b.bulk.details, &state.bulk.details),
@@ -1789,7 +2098,7 @@ mod tests {
             }
         }
         disk.scene =
-            disk.scene.replacen("scene = 1", "scene = 1,\n  -- why this level\n  author = \"me\"", 1);
+            disk.scene.replacen("scene = 2", "scene = 2,\n  -- why this level\n  author = \"me\"", 1);
         let r = read_back(&disk);
         assert!(
             r.problems.iter().any(|p| p.message.contains("note")),
@@ -1899,7 +2208,7 @@ mod tests {
 
     #[test]
     fn a_scene_file_that_does_not_read_says_where() {
-        let disk = Texts { scene: "return {\n  scene = 1,\n  level = {\n}\n".into(), ..Texts::default() };
+        let disk = Texts { scene: "return {\n  scene = 2,\n  level = {\n}\n".into(), ..Texts::default() };
         let main = RelPath::new("a.scene").unwrap();
         let Err(r) = read(&disk, &main, &RelPath::new("a").unwrap(), None) else { panic!() };
         assert_eq!(r.code, "syntax");
@@ -1911,7 +2220,7 @@ mod tests {
     fn a_terrain_reads_back_as_it_was_written_and_a_bad_edit_says_where() {
         let text = "return {\n  terrains = {\n    { name = \"yard\", pos = { 120, 0, -40 }, rot = { 0, 30, 0 }, size = { 40, 30 }, cell = 2,\n      base = \"ground\", edge = 4,\n      edits = {\n        { op = \"flatten\", at = { 0, 0 }, radius = 10, falloff = 4, height = 12.5 },\n        { op = \"ramp\", from = { -10, 0 }, to = { 10, 0 }, width = 4, falloff = 2, heights = { 11, 13 } },\n        { op = \"noise\", amount = 0.3, scale = 8, seed = 1 },\n      },\n      surface = { texture = \"terrain\\\\grass\", tile = 6 },\n      cut = true, authored = true },\n  },\n}\n";
         let disk = Texts {
-            scene: "return {\n  scene = 1,\n}\n".into(),
+            scene: "return {\n  scene = 2,\n}\n".into(),
             files: vec![("terrain.lua".into(), text.into())],
             layers: Vec::new(),
         };
@@ -1949,7 +2258,7 @@ mod tests {
     #[test]
     fn the_readers_problems_are_positioned() {
         let disk = Texts {
-            scene: "return {\n  scene = 1,\n  layers = {\n    ai_map = \"ai_map.bin\",\n  },\n}\n".into(),
+            scene: "return {\n  scene = 2,\n  layers = {\n    ai_map = \"ai_map.bin\",\n  },\n}\n".into(),
             files: vec![
                 (
                     "objects.lua".into(),
@@ -1997,7 +2306,7 @@ mod tests {
             scene: "return {\n  scene = 0,\n  level = { folder = \"night\" },\n}\n".into(),
             ..Texts::default()
         };
-        let r = read_with(&old, &main, &dir, None, None, &TEST_CHAIN).unwrap();
+        let r = read_with(&old, &main, &dir, None, None, None, &TEST_CHAIN).unwrap();
         assert_eq!(r.state.meta.level.level_path, "night");
         assert!(r.problems.iter().any(|p| p.code == "old_version"), "{:?}", r.problems);
         assert!(r.files.migrated);
@@ -2014,7 +2323,7 @@ mod tests {
         assert_eq!(e.code, "migration");
         // a newer one is refused by name
         let new = Texts { scene: "return { scene = 2 }\n".into(), ..Texts::default() };
-        let Err(e) = read_with(&new, &main, &dir, None, None, &TEST_CHAIN) else { panic!() };
+        let Err(e) = read_with(&new, &main, &dir, None, None, None, &TEST_CHAIN) else { panic!() };
         assert_eq!(e.code, "newer_version");
         assert!(e.problem.message.contains("a.scene") && e.problem.line.is_some());
     }

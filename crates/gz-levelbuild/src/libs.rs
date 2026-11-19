@@ -40,6 +40,14 @@ impl Engine {
         self.shaders.as_ref().is_some_and(|s| s.blender(name).is_some())
     }
 
+    /// The engine shader a static surface that names `name` is compiled with: `name` itself, or -
+    /// when `name` is a shader for models - the library's shader for level geometry that treats
+    /// the texture's alpha the same way ([`Shaders::level_twin`]).
+    #[must_use]
+    pub fn level_shader<'a>(&'a self, name: &'a str) -> &'a str {
+        self.shaders.as_ref().and_then(|s| s.level_twin(name)).map_or(name, |b| b.name.as_str())
+    }
+
     /// The compiler flags of a shader; `None` for a shader the library lacks.
     #[must_use]
     pub fn xrlc_flags(&self, name: &str) -> Option<u32> {

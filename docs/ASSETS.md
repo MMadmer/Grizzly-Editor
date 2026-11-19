@@ -40,7 +40,7 @@ and the editor already edits it without losing a byte it does not change.
 ## 2. The rules every kind keeps
 
 1. **A header key names the kind and the version**: `nq = 1`, `beh = 1`, `npc = 1`, `pda = 1`, `item = 1`,
-   `trade = 1`, `loot = 1`, `recipe = 1`, `scene = 1`, `group = 1`, `mesh = 1`, `tex = 1`, `snd = 1`,
+   `trade = 1`, `loot = 1`, `recipe = 1`, `scene = 2`, `group = 1`, `mesh = 1`, `tex = 1`, `snd = 1`,
    `grizzly = 1` (the project). The extension is the kind; the
    header has to agree with it.
 2. **Read every version up to the current one; refuse a newer one, saying so.** A file of an older version is
@@ -100,7 +100,9 @@ is not a rewrite of every node.
   line and column, and comes back by itself when the file is fixed.
 - **Problems are positioned.** Every problem a validator finds carries the file, line and column of the thing it
   is about, its code (`E030`), its sentence, and - where the fix is mechanical - what to write instead. The same
-  list is the tab's Problems, `asset.check` over MCP and `Grizzly-Cmd.exe check` in a shell.
+  list is the tab's Problems, `asset.check` over MCP and `Grizzly-Cmd.exe check` in a shell. A text file that is no asset - a
+  script (LuaJIT's parser: a syntax error at its line and column), XML or JSON that does not read - is checked the
+  same way and its problems are in the same list (`gz-text`).
 
 ## 5. Working on a project without the editor
 
@@ -134,7 +136,7 @@ once. MCP is for what files cannot do - looking at the editor, driving its UI, t
 | Recipes | `*.recipeasset` | `recipe` | the game, the editor | `docs/assets/RECIPES.md` |
 | Scene | `*.scene` + its folder | `scene` | the editor | `docs/assets/SCENE.md` |
 | Object group | `*.group` | `group` | the editor | `docs/assets/SCENE.md` |
-| Model | `*.meshasset` | `mesh` | the game (a dynamic model), the editor | `docs/assets/MODEL.md` |
+| Model | `*.meshasset` | `mesh` | the game (a dynamic model), the editor | `docs/assets/MODEL.md` (a source file, a model of the game by `source = "game:..."`, or `parts`) |
 | Texture | `*.texasset` | `tex` | the game, the editor | `docs/assets/TEXTURE.md` |
 | Sound | `*.sndasset` | `snd` | the game, the editor | `docs/assets/SOUND.md` |
 
@@ -179,6 +181,15 @@ escape\
   ...), never a positional packet. A property the editor cannot name is kept under `raw` and written back as it
   was.
 - A file of a class that has no objects does not exist.
+- **A scene over a level of the game** says `base = "<level>"` (the scene format's version 2): the level's own
+  objects are read from the game library as the scene opens (`docs/GAME_LIBRARY.md`, 5) and are never written;
+  the files hold what the module adds - all of it the module's, with no `authored` - and, in `spawns.lua`,
+  entries of a `name` and `removed = true` for the spawn points of the level the module takes out. A zone's
+  volume is the spawn point's `shape` and nothing repeats it; a spawn point's `section` is the game's, or one
+  the module makes: of a character or an item (`<module>_<id>`), or in a config of its own. What a level takes
+  from a module beside objects and spawn points - the lights that shine, sounds, effects, glows, fog volumes,
+  sound environments - is the scene's own lists of them; the build writes them where the game reads them
+  (`docs/GAME_LIBRARY.md`, 7).
 - A file of the folder that does not parse changes nothing: the open scene keeps the objects it had of it, the
   problem is a `syntax` error at its line and column, and a save leaves the file as it is; once it parses the scene
   follows it again. A scene first opened with such a file opens without that file's objects.

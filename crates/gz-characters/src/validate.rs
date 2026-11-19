@@ -51,8 +51,8 @@ pub struct Cx<'a> {
     /// The linked game's trade categories; empty without one.
     pub trade_categories: &'a [String],
     pub models: Option<&'a dyn Models>,
-    /// The sections the module itself brings (its `gamedata\configs`): an item named there is
-    /// known whatever the linked game says.
+    /// The sections the module itself brings (its configs, and what its item assets make): an
+    /// item named there is known whatever the linked game says.
     pub own: Option<&'a gz_mod::SectionSet>,
 }
 

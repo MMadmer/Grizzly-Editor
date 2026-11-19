@@ -35,6 +35,38 @@ pub fn get_xyz(m: &Mat4) -> Vec3 {
     Vec3::new(p, h, b)
 }
 
+/// A box of the level told as an object says one: where its middle is, how it is turned (the
+/// angles of [`rotation_matrix`]) and how large it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxParts {
+    pub position: Vec3,
+    pub rotation: Vec3,
+    pub size: Vec3,
+    /// The matrix is no straight box (its axes are not at right angles): a shape turned inside
+    /// an object scaled unevenly. The parts are then the nearest straight box.
+    pub skewed: bool,
+}
+
+/// The parts of the matrix of a unit box.
+#[must_use]
+pub fn box_parts(m: &Mat4) -> BoxParts {
+    let (i, j, k) = (m.row(0), m.row(1), m.row(2));
+    let size = Vec3::new(i.length(), j.length(), k.length());
+    let unit = |v: Vec3, l: f32| if l > 1e-6 { v / l } else { v };
+    let (ui, uj, uk) = (unit(i, size.x), unit(j, size.y), unit(k, size.z));
+    let skewed = ui.dot(uj).abs() > 1e-3 || ui.dot(uk).abs() > 1e-3 || uj.dot(uk).abs() > 1e-3;
+    // a box scaled by a negative number is the same box mirrored: its axes then turn the other
+    // way round, which no three angles say. One axis taken the other way is the same box again.
+    let uk = if ui.cross(uj).dot(uk) < 0.0 { -uk } else { uk };
+    let mut turn = Mat4::IDENTITY;
+    for (r, v) in [ui, uj, uk].into_iter().enumerate() {
+        turn.0[r][0] = v.x;
+        turn.0[r][1] = v.y;
+        turn.0[r][2] = v.z;
+    }
+    BoxParts { position: m.c(), rotation: get_xyz(&turn), size, skewed }
+}
+
 /// The rotation that stands an object on a surface normal.
 #[must_use]
 pub fn normal_align(up: Vec3, dir: Vec3) -> Vec3 {
@@ -265,6 +297,39 @@ mod tests {
         let r = Vec3::new(0.3, -1.2, 0.4);
         let back = get_xyz(&rotation_matrix(r));
         assert!((back - r).abs().max_element() < 1e-4, "{back:?}");
+    }
+
+    /// A box turned and then mirrored (an object scaled by a negative number) is told as the box
+    /// it is: the same corners, a size of positive numbers, angles that read back.
+    #[test]
+    fn a_mirrored_box_is_the_same_box() {
+        let turn = Vec3::new(0.2, 0.9, -0.3);
+        for scale in [Vec3::new(2.0, 1.0, 3.0), Vec3::new(-2.0, 1.0, 3.0), Vec3::new(2.0, -1.0, -3.0)] {
+            let t = Transform { position: Vec3::new(5.0, 1.0, -2.0), rotation: turn, scale };
+            let m = t.matrix();
+            let parts = box_parts(&m);
+            assert!(!parts.skewed);
+            assert!((parts.size - scale.abs()).abs().max_element() < 1e-4, "{parts:?}");
+            // the box said back fills what the matrix fills: every corner of one is a corner of the other
+            let said =
+                Transform { position: parts.position, rotation: parts.rotation, scale: parts.size }.matrix();
+            let corners = |m: &Mat4| -> Vec<Vec3> {
+                (0..8u32)
+                    .map(|c| {
+                        let p = Vec3::new(
+                            if c & 1 == 0 { -0.5 } else { 0.5 },
+                            if c & 2 == 0 { -0.5 } else { 0.5 },
+                            if c & 4 == 0 { -0.5 } else { 0.5 },
+                        );
+                        m.transform_tiny(p)
+                    })
+                    .collect()
+            };
+            let (theirs, ours) = (corners(&m), corners(&said));
+            for p in &theirs {
+                assert!(ours.iter().any(|q| (*q - *p).length() < 1e-3), "{scale:?}: {p:?} of {ours:?}");
+            }
+        }
     }
 
     #[test]

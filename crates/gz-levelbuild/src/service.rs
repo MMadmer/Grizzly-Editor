@@ -420,10 +420,33 @@ impl LevelBuild {
 /// game revision there), none when no game is linked or it cannot be read; and whether the game
 /// loads pieces of a level (its engine's version resources say `level-pieces`).
 async fn read_game_levels(editor: &Arc<Editor>) -> (Vec<String>, bool) {
-    let levels = match gz_world::WorldService::of(editor).await {
+    let mut levels = match gz_world::WorldService::of(editor).await {
         Ok(w) => w.game().await.levels.clone(),
         Err(_) => Vec::new(),
     };
+    // a level the game holds the files of is the game's too, whether its game graph lists it or
+    // not (a level of a mode of its own): a scene may lie over it, and a build of the module
+    // must not compile the game's own geometry into the project
+    if let Ok((_, project)) = gz_project::Project::of(editor) {
+        let held = editor
+            .exec
+            .io(move || {
+                let Ok(files) = project.game_files() else { return Vec::new() };
+                // `levels/<name>/level`: the file a level of the game is loaded from
+                files
+                    .iter()
+                    .filter_map(|f| f.path.strip_prefix("levels/")?.strip_suffix("/level"))
+                    .filter(|name| !name.contains('/'))
+                    .map(str::to_owned)
+                    .collect::<Vec<String>>()
+            })
+            .await;
+        for name in held {
+            if !levels.iter().any(|l| l.eq_ignore_ascii_case(&name)) {
+                levels.push(name);
+            }
+        }
+    }
     let game = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
     let pieces = !game.is_empty()
         && editor
@@ -452,11 +475,12 @@ pub fn needed(scene: &SceneState, step: Step) -> bool {
     }
 }
 
-/// Whether the scene places a static object of the module's own (marked authored) or a terrain
-/// (on a level of the game always the module's own).
+/// Whether the scene places a static object of the module's own (marked authored), a terrain
+/// (on a level of the game always the module's own) or, over a level of the game, wallmarks.
 #[must_use]
 pub fn has_authored_static(scene: &SceneState) -> bool {
     scene.count(gz_scene::ObjClass::Terrain) > 0
+        || crate::prj::has_own_marks(scene)
         || scene.of_class(gz_scene::ObjClass::SceneObject).any(|o| {
             o.marks.authored
                 && matches!(&o.data, gz_scene::ObjData::SceneObject(d) if !d.visual_mode() && !d.reference.is_empty())

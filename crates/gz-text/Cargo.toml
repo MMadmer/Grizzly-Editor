@@ -1,0 +1,35 @@
+[package]
+name = "gz-text"
+description = "The project's text files that are no assets: a file's encoding and line endings as read and written back, the line merge, the checks of scripts, XML and JSON, the symbols of a file and the index of the scripts' declarations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-query.workspace = true
+gz-editor.workspace = true
+gz-project.workspace = true
+gz-vfs.workspace = true
+gz-game.workspace = true
+gz-mod.workspace = true
+gz-asset.workspace = true
+gz-lua.workspace = true
+gz-fmt-xml.workspace = true
+encoding_rs.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+mlua.workspace = true
+
+[dev-dependencies]
+gz-task.workspace = true
+tempfile.workspace = true

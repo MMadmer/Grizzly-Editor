@@ -88,7 +88,7 @@ const CUBE_MTL: &str = "newmtl brick\nKd 1 1 1\nmap_Kd tex/brick.png\n";
 fn issues_of(dir: &Dir, rel: &str, kind: MediaKind, index: &Index, game: &GameLists) -> Vec<Issue> {
     let text = std::fs::read_to_string(dir.0.join(rel.replace('/', "\\"))).unwrap();
     let v = kind::load(kind, rel, &text).unwrap();
-    check::issues(&dir.0, rel, kind, &v, index, game)
+    check::issues(&dir.0, rel, kind, &v, index, game, &resolve::no_game())
 }
 
 fn codes(i: &[Issue]) -> Vec<&'static str> {
@@ -465,7 +465,7 @@ fn a_model_asset_lays_its_transform_and_surfaces_over_its_source() {
         "models/cube.meshasset",
         "return {\n  mesh = 1,\n  scale = 2,\n  surfaces = { { name = \"BRICK\", material = \"materials\\\\bricks\", two_sided = true } },\n}\n",
     );
-    let m = resolve::model(&d.0, "models/cube.meshasset").unwrap();
+    let m = resolve::model(&d.0, "models/cube.meshasset", &resolve::no_game()).unwrap();
     let b = m.object.bounding_box();
     // OBJ is right-handed: its +Z is the game's -Z
     assert!((b.max - Vec3::new(2.0, 2.0, 0.0)).abs().max_element() < 1e-4, "{:?}", b.max);
@@ -479,11 +479,11 @@ fn a_model_asset_lays_its_transform_and_surfaces_over_its_source() {
     // the stamp follows the source's bytes
     let first = m.stamp;
     d.put("models/cube.obj", CUBE_OBJ.replace("v 1 1 1", "v 1 1 1.5"));
-    assert_ne!(resolve::model(&d.0, "models/cube.meshasset").unwrap().stamp, first);
+    assert_ne!(resolve::model(&d.0, "models/cube.meshasset", &resolve::no_game()).unwrap().stamp, first);
 
     // the scene's library takes it from the provider by its project path, any case
     let lib = gz_scene::library::Library::new(vec![d.0.join("rawdata").join("objects")]);
-    lib.add_provider(crate::provider(d.0.clone()));
+    lib.add_provider(crate::provider(d.0.clone(), resolve::no_game()));
     let o = lib.load("Models/Cube.meshasset").unwrap();
     assert!(o.file.as_os_str().is_empty() && !o.tris.is_empty() && o.stamp != 0);
     assert!(lib.load("props\\box").is_err());
@@ -496,11 +496,12 @@ fn a_dynamic_model_without_bones_gets_one_and_exports() {
         "m/crate.meshasset",
         "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  userdata = \"[x]\",\n  parts = { { shape = \"box\" } },\n  bones = { { name = \"root\", shape = \"box\", mass = 25, material = \"objects\\\\box\" } },\n}\n",
     );
-    let m = resolve::model(&d.0, "m/crate.meshasset").unwrap();
+    let m = resolve::model(&d.0, "m/crate.meshasset", &resolve::no_game()).unwrap();
     assert!(m.object.flags.contains(ObjectFlags::DYNAMIC));
     assert_eq!(m.object.bones.len(), 1);
     let bone = &m.object.bones[0];
-    assert_eq!((bone.name.as_str(), bone.mass, bone.game_mtl.as_str()), ("root", 25.0, "objects\\box"));
+    // the material a bone is published with is its source's: the asset's is the description's
+    assert_eq!((bone.name.as_str(), bone.mass, bone.game_mtl.as_str()), ("root", 25.0, "default_object"));
     assert_eq!(bone.shape.kind, 1);
     assert!((bone.shape.box_halfsize - Vec3::new(0.5, 0.5, 0.5)).abs().max_element() < 1e-5);
     assert_eq!(m.object.user_data, "[x]");
@@ -518,6 +519,7 @@ fn game(textures: bool) -> GameLists {
         shaders: ["default".to_owned()].into_iter().collect(),
         compiler_shaders: ["default".to_owned()].into_iter().collect(),
         materials: ["default".to_owned()].into_iter().collect(),
+        dynamic_materials: Default::default(),
         rights: Vec::new(),
         files: None,
     }
@@ -662,7 +664,7 @@ fn the_bake_publishes_what_ships_the_same_bytes_every_time() {
             got.push((rel.to_owned(), bytes));
             Ok(())
         };
-        let done = publish(&d.0, &index, &mut sink);
+        let done = publish(&d.0, &index, &resolve::no_game(), &mut sink);
         (done, got)
     };
     let (first, files) = run();
@@ -719,7 +721,7 @@ fn a_model_ships_its_surfaces_in_the_order_of_the_baked_model_s_children() {
         got.push((rel.to_owned(), bytes));
         Ok(())
     };
-    let done = publish(&d.0, &index, &mut sink);
+    let done = publish(&d.0, &index, &resolve::no_game(), &mut sink);
     assert!(done.problems.is_empty(), "{:?}", done.problems);
     let file =
         |name: &str| &got.iter().find(|(n, _)| n.ends_with(name)).unwrap_or_else(|| panic!("{name}")).1;
@@ -817,7 +819,7 @@ fn an_import_copies_a_source_with_what_it_names_and_writes_the_assets() {
         project.put(r.as_str(), bytes);
     }
     project.put("mod.ltx", "[module]\nid = bunker\n");
-    let m = resolve::model(&project.0, "models/cube.meshasset").unwrap();
+    let m = resolve::model(&project.0, "models/cube.meshasset", &resolve::no_game()).unwrap();
     assert_eq!(m.object.surfaces[0].texture, "bunker\\brick");
     let index = index::scan(&project.0);
     assert!(index.by_name(MediaKind::Texture, "bunker\\stone").is_some());
@@ -955,4 +957,194 @@ fn music_from_anywhere_becomes_a_sound_asset_under_the_modules_name() {
             .unwrap_err()
             .contains("notes.txt")
     );
+}
+
+// ---- a model over a compiled model -------------------------------------------------------------
+
+/// The bake of a door of two surfaces: a compiled model to stand for one of the game's.
+fn compiled_door(d: &Dir) -> Vec<u8> {
+    let door = "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  name = \"props\\\\door\",\n  surfaces = {\n    { name = \"frame\", texture = \"wood\\\\frame\" },\n    { name = \"leaf\", texture = \"wood\\\\leaf\" },\n  },\n  parts = {\n    { shape = \"box\", surface = \"leaf\" },\n    { shape = \"box\", pos = { 2, 0, 0 }, surface = \"frame\" },\n  },\n}\n";
+    d.put("src/door.meshasset", door);
+    let m = resolve::model(&d.0, "src/door.meshasset", &resolve::no_game()).unwrap();
+    let bytes =
+        gz_fmt_ogf::export_skeleton(&m.object, &gz_fmt_ogf::ExportOptions::default(), 4).unwrap().bytes;
+    std::fs::remove_file(d.0.join("src\\door.meshasset")).unwrap();
+    bytes
+}
+
+fn published(d: &Dir, game: &resolve::GameModel) -> Vec<(String, Vec<u8>)> {
+    let index = index::scan(&d.0);
+    let mut got: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut sink = |rel: &str, p: Payload| -> Result<(), String> {
+        let bytes = match p {
+            Payload::Bytes(b) => b,
+            Payload::File(f) => std::fs::read(f).map_err(|e| e.to_string())?,
+        };
+        got.push((rel.to_owned(), bytes));
+        Ok(())
+    };
+    let done = publish(&d.0, &index, game, &mut sink);
+    assert!(done.problems.is_empty(), "{:?}", done.problems);
+    got
+}
+
+#[test]
+fn a_model_over_a_model_of_the_game_says_only_what_changes() {
+    let d = Dir::new("over-game");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    let ogf = compiled_door(&d);
+    let theirs = ogf.clone();
+    let game: resolve::GameModel =
+        Arc::new(move |name: &str| (name == "props\\door").then(|| theirs.clone()));
+    // a static one: the game's geometry, a surface by the name of the texture its part wears
+    d.put(
+        "o/red.meshasset",
+        "return { mesh = 1, source = \"game:props/door.ogf\", surfaces = { { name = \"leaf\", texture = \"mod\\\\red\" } } }\n",
+    );
+    let m = resolve::model(&d.0, "o/red.meshasset", &game).unwrap();
+    let c = m.compiled.as_ref().unwrap();
+    assert_eq!((c.game.as_deref(), c.bones.as_slice()), (Some("props\\door"), &["root".to_owned()][..]));
+    assert!(m.source.is_none() && !m.object.is_dynamic() && m.object.bones.is_empty());
+    let mut worn: Vec<(&str, &str)> =
+        m.object.surfaces.iter().map(|s| (s.name.as_str(), s.texture.as_str())).collect();
+    worn.sort_unstable();
+    assert_eq!(worn, [("frame", "wood\\frame"), ("leaf", "mod\\red")]);
+    assert!(m.issues.is_empty(), "{:?}", m.issues);
+    // the game's file is part of what the model is
+    let other: resolve::GameModel = {
+        let mut changed = ogf.clone();
+        changed.push(0);
+        Arc::new(move |_: &str| Some(changed.clone()))
+    };
+    assert_ne!(resolve::model(&d.0, "o/red.meshasset", &other).map(|x| x.stamp).ok(), Some(m.stamp));
+    // the index knows it has no file of the project for a source
+    let e = index::entry(&d.0, &RelPath::new("o/red.meshasset").unwrap(), "bunker", false);
+    assert_eq!((e.game.as_deref(), e.source.is_none(), e.ships()), (Some("props\\door"), true, false));
+    // a model nobody has is said at the source
+    let f = resolve::model(&d.0, "o/red.meshasset", &resolve::no_game()).unwrap_err();
+    assert_eq!((f.issue.code, f.issue.path.clone()), (resolve::MISSING, vec![Seg::key("source")]));
+    // and a name that climbs out of the models is no name
+    d.put("o/out.meshasset", "return { mesh = 1, source = \"game:../../fsgame.ogf\" }\n");
+    assert_eq!(resolve::model(&d.0, "o/out.meshasset", &game).unwrap_err().issue.code, resolve::MISSING);
+}
+
+#[test]
+fn a_dynamic_model_over_a_compiled_one_is_published_as_that_file_said_again() {
+    let d = Dir::new("over-dynamic");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    let ogf = compiled_door(&d);
+    let theirs = ogf.clone();
+    let game: resolve::GameModel =
+        Arc::new(move |name: &str| (name == "props\\door").then(|| theirs.clone()));
+    d.put(
+        "o/blue.meshasset",
+        "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  name = \"props\\\\blue\",\n  source = \"game:props/door.ogf\",\n  userdata = \"[collide]\\nignore_static\\n\",\n  bones = { { name = \"root\", mass = 7, material = \"objects\\\\barrel\" } },\n  surfaces = { { name = \"frame\", texture = \"mod\\\\blue\" } },\n}\n",
+    );
+    // the same over a file of the project, found by the asset's own name
+    d.put("o/own.ogf", &ogf);
+    d.put("o/own.meshasset", "return { mesh = 1, kind = \"dynamic\", name = \"props\\\\own\" }\n");
+    let got = published(&d, &game);
+    let file =
+        |name: &str| &got.iter().find(|(n, _)| n.ends_with(name)).unwrap_or_else(|| panic!("{name}")).1;
+    let before = gz_fmt_ogf::Visual::read(&ogf).unwrap();
+    let after = gz_fmt_ogf::Visual::read(file("blue.ogf")).unwrap();
+    let textures = |v: &gz_fmt_ogf::Visual| -> Vec<String> {
+        v.children
+            .iter()
+            .map(|c| c.texture.as_ref().map(|(t, _)| t.to_string()).unwrap_or_default())
+            .collect()
+    };
+    let (was, now) = (textures(&before), textures(&after));
+    assert_eq!(was.len(), 2);
+    for (w, n) in was.iter().zip(&now) {
+        assert_eq!(n, if w == "wood\\frame" { "mod\\blue" } else { w });
+    }
+    assert_eq!(after.user_data.as_deref(), Some("[collide]\nignore_static\n"));
+    // the mass is said again in the file; the material stays the file's own and travels in the
+    // description, where the game takes it when it is a dynamic one
+    assert_eq!((after.ik[0].mass, &after.ik[0].game_mtl), (7.0, &before.ik[0].game_mtl));
+    let described = std::str::from_utf8(file("blue.meshasset")).unwrap();
+    assert!(described.contains("objects\\\\barrel"), "{described}");
+    // the geometry and the skeleton are the file's own
+    assert_eq!(after.bones, before.bones);
+    for (a, b) in after.children.iter().zip(&before.children) {
+        assert_eq!((&a.vertices, &a.indices), (&b.vertices, &b.indices));
+    }
+    // no motions of its own are published: the file names its own
+    assert!(!got.iter().any(|(n, _)| n.ends_with("blue.omf")));
+    // the text ships one row per part, in the parts' order
+    let shipped = gz_luadata::parse(std::str::from_utf8(file("blue.meshasset")).unwrap()).unwrap();
+    let rows: Vec<String> = shipped
+        .get("surfaces")
+        .unwrap()
+        .arr()
+        .iter()
+        .map(|r| r.get("texture").and_then(gz_luadata::Value::as_str).unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(rows, now);
+    // nothing asked of the project's own file: published byte for byte
+    assert_eq!(file("own.ogf"), &ogf);
+    // what a compiled model cannot take is said, and a bone it lacks is named
+    d.put(
+        "o/bad.meshasset",
+        "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  source = \"own.ogf\",\n  scale = 2,\n  bones = { { name = \"arm\", mass = 1 }, { name = \"root\", shape = \"box\" } },\n  animations = { { name = \"open\" } },\n}\n",
+    );
+    let m = resolve::model(&d.0, "o/bad.meshasset", &game).unwrap();
+    let said: Vec<&str> = m.issues.iter().map(|i| i.code).collect();
+    // the scale, the bone the file lacks, the motion the file does not hold; a bone's shape is
+    // the game's to apply and is no problem
+    assert_eq!(said, [resolve::CANNOT; 3], "{:?}", m.issues);
+    assert!(m.issues.iter().any(|i| i.message.contains("no bone 'arm'") && i.message.contains("root")));
+    assert!(m.issues.iter().any(|i| i.message.contains("no motion 'open'")), "{:?}", m.issues);
+    assert!(!m.issues.iter().any(|i| i.path.last() == Some(&Seg::key("shape"))), "{:?}", m.issues);
+    // a bone's material the game has and no moving body is made of is said, with what happens
+    let mut lists = GameLists { linked: true, ..GameLists::default() };
+    lists.materials.extend(["default", "materials\\wood", "objects\\barrel"].map(str::to_owned));
+    lists.dynamic_materials.insert("objects\\barrel".to_owned());
+    d.put(
+        "o/mtl.meshasset",
+        "return {\n  mesh = 1,\n  kind = \"dynamic\",\n  source = \"own.ogf\",\n  bones = { { name = \"root\", material = \"materials\\\\wood\" } },\n}\n",
+    );
+    let index = index::scan(&d.0);
+    let found = issues_of(&d, "o/mtl.meshasset", MediaKind::Model, &index, &lists);
+    let mtl: Vec<&Issue> = found
+        .iter()
+        .filter(|i| i.code == crate::check::NO_MATERIAL && i.path.first() == Some(&Seg::key("bones")))
+        .collect();
+    assert_eq!(mtl.len(), 1, "{found:?}");
+    assert!(mtl[0].message.contains("no dynamic game material"), "{}", mtl[0].message);
+    // a source in the module's own game data keeps shipping where it lies; one beside its asset
+    // is a source and never ships as it is
+    d.put("gamedata/meshes/bunker/crate.ogf", &ogf);
+    d.put(
+        "o/crate.meshasset",
+        "return { mesh = 1, kind = \"dynamic\", name = \"bunker\\\\crate_red\", source = \"../gamedata/meshes/bunker/crate.ogf\" }\n",
+    );
+    let index = index::scan(&d.0);
+    assert!(!index.is_source("gamedata/meshes/bunker/crate.ogf"));
+    assert!(index.is_source("o/own.ogf") && index.is_source("o/crate.meshasset"));
+    // and the model of the game a `game:` asset is made over is the project's own file there
+    d.put("o/over.meshasset", "return { mesh = 1, source = \"game:bunker/crate.ogf\" }\n");
+    let index = index::scan(&d.0);
+    let users: Vec<&str> =
+        index.users_of("gamedata\\meshes\\bunker\\crate.ogf").iter().map(|e| e.path.as_str()).collect();
+    assert!(users.contains(&"o/over.meshasset") && users.contains(&"o/crate.meshasset"), "{users:?}");
+}
+
+#[test]
+fn a_surface_row_that_names_no_surface_is_said_with_the_names_there_are() {
+    let d = Dir::new("no-surface");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    d.put("m/cube.obj", CUBE_OBJ);
+    d.put("m/cube.mtl", CUBE_MTL);
+    d.put(
+        "m/cube.meshasset",
+        "return { mesh = 1, surfaces = { { name = \"brick\", texture = \"a\\\\b\" }, { name = \"door\", texture = \"a\\\\c\" } } }\n",
+    );
+    let index = index::scan(&d.0);
+    let found = issues_of(&d, "m/cube.meshasset", MediaKind::Model, &index, &GameLists::default());
+    let row: Vec<&Issue> = found.iter().filter(|i| i.code == resolve::CANNOT).collect();
+    assert_eq!(row.len(), 1, "{found:?}");
+    assert_eq!(row[0].path, vec![Seg::key("surfaces"), Seg::item("name", "door")]);
+    assert!(row[0].message.contains("it has: brick"), "{}", row[0].message);
 }

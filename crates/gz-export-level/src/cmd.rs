@@ -54,7 +54,7 @@ pub fn install(editor: &Arc<Editor>) {
         let session = ed.project_opt()?;
         let svc = session.services.get::<SceneService>()?;
         let snap = svc.store.snapshot();
-        let level = resolve_level(None, &snap.meta.name()).filter(|_| snap.valid)?;
+        let level = resolve_level(None, &snap.meta.level_name()).filter(|_| snap.valid)?;
         let found = starts::scene_starts(&snap, &level);
         Some((level, found))
     });
@@ -83,7 +83,7 @@ fn ctx(editor: &Arc<Editor>, l: &Layer) -> Result<Ctx, CmdError> {
     if !snap.valid {
         return Err(CmdError::not_found("No scene is open."));
     }
-    let level = resolve_level(l.level.as_deref(), &snap.meta.name())
+    let level = resolve_level(l.level.as_deref(), &snap.meta.level_name())
         .ok_or_else(|| CmdError::invalid("no level name - open a scene or pass 'level'"))?;
     // the objects named stand for the selection the exports read
     if let Some(names) = &l.objects {
@@ -120,6 +120,10 @@ fn lookup(lib: Arc<Library>) -> impl Fn(&str) -> Option<Arc<LibraryObject>> + Sy
 struct SpawnRun {
     bake: SpawnBake,
     path: Option<PathBuf>,
+    /// What the pass wrote into the level's `overlay.things`, when it took the whole scene.
+    things: crate::things::Counts,
+    /// What the file could not say as the scene has it, a sentence each.
+    left_out: Vec<String>,
 }
 
 async fn run_spawn(
@@ -137,6 +141,22 @@ async fn run_spawn(
         Ok(link) => link.files().await.ok(),
         Err(_) => None,
     };
+    // whether the game loads a module's piece of a level: its static objects then go there
+    let game_root = gz_project::Project::of(editor).map(|(_, p)| p.game_root()).unwrap_or_default();
+    let statics_in_piece = !game_root.is_empty()
+        && editor
+            .exec
+            .io(move || {
+                gz_game::version::game_states(
+                    std::path::Path::new(&game_root),
+                    &gz_game::version::LINKED_GAME,
+                    gz_game::version::words::LEVEL_PIECES,
+                )
+            })
+            .await;
+    // the level is the game's: the scene lies over it, or the game holds its files
+    let of_game = c.snap.meta.base.is_set()
+        || game.as_ref().is_some_and(|g| g.exists(&format!("levels/{}/level", c.level.to_lowercase())));
     let root = c.session.root.clone();
     let sdk = gz_project::library_root(editor).join("gamedata").join("meshes");
     let (snap, level) = (c.snap.clone(), c.level.clone());
@@ -168,6 +188,7 @@ async fn run_spawn(
                 game_patrols: &patrols,
                 radio: Some(&radio),
                 old_text: &g2.old_text,
+                statics_in_piece,
             };
             spawn::bake(&input)
         })
@@ -189,7 +210,72 @@ async fn run_spawn(
     if let Some(p) = &path {
         editor.log.info(format!("[XMS] spawn layer: {} op(s) -> {}", bake.result.exported, p.display()))
     }
-    Ok(SpawnRun { bake, path })
+    // what the level takes from the module as text, the file the game puts beside the level's
+    // own: over a level of the game everything the module adds there, on a level of the module's
+    // own what the level's own files cannot carry
+    let mut things = crate::things::Counts::default();
+    let mut left_out = Vec::new();
+    if mirror {
+        let over = if of_game { crate::things::Over::Game } else { crate::things::Over::Own };
+        let made = crate::things::text(&c.snap, over);
+        if let Some(t) = &made {
+            things = t.counts;
+            left_out.clone_from(&t.warnings);
+        }
+        let text = made.filter(|t| t.counts.total() > 0).map(|t| t.text);
+        let (root, level, guard) = (c.session.root.clone(), c.level.clone(), c.guard.clone());
+        let holds = things.total();
+        let kept = editor
+            .exec
+            .io(move || -> Result<bool, String> {
+                let at = crate::things::path(&root, &level);
+                // a file somebody wrote is theirs: the build neither replaces nor removes it
+                let theirs =
+                    std::fs::read(&at).is_ok_and(|b| !crate::things::is_builds(&String::from_utf8_lossy(&b)));
+                if theirs {
+                    return Ok(true);
+                }
+                match text {
+                    Some(text) => {
+                        gather::write_level_file(
+                            &root,
+                            &level,
+                            "overlay.things",
+                            text.as_bytes(),
+                            "overlay.things",
+                            &guard,
+                        )?;
+                    }
+                    None if at.is_file() => {
+                        guard.check(&at).map_err(|e| e.to_string())?;
+                        std::fs::remove_file(&at).map_err(|e| {
+                            format!("overlay.things could not be removed: {}", gz_base::io_reason(&e))
+                        })?;
+                    }
+                    None => {}
+                }
+                Ok(false)
+            })
+            .await?;
+        if kept {
+            left_out.push(format!(
+                "levels\\{}\\overlay.things was not made by the level build and is left as it is{}. Remove the file to let the build make it.",
+                c.level,
+                if holds > 0 { format!(": {holds} thing(s) of the scene are not written into it") } else { String::new() }
+            ));
+            things = crate::things::Counts::default();
+        }
+        if things.total() > 0 {
+            let said: Vec<String> =
+                things.named().iter().filter(|(_, n)| *n > 0).map(|(k, n)| format!("{n} {k}")).collect();
+            editor.log.info(format!(
+                "[XMS] level things: {} -> levels\\{}\\overlay.things",
+                said.join(", "),
+                c.level
+            ));
+        }
+    }
+    Ok(SpawnRun { bake, path, things, left_out })
 }
 
 /// The spawn layer of the selection (or the objects named, or the whole scene), merged into the
@@ -414,19 +500,24 @@ pub async fn bake_layer(
     snap: Arc<Snap<SceneState>>,
 ) -> Result<Value, String> {
     let svc = session.services.get::<SceneService>().ok_or("no scene")?;
-    let level = resolve_level(None, &snap.meta.name()).ok_or("the scene has no name yet: save it first")?;
+    let level =
+        resolve_level(None, &snap.meta.level_name()).ok_or("the scene has no name yet: save it first")?;
     let guard =
         session.services.get::<gz_project::Project>().map(|p| p.write_guard(None)).unwrap_or_default();
     let c = Ctx { session: session.clone(), guard, svc, snap, level: level.clone() };
     let run = run_spawn(editor, &c, false, None, None, true).await?;
     let r = &run.bake.result;
+    let mut warnings = r.warnings.clone();
+    warnings.extend(run.left_out.iter().cloned());
     Ok(json!({
         "level": level,
         "exported": r.exported,
         "missing": r.missing,
         "invisible": r.invisible,
-        "warnings": r.warnings,
+        "removed": r.removed,
+        "warnings": warnings,
         "path": run.path.as_deref().map(json_path).unwrap_or_default(),
+        "things": run.things.named().iter().map(|(k, n)| ((*k).to_owned(), json!(n))).collect::<gz_editor::Args>(),
     }))
 }
 
@@ -434,11 +525,17 @@ pub async fn bake_layer(
 /// layer, a warning per thing left out, an error when the bake failed. Empty without an open
 /// scene.
 async fn bake_note(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> Vec<Finding> {
-    let Some(svc) = session.services.get::<SceneService>() else { return Vec::new() };
+    // the level of the scene that is open, as it is now - saved or not
+    let open = session
+        .services
+        .get::<SceneService>()
+        .and_then(|svc| resolve_level(None, &svc.store.snapshot().meta.level_name()));
+    let leftovers = leftover_layers(editor, session, open).await;
+    let Some(svc) = session.services.get::<SceneService>() else { return leftovers };
     let snap = svc.store.snapshot();
-    let Some(level) = resolve_level(None, &snap.meta.name()) else { return Vec::new() };
+    let Some(level) = resolve_level(None, &snap.meta.level_name()) else { return leftovers };
     if !snap.valid {
-        return Vec::new();
+        return leftovers;
     }
     let guard =
         session.services.get::<gz_project::Project>().map(|p| p.write_guard(None)).unwrap_or_default();
@@ -452,22 +549,91 @@ async fn bake_note(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> Vec<F
             } else {
                 format!("Scene baked: empty, spawn\\{level}.xspawn cleared")
             }));
-            if r.missing > 0 {
-                note.push(Finding::warning(format!(
-                    "{} object(s) not baked: their model exists neither in the game nor in the project (see the log).",
-                    r.missing
+            // what taking the level's own spawn points out means for a save, where the author
+            // meets the build's result
+            if r.removed > 0 {
+                note.push(Finding::info(format!(
+                    "{} spawn point(s) of {level} are taken out for the module's mode: a new game started with the module has none of them, and a save made in it keeps them out for a game without the module too.",
+                    r.removed
                 )));
             }
-            if r.invisible > 0 {
-                note.push(Finding::warning(format!(
-                    "{} object(s) keep a model the engine draws nothing for: they work but stay invisible (see the log).",
-                    r.invisible
-                )));
-            }
-            // every left-out path and order, by name: the note is what the build shows
+            // every object left out or unseen, every left-out path and order, by name: the note is
+            // what the build shows
             note.extend(r.warnings.iter().map(Finding::warning));
         }
         Err(e) => note.push(Finding::error(format!("The scene of '{level}' could not be baked: {e}"))),
     }
+    note.extend(leftovers);
     note
+}
+
+/// The module layers a level build makes in `levels\<level>` and beside it.
+const LAYER_FILES: [&str; 4] = ["overlay.things", "overlay.xcform", "overlay.cut", "overlay.aiedit"];
+
+/// The levels the project holds module layers of that no scene of the project is of: a scene that
+/// lay over one was moved to another level (its `base` changed) or renamed, and what its builds
+/// left still ships. A warning each.
+///
+/// Only what a level build left is a leftover: the level's `gamedata\levels\<level>\build.state`
+/// says a build made its layers. Layers made by hand - a project without a scene, a level beside
+/// the scene's - have no such record and are told nothing. `open` is the level of the scene that
+/// is open, as it is now: its files may still say another. And while a scene of the project does
+/// not read, nobody can say which level it lies over: nothing is called a leftover then.
+async fn leftover_layers(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    open: Option<String>,
+) -> Vec<Finding> {
+    let Some(project) = session.services.get::<gz_project::Project>() else { return Vec::new() };
+    let root = session.root.clone();
+    let scenes: Vec<PathBuf> = project
+        .tree
+        .snapshot()
+        .files_with_extension(gz_scene::format::EXT)
+        .iter()
+        .map(|r| r.to_fs(&root))
+        .collect();
+    if scenes.is_empty() {
+        return Vec::new();
+    }
+    editor
+        .exec
+        .io(move || {
+            let mut of_scenes: Vec<String> = open.iter().map(|l| l.to_lowercase()).collect();
+            for s in &scenes {
+                match gz_scene::format::level_of_readable_file(s) {
+                    Some(level) => of_scenes.push(level.to_lowercase()),
+                    None => return Vec::new(),
+                }
+            }
+            let mut found = Vec::new();
+            let Ok(dir) = std::fs::read_dir(root.join("levels")) else { return found };
+            let mut levels: Vec<String> = dir
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            levels.sort();
+            for level in levels {
+                if of_scenes.contains(&level.to_lowercase()) {
+                    continue;
+                }
+                let at = root.join("levels").join(&level);
+                let mut holds: Vec<&str> = LAYER_FILES.iter().copied().filter(|f| at.join(f).is_file()).collect();
+                if at.join("pieces").is_dir() {
+                    holds.push("pieces");
+                }
+                // made by a level build, or by hand: the build's record of the level tells
+                let built = root.join("gamedata").join("levels").join(&level).join("build.state").is_file();
+                if holds.is_empty() || !built {
+                    continue;
+                }
+                found.push(Finding::warning(format!(
+                    "levels\\{level} holds layers a level build made ({}) and no scene of the project is of that level: a scene that lay over it was moved to another level or renamed, and the module still ships them. Remove the folder, spawn\\{level}.xspawn and gamedata\\levels\\{level} when they are leftovers.",
+                    holds.join(", ")
+                )));
+            }
+            found
+        })
+        .await
 }

@@ -145,6 +145,45 @@ fn finish_mesh(g: &mut LcGlobalData) {
 }
 
 #[test]
+fn a_spot_light_lights_what_is_in_its_cone_as_a_point_light_would() {
+    // 4 m above the floor, looking straight down, a cone of 60 degrees: 2.31 m of floor around
+    // the point under it
+    let spot = RLight::from_flight(&gz_fmt_level::Light {
+        kind: 2,
+        diffuse: [1.0, 1.0, 1.0, 1.0],
+        position: Vec3::new(5.0, 4.0, 5.0),
+        direction: Vec3::NEG_Y,
+        range: 10.0,
+        attenuation0: 1.0,
+        phi: 60.0f32.to_radians(),
+        ..Default::default()
+    });
+    let lamp = point_light(Vec3::new(5.0, 4.0, 5.0), 10.0);
+    let lit = |light: RLight, p: Vec3| {
+        let mut g = global(LightSet { rgb: vec![light], hemi: vec![], sun: vec![] });
+        floor(&mut g.mesh, 0.0, (0.0, 0.0), (10.0, 10.0), 0);
+        finish_mesh(&mut g);
+        g.build_rapid(&g.scene_bounds()).unwrap();
+        let env = g.light_env().unwrap();
+        let t = tracer(&env);
+        let mut c = ColorC::default();
+        light_point(&t, &mut LightCache::default(), &mut c, p, Vec3::Y, env.lights, LP_DEFAULT, None);
+        c.rgb.x
+    };
+    // under the light: all of the point light
+    let under = Vec3::new(5.0, 0.0, 5.0);
+    assert_eq!(lit(spot, under), lit(lamp, under));
+    assert!(lit(spot, under) > 0.0);
+    // inside the cone, off its axis: a share of it; outside: nothing, where the lamp still shines
+    let inside = Vec3::new(6.2, 0.0, 5.0);
+    let share = lit(spot, inside) / lit(lamp, inside);
+    assert!(share > 0.3 && share < 1.0, "{share}");
+    let outside = Vec3::new(8.5, 0.0, 5.0);
+    assert_eq!(lit(spot, outside), 0.0);
+    assert!(lit(lamp, outside) > 0.0);
+}
+
+#[test]
 fn a_point_with_a_free_sky_and_under_an_occluder() {
     // a point light 2 m above the point: from_flight makes range 11, energy 1, falloff 1/11
     let lights = LightSet {

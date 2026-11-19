@@ -26,7 +26,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::class::ObjClass;
-use crate::library::{Library, LibraryObject, Provider};
+use crate::library::{Library, LibraryObject, Provider, SolidMesh};
 use crate::math::{Aabb, Mat4};
 use crate::model::{ObjData, Object, SceneState};
 use crate::objtools::geom::is_static_any;
@@ -468,6 +468,41 @@ pub fn cut_model(object: &EditObject, world: &Mat4, regions: &[Region]) -> Optio
     changed.then_some(out)
 }
 
+/// The faces of an object that stop a body with the regions cut out of them, as [`cut_model`]
+/// cuts the drawn ones: a level of the game has its collision apart from its picture, and the
+/// ground a terrain replaces is gone from both. A face nothing cut keeps its vertices.
+#[must_use]
+pub fn cut_solid(solid: &SolidMesh, world: &Mat4, regions: &[Region]) -> SolidMesh {
+    let inverse = Mat4::invert_43(world);
+    let corner = |v: u32| Corner {
+        pos: world.transform_tiny(solid.verts.get(v as usize).copied().unwrap_or_default()),
+        uv: Vec2::ZERO,
+    };
+    let tris: Vec<[Corner; 3]> = solid.tris.iter().map(|t| t.map(corner)).collect();
+    let pieces = gz_terrain::clip_mesh(regions, &tris);
+    let mut verts: Vec<Vec3> = solid.verts.to_vec();
+    let mut vert_of: FxHashMap<[u32; 3], u32> = FxHashMap::default();
+    let mut out = Vec::with_capacity(pieces.len());
+    let mut materials = Vec::with_capacity(pieces.len());
+    for p in &pieces {
+        let Some(source) = solid.tris.get(p.source) else { continue };
+        let mut tri = *source;
+        if p.cut {
+            for (slot, c) in tri.iter_mut().zip(&p.corners) {
+                let local = inverse.transform_tiny(c.pos);
+                let key = [local.x.to_bits(), local.y.to_bits(), local.z.to_bits()];
+                *slot = *vert_of.entry(key).or_insert_with(|| {
+                    verts.push(local);
+                    (verts.len() - 1) as u32
+                });
+            }
+        }
+        out.push(tri);
+        materials.push(solid.tri_material.get(p.source).copied().unwrap_or(0));
+    }
+    SolidMesh::new(verts, out, solid.materials.clone(), materials)
+}
+
 /// The library object of a terrain or of a cut object, made over the scene there is now.
 /// Blocking: on the IO pool.
 fn provide(state: &SceneState, lib: &Library, terrains: &Terrains, key: &str) -> Option<Arc<LibraryObject>> {
@@ -492,6 +527,12 @@ fn provide(state: &SceneState, lib: &Library, terrains: &Terrains, key: &str) ->
         cutting(state, lib, o).iter().filter_map(|(c, _)| terrains.old_region(state, lib, c)).collect();
     let object = cut_model(&original.object, &o.world(), &regions).unwrap_or_else(|| original.object.clone());
     let mut lo = LibraryObject::provided(key, object);
+    // a cut model is the model it was cut from in everything but its faces: what its surfaces
+    // are for, and - where the model's collision is apart from its picture - the collision, cut
+    lo.stated_uses.clone_from(&original.stated_uses);
+    if let Some(solid) = &original.solid {
+        lo = lo.with_solid(cut_solid(solid, &o.world(), &regions));
+    }
     lo.stamp = stamp;
     Some(Arc::new(lo))
 }
@@ -853,6 +894,50 @@ mod tests {
         let p = AuditParams { objects: Some(vec!["thing".to_owned()]), ..AuditParams::default() };
         let found = audit(&sc, &p, None).map(|a| a.findings).unwrap_or_default();
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A model whose collision is apart from its picture (a level of the game) loses the ground
+    /// a terrain replaces from the collision as well: a ray through the yard meets nothing of it.
+    #[test]
+    fn a_cut_takes_the_old_ground_out_of_a_model_s_own_collision() {
+        let state = scene(true);
+        let terrains = Arc::new(Terrains::default());
+        let lib = library(&state, &terrains);
+        let floor = state.find_any("Floor").expect("the ground").clone();
+        load_ground(&state, &lib);
+        let regions: Vec<Region> = cutting(&state, &lib, &floor)
+            .iter()
+            .filter_map(|(c, _)| terrains.old_region(&state, &lib, c))
+            .collect();
+        assert_eq!(regions.len(), 1, "the yard cuts the floor");
+        // the floor's collision: one quad of 100 x 100 m at the ground's height
+        let at = |x: f32, z: f32| Vec3::new(x, 0.0, z);
+        let solid = SolidMesh::new(
+            vec![at(-50.0, -50.0), at(-50.0, 50.0), at(50.0, 50.0), at(50.0, -50.0)],
+            vec![[0, 1, 2], [0, 2, 3]],
+            vec![SmolStr::new("earth")],
+            vec![0, 0],
+        );
+        let cut = cut_solid(&solid, &floor.world(), &regions);
+        assert!(cut.tris.len() > 2, "the quad is cut into more faces");
+        assert_eq!(cut.tri_material.len(), cut.tris.len());
+        assert_eq!(cut.material_of(0), Some("earth"));
+        // the area that is left is the quad without the yard's 10 x 10 m
+        let area: f32 = cut
+            .tris
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| cut.verts[i as usize]);
+                (b - a).cross(c - a).length() * 0.5
+            })
+            .sum();
+        assert!((area - (10_000.0 - 100.0)).abs() < 1.0, "{area}");
+        // and no face of it lies under the middle of the yard
+        let inside = cut.tris.iter().any(|t| {
+            let m = t.map(|i| cut.verts[i as usize]).iter().fold(Vec3::ZERO, |s, v| s + *v) / 3.0;
+            m.x.abs() < 4.0 && m.z.abs() < 4.0
+        });
+        assert!(!inside);
     }
 
     fn scene(cut: bool) -> SceneState {

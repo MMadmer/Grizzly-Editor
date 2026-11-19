@@ -212,8 +212,36 @@ fn shipped_model_text(text: &[u8], ogf: &[u8], m: &resolve::Model) -> Result<Opt
     Ok(Some(gz_luadata::write_asset("", &out).into_bytes()))
 }
 
+/// A compiled model as a dynamic model asset over it publishes it: every part wears what the
+/// asset's surface of its look wears now, the user data and the bones' mass are the asset's
+/// where it says them, and everything else is the file's own bytes. A bone's material stays the
+/// file's: the asset's is said in the description shipped beside the model, where the game
+/// takes it when it is a dynamic one - written into the file, another would stop the game.
+fn restated(c: &resolve::Compiled, m: &resolve::Model) -> Result<Vec<u8>, String> {
+    // the surfaces of the rest-pose object are named after the textures the file's parts wear:
+    // a part is found by what it wore, and answered with what its surface wears
+    let visual = gz_fmt_ogf::Visual::read(&c.bytes).map_err(|e| e.to_string())?;
+    let was = gz_fmt_mesh::object_of_ogf(&visual, "").map_err(|e| e.to_string())?.object;
+    let wear = |texture: &str, shader: &str| -> Option<(String, String)> {
+        let texture = texture.split(',').next().unwrap_or("").trim();
+        let i = was
+            .surfaces
+            .iter()
+            .position(|s| s.texture.eq_ignore_ascii_case(texture) && s.shader.eq_ignore_ascii_case(shader))?;
+        let now = m.object.surfaces.get(i)?;
+        let same = now.texture.eq_ignore_ascii_case(texture) && now.shader.eq_ignore_ascii_case(shader);
+        (!same).then(|| (now.texture.to_string(), now.shader.to_string()))
+    };
+    let bone = |name: &str| {
+        let row = m.asset.bones.iter().find(|r| r.name.eq_ignore_ascii_case(name));
+        gz_fmt_ogf::BoneChange { mass: row.and_then(|r| r.mass).map(|x| x as f32) }
+    };
+    let with = gz_fmt_ogf::Restate { wear: &wear, user_data: m.asset.userdata.as_deref(), bone: &bone };
+    gz_fmt_ogf::restate(&c.bytes, &with).map(|(bytes, _)| bytes).map_err(|e| e.to_string())
+}
+
 /// The baked files of one asset and, for a model, the text it ships with.
-fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Baked, String> {
+fn bake(root: &Path, e: &Entry, game: &resolve::GameModel, hits: &mut usize) -> Result<Baked, String> {
     let dir = cache_dir(root);
     let h = bake_stamp(root, e);
     let base = format!("{}\\{}", folder(e.kind), e.name);
@@ -282,20 +310,23 @@ fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Baked, String> {
             out.push((format!("{base}.ogg"), ogg));
         }
         MediaKind::Model => {
-            let m = resolve::model(root, rel).map_err(|f| f.to_string())?;
+            let m = resolve::model(root, rel, game).map_err(|f| f.to_string())?;
             // what its surfaces were resolved to is part of the model: a surface without a row
             // takes its texture from a texture asset's name and the module's id, which no file
-            // of the stamp says
+            // of the stamp says - and a model of the game is no file of the project at all
+            let h = fnv(h, &m.stamp.to_le_bytes());
             let h = m.object.surfaces.iter().fold(h, |h, s| {
                 [s.name.as_str(), s.texture.as_str(), s.shader.as_str()]
                     .iter()
                     .fold(fnv(h, b"\0"), |h, x| fnv(fnv(h, x.to_lowercase().as_bytes()), b"|"))
             });
             let opts = ExportOptions { source_file: e.name.as_str().into(), ..ExportOptions::default() };
-            let ogf = cached(&dir, &format!("{h:016x}.ogf"), hits, || {
-                gz_fmt_ogf::export_skeleton(&m.object, &opts, 4)
+            let ogf = cached(&dir, &format!("{h:016x}.ogf"), hits, || match &m.compiled {
+                // a compiled model is published as itself, with what the asset changes said again
+                Some(c) => restated(c, &m),
+                None => gz_fmt_ogf::export_skeleton(&m.object, &opts, 4)
                     .map(|x| x.bytes)
-                    .map_err(|err| err.to_string())
+                    .map_err(|err| err.to_string()),
             })?;
             let baked = std::fs::read(&ogf)
                 .map_err(|err| format!("{}: {}", ogf.display(), gz_base::io_reason(&err)))?;
@@ -303,7 +334,7 @@ fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Baked, String> {
                 .map_err(|err| format!("{}: {}", e.path, gz_base::io_reason(&err)))?;
             shipped = shipped_model_text(&text, &baked, &m)?;
             out.push((format!("{base}.ogf"), ogf));
-            if !m.object.motions.is_empty() {
+            if m.compiled.is_none() && !m.object.motions.is_empty() {
                 let omf = cached(&dir, &format!("{h:016x}.omf"), hits, || {
                     gz_fmt_ogf::export_omf(&m.object).map(|x| x.bytes).map_err(|err| err.to_string())
                 })?;
@@ -317,10 +348,10 @@ fn bake(root: &Path, e: &Entry, hits: &mut usize) -> Result<Baked, String> {
 /// Publishes every asset of the index that ships into `sink`: its baked files from the cache,
 /// then its text. An asset that cannot be baked is a problem and publishes nothing; the others
 /// go on. Blocking: run it on the IO pool.
-pub fn publish(root: &Path, index: &Index, sink: &mut dyn Sink) -> Published {
+pub fn publish(root: &Path, index: &Index, game: &resolve::GameModel, sink: &mut dyn Sink) -> Published {
     let mut done = Published::default();
     for e in index.entries.iter().filter(|e| e.ships()) {
-        let baked = match bake(root, e, &mut done.cached) {
+        let baked = match bake(root, e, game, &mut done.cached) {
             Ok(b) => b,
             Err(why) => {
                 done.problems.push(format!("{}: {why}", e.path));

@@ -10,6 +10,7 @@
 //! inside, and a coordinate that is no number draws nothing.
 
 mod font;
+pub mod raster;
 
 pub use font::{ADVANCE, GLYPH_H, GLYPH_W, LINE, text_size};
 
@@ -379,6 +380,19 @@ impl Canvas {
             writer.write_image_data(&self.data)?;
         }
         Ok(out)
+    }
+
+    /// A picture read back from the PNG [`Self::png`] wrote; `None` for any other file.
+    #[must_use]
+    pub fn from_png(bytes: &[u8]) -> Option<Self> {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().ok()?;
+        let mut data = vec![0; reader.output_buffer_size()?];
+        let info = reader.next_frame(&mut data).ok()?;
+        if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+            return None;
+        }
+        data.truncate(info.buffer_size());
+        Self::from_rgba(info.width, info.height, data)
     }
 }
 

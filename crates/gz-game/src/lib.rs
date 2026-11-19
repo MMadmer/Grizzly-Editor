@@ -33,6 +33,7 @@
 mod cmd;
 pub mod configs;
 pub mod modes;
+pub mod own;
 pub mod project_kind;
 mod service;
 pub mod spawn;
@@ -41,5 +42,6 @@ pub mod version;
 pub use cmd::{LookupAnswer, LookupEntry, LookupQuery, Lookups, install, register};
 pub use configs::{ConfigTree, SYSTEM_LTX};
 pub use modes::{GameMode, ModeScan};
+pub use own::{ComposedConfigs, OwnSection, OwnSections};
 pub use service::{Bundled, GameError, GameLink, Provenance, read_game_or_bundled, spawn_roster};
 pub use spawn::SpawnSection;

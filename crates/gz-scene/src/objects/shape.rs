@@ -235,3 +235,42 @@ impl Default for FogData {
 }
 
 impl FogData {}
+
+/// A zone's shapes as its entity holds them: the object's scale applied, nothing of where the
+/// zone stands (an entity's shapes are in its own space).
+#[must_use]
+pub fn entity_shapes(scale: Vec3, shapes: &[ShapeDef]) -> Vec<gz_entities::Shape> {
+    let s_matrix = crate::math::scale_matrix(scale);
+    shapes
+        .iter()
+        .map(|sh| {
+            if sh.kind == CF_SPHERE {
+                gz_entities::Shape::Sphere {
+                    center: s_matrix.transform_tiny(sh.center()),
+                    radius: sh.radius() * scale.x,
+                }
+            } else {
+                let b: Mat4 = sh.matrix().mul_a43(&s_matrix);
+                gz_entities::Shape::Box { i: b.row(0), j: b.row(1), k: b.row(2), c: b.c() }
+            }
+        })
+        .collect()
+}
+
+/// An entity's shapes as a shape object holds them (what the scene edits and its files say).
+#[must_use]
+pub fn shape_defs(shapes: &[gz_entities::Shape]) -> Vec<ShapeDef> {
+    shapes
+        .iter()
+        .filter_map(|s| match s {
+            gz_entities::Shape::Sphere { center, radius } => Some(ShapeDef::sphere(*center, *radius)),
+            gz_entities::Shape::Box { i, j, k, c } => Some(ShapeDef::boxed(&Mat4([
+                [i.x, i.y, i.z, 0.0],
+                [j.x, j.y, j.z, 0.0],
+                [k.x, k.y, k.z, 0.0],
+                [c.x, c.y, c.z, 1.0],
+            ]))),
+            gz_entities::Shape::Other(_) => None,
+        })
+        .collect()
+}

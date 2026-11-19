@@ -186,6 +186,7 @@ pub(crate) fn apply(state: &mut SceneState, edit: ToolEdit, cx: &mut Apply) -> R
             Ok(SceneReply::Count(n))
         }
         ToolEdit::MovePoints { way, points, merge } => {
+            state.check_editable(way)?;
             let mut o = (**state.get(way).ok_or_else(|| missing(way))?).clone();
             let ObjData::Way(w) = &mut o.data else {
                 return Err(CmdError::invalid("the object is not a way"));
@@ -245,6 +246,10 @@ fn apply_batch(state: &mut SceneState, b: Batch, cx: &mut Apply) -> Result<Scene
         return Ok(SceneReply::Count(0));
     }
     let content = !(b.remove.is_empty() && b.replace.is_empty() && b.add.is_empty());
+    // nothing of a batch is done to what may not be changed: the level's own, a locked object
+    for id in b.remove.iter().copied().chain(b.replace.iter().map(|o| o.id)) {
+        state.check_editable(id)?;
+    }
     for id in &b.remove {
         state.remove(*id);
     }

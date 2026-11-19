@@ -6,6 +6,7 @@
 //! ([`BulkData::stream_of`]): written back bit for bit while nothing painted it.
 
 use crate::class::ObjClass;
+use crate::model::SceneState;
 use crate::tools::BulkData;
 
 pub const MAGIC: &[u8; 8] = b"GZLAYER\0";
@@ -50,6 +51,21 @@ pub fn write(layer: Layer, bulk: &BulkData) -> Vec<u8> {
 #[must_use]
 pub fn has(layer: Layer, bulk: &BulkData) -> bool {
     bulk.needs_save(layer.class)
+}
+
+/// Whether a scene holds a layer of its own to keep: over a level of the game the level's layer
+/// (its AI map) is the level's until the scene paints it.
+#[must_use]
+pub fn own(layer: Layer, state: &SceneState) -> bool {
+    fn same<T>(a: &Option<std::sync::Arc<T>>, b: &Option<std::sync::Arc<T>>) -> bool {
+        matches!((a, b), (Some(x), Some(y)) if std::sync::Arc::ptr_eq(x, y))
+    }
+    let level_s = state.meta.base.state.as_ref().is_some_and(|level| match layer.class {
+        ObjClass::AiMap => same(&level.bulk.ai_map, &state.bulk.ai_map),
+        ObjClass::DetailObjects => same(&level.bulk.details, &state.bulk.details),
+        _ => same(&level.bulk.wallmarks, &state.bulk.wallmarks),
+    });
+    !level_s && has(layer, &state.bulk)
 }
 
 /// Reads a layer's file into `bulk`; a sentence when it is not one, or of a newer editor.

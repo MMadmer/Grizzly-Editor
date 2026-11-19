@@ -89,8 +89,8 @@ pub use implicit::{
 };
 pub use layer::{BORDER, LmLayer, apply_borders, blit, blit_r, image_of, lblit, pixels_of};
 pub use light::{
-    LCONTROL_HEMI, LCONTROL_STATIC, LCONTROL_SUN, LT_DIRECT, LT_POINT, LT_SECONDARY, LightSet, R_LIGHT_SIZE,
-    RLight,
+    LCONTROL_HEMI, LCONTROL_STATIC, LCONTROL_SUN, LT_DIRECT, LT_POINT, LT_SECONDARY, LT_SPOT, LightSet,
+    R_LIGHT_SIZE, RLight,
 };
 pub use lightmap::{Lightmap, LightmapPage, PackReport, Rect, merge_lightmaps, pack_lightmaps};
 pub use mesh::{

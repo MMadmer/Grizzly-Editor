@@ -27,9 +27,11 @@ mod kinds;
 pub use check::{Counts, MANIFEST, Report, check_file, check_manifest, run as check_run, targets};
 pub use cmd::{CheckParams, FailOn, FindParams, MigrateParams, ReferenceParams, TakeTheirsParams, register};
 pub use file::{
-    AssetFile, ReadFailure, at, at_path, other_headers, read, read_text, save, write, write_text,
+    AssetFile, ReadFailure, at, at_path, other_headers, read, read_text, save, write, write_bytes, write_text,
 };
-pub use kinds::{CheckFn, KindOps, Kinds, ManifestCheckFn, Migration, ReferenceFn, TakeTheirsFn};
+pub use kinds::{
+    CheckFn, KindOps, Kinds, ManifestCheckFn, Migration, ReferenceFn, TakeTheirsFn, TextCheckFn,
+};
 
 #[cfg(test)]
 mod tests;

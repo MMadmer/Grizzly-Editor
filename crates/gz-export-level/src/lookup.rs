@@ -102,7 +102,7 @@ impl SceneLookup for LiveScene {
     fn level(&self) -> Option<String> {
         let (ed, svc) = self.scene()?;
         let snap = svc.store.snapshot();
-        let level = resolve_level(None, &snap.meta.name())?;
+        let level = resolve_level(None, &snap.meta.level_name())?;
         let world = ed.project_opt()?.services.get::<gz_world::WorldService>()?.latest()?;
         world.levels.iter().any(|l| l.eq_ignore_ascii_case(&level)).then_some(level)
     }

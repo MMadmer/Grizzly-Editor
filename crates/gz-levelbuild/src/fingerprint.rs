@@ -324,6 +324,24 @@ pub fn library_stamp_with(
     h.finish()
 }
 
+/// The painted wallmarks as the build makes faces of them.
+fn marks_hash(h: &mut Stable, scene: &SceneState) {
+    let Some(w) = &scene.bulk.wallmarks else { return };
+    for slot in crate::wallmarks::read(&w.raw) {
+        h.str(&slot.shader);
+        h.str(&slot.texture);
+        for m in &slot.marks {
+            for (p, _, t) in &m.verts {
+                h.f32(p.x);
+                h.f32(p.y);
+                h.f32(p.z);
+                h.f32(t.x);
+                h.f32(t.y);
+            }
+        }
+    }
+}
+
 /// The layers and settings a step reads besides objects, hashed.
 fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
     let mut h = Stable::new();
@@ -337,21 +355,7 @@ fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
             debug_hash(&mut h, &level.build);
             h.word(u64::from(level.light_hemi_quality) | u64::from(level.light_sun_quality) << 8);
             debug_hash(&mut h, &scene.tools.part(ObjClass::Light).light());
-            if let Some(w) = &scene.bulk.wallmarks {
-                for slot in crate::wallmarks::read(&w.raw) {
-                    h.str(&slot.shader);
-                    h.str(&slot.texture);
-                    for m in &slot.marks {
-                        for (p, _, t) in &m.verts {
-                            h.f32(p.x);
-                            h.f32(p.y);
-                            h.f32(p.z);
-                            h.f32(t.x);
-                            h.f32(t.y);
-                        }
-                    }
-                }
-            }
+            marks_hash(&mut h, scene);
             h.word(opts.quality as u64);
         }
         Step::Game => {
@@ -392,6 +396,10 @@ fn layers(scene: &SceneState, step: Step, opts: &Options) -> u64 {
         // the build settings, the light's, the quality, the flags, the linked game; the objects
         // (authored ones the piece, the rest its shadows) and the lights are the classes it reads
         Step::Piece => {
+            // the marks a scene over a level of the game paints are faces of its piece
+            if scene.meta.base.is_set() {
+                marks_hash(&mut h, scene);
+            }
             debug_hash(&mut h, &level.build);
             h.word(u64::from(level.light_hemi_quality) | u64::from(level.light_sun_quality) << 8);
             debug_hash(&mut h, &scene.tools.part(ObjClass::Light).light());
@@ -432,6 +440,11 @@ pub fn ai_nodes_hash(scene: &SceneState) -> u64 {
     h.finish()
 }
 
+/// How the module's piece of a level is made from the scene, as a number: it moves when the same
+/// scene would be compiled into another piece (2: a static surface that names a shader for models
+/// is compiled with the shader for level geometry), so a piece made the older way is stale.
+const PIECE_MAKING: u64 = 2;
+
 /// The fingerprint of every step for one scene version, `opts` the build's options.
 #[must_use]
 pub fn steps(scene: &SceneState, objects: &Objects, opts: &Options) -> FxHashMap<Step, u64> {
@@ -439,6 +452,9 @@ pub fn steps(scene: &SceneState, objects: &Objects, opts: &Options) -> FxHashMap
     for step in Step::ORDER {
         let mut h = Stable::new();
         h.str(step.name());
+        if step == Step::Piece {
+            h.word(PIECE_MAKING);
+        }
         for c in step.classes() {
             for e in objects.read_by(step, *c) {
                 h.word(u64::from(c.id()));
@@ -557,7 +573,7 @@ mod tests {
         put("art\\other.tga", &crate::compile::tests::tga(4, 4, [1, 2, 3, 255]));
         put("art\\other.texasset", b"return { tex = 1 }\n");
         let lib = gz_scene::library::Library::new(vec![root.join("rawdata").join("objects")]);
-        lib.add_provider(gz_media::provider(root.clone()));
+        lib.add_provider(gz_media::provider(root.clone(), gz_media::resolve::no_game()));
         let mut scene = SceneState::default();
         for (name, r) in [("crate_1", "models/crate.meshasset"), ("wall_1", "models/wall.meshasset")] {
             let data = gz_scene::objects::SceneObjectData { reference: r.into(), ..Default::default() };

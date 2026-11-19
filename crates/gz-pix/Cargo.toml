@@ -12,3 +12,4 @@ workspace = true
 
 [dependencies]
 png.workspace = true
+glam.workspace = true

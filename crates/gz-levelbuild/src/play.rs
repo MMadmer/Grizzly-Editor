@@ -945,7 +945,11 @@ pub fn stage_level(root: &Path, level: &str, level_dir: &Path, spawn: &Path) -> 
 /// written through; a baked file is a hard link to the project's cache where the volume allows.
 /// Only into a root Play made (its marker). Answers what was staged and the assets that could not
 /// be baked, a sentence each. Blocking.
-pub fn stage_media(root: &Path, project: &Path) -> Result<(Mirrored, Vec<String>), String> {
+pub fn stage_media(
+    root: &Path,
+    project: &Path,
+    models: &gz_media::resolve::GameModel,
+) -> Result<(Mirrored, Vec<String>), String> {
     if !play_root::read_marker(root).is_some_and(|(_, entries)| entries.iter().any(|e| e == "gamedata")) {
         return Err(format!("{} is not a Play root: its {MARKER} does not list gamedata.", root.display()));
     }
@@ -975,21 +979,31 @@ pub fn stage_media(root: &Path, project: &Path) -> Result<(Mirrored, Vec<String>
         }
         Ok(())
     };
-    let done = gz_media::publish(project, &index, &mut sink);
+    let done = gz_media::publish(project, &index, models, &mut sink);
     Ok((m, done.problems))
 }
 
 /// The module a level's own pieces are staged as in a Play root.
 pub const PLAY_PIECES_MODULE: &str = "grizzly_play_level";
 
-/// A level's own pieces - its streaming cells (`pieces`, the project's
-/// `levels\<level>\pieces`) - staged where the game reads a module's: the root's
-/// `modules\<PLAY_PIECES_MODULE>\levels\<level>\pieces`, under a manifest of Play's own that
-/// mounts in every mode. The game finds a level's pieces in modules only, and a level Play
-/// stages is no module's: without this the game would draw the level's base alone. What an
-/// earlier Play staged there goes first; only into a root whose marker names the module.
-/// Hard links where the volume allows. Blocking.
-pub fn stage_pieces(root: &Path, level: &str, pieces: &Path) -> Result<Mirrored, String> {
+/// The file of a level's things beside its pieces.
+pub const THINGS_FILE: &str = "overlay.things";
+
+/// Whether a level of the project has layers the game reads from a module alone (`layers`, the
+/// project's `levels\<level>`): pieces, or the file of its things. Blocking.
+#[must_use]
+pub fn has_module_layers(layers: &Path) -> bool {
+    layers.join("pieces").is_dir() || layers.join(THINGS_FILE).is_file()
+}
+
+/// What the game reads of a level from a module alone - its own pieces (its streaming cells) and
+/// the file of its things (glows, sound environments, the spot lights that shine), both in
+/// `layers`, the project's `levels\<level>` - staged where the game reads a module's: the root's
+/// `modules\<PLAY_PIECES_MODULE>\levels\<level>`, under a manifest of Play's own that mounts in
+/// every mode. A level Play stages is no module's: without this the game would draw the level's
+/// base alone, with none of its things. What an earlier Play staged there goes first; only into
+/// a root whose marker names the module. Hard links where the volume allows. Blocking.
+pub fn stage_pieces(root: &Path, level: &str, layers: &Path) -> Result<Mirrored, String> {
     let named = play_root::read_marker_all(root)
         .is_some_and(|(_, _, modules)| modules.iter().any(|m| m.eq_ignore_ascii_case(PLAY_PIECES_MODULE)));
     if !named {
@@ -1004,7 +1018,22 @@ pub fn stage_pieces(root: &Path, level: &str, pieces: &Path) -> Result<Mirrored,
     let module = root.join("modules").join(PLAY_PIECES_MODULE);
     remove_tree(&module);
     let mut m = Mirrored::default();
-    mirror_tree(pieces, &module.join("levels").join(level).join("pieces"), &[], &mut m)?;
+    let to = module.join("levels").join(level);
+    let pieces = layers.join("pieces");
+    if pieces.is_dir() {
+        mirror_tree(&pieces, &to.join("pieces"), &[], &mut m)?;
+    }
+    let things = layers.join(THINGS_FILE);
+    if things.is_file() {
+        fs::create_dir_all(&to).map_err(|e| format!("{} could not be made: {e}", to.display()))?;
+        let at = to.join(THINGS_FILE);
+        if fs::hard_link(&things, &at).is_ok() {
+            m.linked += 1;
+        } else {
+            fs::copy(&things, &at).map_err(|e| format!("The level's things could not be staged: {e}"))?;
+            m.copied += 1;
+        }
+    }
     let manifest = format!(
         "[module]\r\nid      = {PLAY_PIECES_MODULE}\r\nname    = The pieces of the level in play\r\nversion = 1.0.0\r\napi     = 1\r\nmode    = *\r\n"
     );
@@ -1041,20 +1070,23 @@ mod tests {
     fn a_levels_own_pieces_are_staged_as_a_module_of_plays() {
         let base = tempfile::tempdir().unwrap();
         let root = base.path().join("root");
-        let pieces = base.path().join("project").join("levels").join("arena").join("pieces");
+        let layers = base.path().join("project").join("levels").join("arena");
+        let pieces = layers.join("pieces");
+        assert!(!has_module_layers(&layers));
         fs::create_dir_all(pieces.join("cell_0_0")).unwrap();
+        assert!(has_module_layers(&layers));
         fs::write(pieces.join("cell_0_0").join("piece.ltx"), "[piece]\r\nversion = 1\r\n").unwrap();
         fs::write(pieces.join("cell_0_0").join("piece"), b"visuals").unwrap();
         fs::create_dir_all(&root).unwrap();
         let entries: Vec<String> = ENTRIES.iter().map(|e| (*e).to_owned()).collect();
         // a root that does not name the module: nothing is written
         fs::write(root.join(MARKER), play_root::marker_text(&entries, &[])).unwrap();
-        let why = stage_pieces(&root, "arena", &pieces).unwrap_err();
+        let why = stage_pieces(&root, "arena", &layers).unwrap_err();
         assert!(why.contains(PLAY_PIECES_MODULE) && !root.join("modules").exists(), "{why}");
         fs::write(root.join(MARKER), play_root::marker_text(&entries, &[PLAY_PIECES_MODULE.to_owned()]))
             .unwrap();
-        assert!(stage_pieces(&root, "..", &pieces).is_err(), "a level is a plain name");
-        let m = stage_pieces(&root, "arena", &pieces).unwrap();
+        assert!(stage_pieces(&root, "..", &layers).is_err(), "a level is a plain name");
+        let m = stage_pieces(&root, "arena", &layers).unwrap();
         assert_eq!(m.linked + m.copied, 2);
         let module = root.join("modules").join(PLAY_PIECES_MODULE);
         let manifest = fs::read_to_string(module.join("mod.ltx")).unwrap();
@@ -1068,8 +1100,18 @@ mod tests {
         fs::remove_dir_all(pieces.join("cell_0_0")).unwrap();
         fs::create_dir_all(pieces.join("cell_1_0")).unwrap();
         fs::write(pieces.join("cell_1_0").join("piece.ltx"), "[piece]\r\n").unwrap();
-        stage_pieces(&root, "arena", &pieces).unwrap();
+        stage_pieces(&root, "arena", &layers).unwrap();
         assert!(!cell.exists() && cell.with_file_name("cell_1_0").join("piece.ltx").is_file());
+        // a level with things and no pieces: its file is staged alone, and one that is gone goes
+        fs::remove_dir_all(&pieces).unwrap();
+        assert!(!has_module_layers(&layers));
+        fs::write(layers.join(THINGS_FILE), "[glow:lamp]\r\nposition = 0, 2, 0\r\n").unwrap();
+        assert!(has_module_layers(&layers));
+        let m = stage_pieces(&root, "arena", &layers).unwrap();
+        assert_eq!(m.linked + m.copied, 1);
+        let staged = module.join("levels").join("arena");
+        assert!(fs::read_to_string(staged.join(THINGS_FILE)).unwrap().contains("[glow:lamp]"));
+        assert!(!staged.join("pieces").exists() && module.join("mod.ltx").is_file());
     }
 
     #[test]
@@ -1119,7 +1161,7 @@ mod tests {
         fs::write(project.join("art").join("wall.tga"), crate::compile::tests::tga(4, 4, [1, 2, 3, 255]))
             .unwrap();
         fs::write(project.join("art").join("wall.texasset"), b"return { tex = 1 }\n").unwrap();
-        let (m, problems) = stage_media(&root, &project).unwrap();
+        let (m, problems) = stage_media(&root, &project, &gz_media::resolve::no_game()).unwrap();
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(m.linked + m.copied, 2);
         let staged = root.join("gamedata").join("textures").join("od");
@@ -1130,7 +1172,7 @@ mod tests {
         prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap();
         assert_eq!(fs::read(staged.join("wall.dds")).unwrap(), b"the game's own");
         // only into a Play root
-        assert!(stage_media(&project, &project).is_err());
+        assert!(stage_media(&project, &project, &gz_media::resolve::no_game()).is_err());
     }
 
     fn input<'a>(game: &'a Path, root: &'a Path, cx: &'a DeleteContext) -> PlayInput<'a> {

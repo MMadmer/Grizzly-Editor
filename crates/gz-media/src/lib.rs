@@ -58,6 +58,6 @@ pub use cmd::{ImportParams, InfoParams, ListParams, ModelSource, install, regist
 pub use index::{Entry, Index, scan};
 pub use model::ModelAsset;
 pub use publish::{Payload, Published, Sink, publish};
-pub use service::{GameLists, Media, provider};
+pub use service::{GameLists, GameModelSource, GameModels, Media, forget_game_models, provider};
 pub use sound::SoundAsset;
 pub use texture::TextureAsset;

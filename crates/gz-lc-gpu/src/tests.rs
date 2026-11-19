@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use glam::{Vec2, Vec3};
 use gz_lc_light::{
     BuildTexture, ColorC, CpuLighter, Ctl, FaceId, Falloff, LP_DEFAULT, LP_DONT_HEMI, LP_DONT_RGB,
-    LP_DONT_SUN, LT_DIRECT, LT_POINT, LT_SECONDARY, LcError, LightChoice, LightJob, LightSet, Lighter,
-    Opacity, RLight, RayFace, RayModel, Sample,
+    LP_DONT_SUN, LT_DIRECT, LT_POINT, LT_SECONDARY, LT_SPOT, LcError, LightChoice, LightJob, LightSet,
+    Lighter, Opacity, RLight, RayFace, RayModel, Sample,
 };
 use gz_task::Cancel;
 
@@ -185,8 +185,9 @@ fn sky(d: Vec3, energy: f32) -> RLight {
     RLight { kind: LT_DIRECT, direction: -d.normalize(), diffuse: Vec3::ONE, energy, ..RLight::default() }
 }
 
-/// Forty lamps (a grid culls them), two secondary lights, a directional static light, a sun and
-/// a point light in the sun's set, a sky of 64 directions and a point light in it.
+/// Forty lamps (a grid culls them), two secondary lights, three spot lights (straight down,
+/// aslant, with an inner cone), a directional static light, a sun and a point light in the
+/// sun's set, a sky of 64 directions and a point light in it.
 fn lights(seed: u32) -> LightSet {
     let mut r = Rng(seed);
     let mut rgb: Vec<RLight> = (0..40)
@@ -201,6 +202,17 @@ fn lights(seed: u32) -> LightSet {
             kind: LT_SECONDARY,
             direction: Vec3::new(0.2, -1.0, 0.1).normalize(),
             ..point(p, 8.0, Vec3::ONE, 0.7)
+        });
+    }
+    for k in 0..3 {
+        let p = Vec3::new(r.f() * 24.0, 4.0, r.f() * 24.0);
+        let half = 0.5 + 0.2 * k as f32;
+        rgb.push(RLight {
+            kind: LT_SPOT,
+            direction: Vec3::new(0.3 * k as f32 - 0.3, -1.0, 0.2).normalize(),
+            cone_outer: half.cos(),
+            cone_inner: if k == 2 { 0.2f32.cos() } else { 1.0 },
+            ..point(p, 9.0, Vec3::ONE, 1.2)
         });
     }
     rgb.push(sky(Vec3::new(0.3, 1.0, 0.2), 0.3));

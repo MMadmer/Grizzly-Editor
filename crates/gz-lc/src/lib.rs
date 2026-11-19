@@ -50,7 +50,7 @@ use gz_lc_light::{Ctl, LcError, LcGlobalData, LightChoice, Lighter, Shaders, Smo
 use rayon::prelude::*;
 
 pub use details::compile_details_in_memory;
-pub use load::{AssetTextures, Extra, Sources};
+pub use load::{AssetTextures, Extra, GameData, Sources};
 
 /// What can stop a compile.
 #[derive(Debug, thiserror::Error)]

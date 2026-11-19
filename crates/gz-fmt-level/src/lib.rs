@@ -79,8 +79,9 @@ pub use bvh::{Bvh, Ray, RayHit, ray_triangle};
 pub use cform::{CFORM_VERSION, CForm, Tri};
 pub use collector::{Collector, CollectorPacked};
 pub use compiled::{
-    CompiledGlow, CompiledLevel, CompiledLight, CompiledPortal, CompiledSector, GeomTables, Geometry,
-    LEVEL_COMPILER_VERSION, PIECE_SECTOR_AUTO, PieceRoot, ShaderEntry, Visual, VisualKind, parse_shader,
+    CompiledGlow, CompiledLevel, CompiledLight, CompiledPortal, CompiledSector, GeomData, GeomTables,
+    GeomVertices, Geometry, LEVEL_COMPILER_VERSION, PIECE_SECTOR_AUTO, PieceRoot, ShaderEntry, Visual,
+    VisualKind, parse_shader,
 };
 pub use details::{
     ColorIndex, DETAIL_SLOT_SIZE, DETAIL_VERSION, DETMGR_VERSION, DETOBJ_VERSION, DO_NO_WAVING,

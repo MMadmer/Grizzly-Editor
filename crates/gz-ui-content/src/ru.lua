@@ -116,6 +116,8 @@ return {
   { "Bring into Project", "Перенести в проект" },
   { "Open a project to bring it in.", "Откройте проект, чтобы перенести это в него." },
   { "It has no file of its own: place it in a level instead.", "У этого нет своего файла: разместите это на уровне." },
+  { "A level of the game is not copied: Open starts the project's scene over it.", "Уровень игры не копируется: «Открыть» создаёт сцену проекта поверх него." },
+  { "A level of the game. Open: the project's scene over it, or a new one - a scene that holds what the module adds.", "Уровень игры. «Открыть»: сцена проекта поверх него или новая - сцена, в которой лежит только то, что добавляет мод." },
   { "Exclude from Build", "Исключить из сборки" },
   { "Include in Build", "Включить в сборку" },
   { "The editor's own files never ship: nothing here goes into a build.", "Собственные файлы редактора не входят в сборку никогда: отсюда в неё ничего не попадает." },
@@ -187,4 +189,8 @@ return {
   { "The editor's library holds no particles.xr, or it lists no effect.", "В библиотеке редактора нет particles.xr или в нём нет ни одного эффекта." },
   { "The particles could not be read: {e}", "Не удалось прочитать частицы: {e}" },
   { "No game is linked: only the editor's library is listed.", "Игра не привязана: показана только библиотека редактора." },
+
+  -- a file as text (the Text tab)
+  { "Open as Text", "Открыть как текст" },
+  { "Open the file in the Text tab", "Открыть файл во вкладке «Текст»" },
 }

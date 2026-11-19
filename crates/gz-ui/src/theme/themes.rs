@@ -14,8 +14,8 @@
 use egui::Color32;
 use egui::epaint::Shadow;
 
-use super::Palette;
 use super::color::{contrast, distance, luminance, mix, oklch_fit, reach, rgb, to_oklch};
+use super::{Palette, Syntax};
 
 /// The contrast every theme holds (WCAG 2 ratios), what [`derive`] reaches and the tests check.
 pub mod min {
@@ -51,6 +51,8 @@ pub mod min {
     pub const SELECTION: f32 = 1.15;
     /// How far apart error, warning, success and required are in OKLab, at the least.
     pub const TONES_APART: f32 = 0.05;
+    /// A token of code text on inset and base.
+    pub const SYNTAX: f32 = 4.5;
 }
 
 /// A colour of a published palette, with the opacity its source gives it (over the theme's base).
@@ -734,6 +736,20 @@ fn grizzly(id: &'static str, graphite: bool) -> Palette {
         shadow_popup: Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(110) },
         shadow_dialog: Shadow { offset: [0, 10], blur: 32, spread: 2, color: Color32::from_black_alpha(140) },
         shadow_card: Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(90) },
+        // One Dark's token colours, which the status tones above come from
+        syntax: Syntax {
+            keyword: rgb(0xc678dd),
+            string: rgb(0x98c379),
+            number: rgb(0xd19a66),
+            comment: rgb(0x938f9e),
+            function: rgb(0x61afef),
+            name: rgb(0xe5c07b),
+            tag: rgb(0xe06c75),
+            attribute: rgb(0xd19a66),
+            punct: rgb(0xbdb8c9),
+            added: rgb(0x98c379),
+            removed: rgb(0xe06c75),
+        },
     }
 }
 
@@ -923,6 +939,21 @@ fn derive(id: &'static str, s: &Source) -> Palette {
             min::GRAPHIC,
         )
     });
+    // code: the theme's own hues, moved toward its text until they read on the code's surfaces
+    let code = |c: Color32| reach(c, toward, &[d.inset, d.base], min::SYNTAX);
+    let syntax = Syntax {
+        keyword: code(purple),
+        string: code(green),
+        number: code(orange),
+        comment: text_muted,
+        function: code(blue),
+        name: code(yellow),
+        tag: code(red),
+        attribute: code(orange),
+        punct: text_secondary,
+        added: code(green),
+        removed: code(red),
+    };
     let frame_c = graph_family[8];
     let frame_alpha = |a: u8| Color32::from_rgba_unmultiplied(frame_c.r(), frame_c.g(), frame_c.b(), a);
     let shadow_alpha: [u8; 3] = if s.light { [40, 64, 30] } else { [110, 140, 90] };
@@ -1006,5 +1037,6 @@ fn derive(id: &'static str, s: &Source) -> Palette {
             spread: 0,
             color: Color32::from_black_alpha(shadow_alpha[2]),
         },
+        syntax,
     }
 }

@@ -164,9 +164,9 @@ fn image_bytes(from: &Bytes, name: &str) -> Option<(Vec<u8>, Option<String>)> {
 
 /// A model's bytes and the name the renderer reads them by: a model asset is made into its
 /// model and written out as the `.object` it would be. Blocking.
-fn model_bytes(from: &Bytes, name: &str) -> Option<(Vec<u8>, String)> {
+fn model_bytes(from: &Bytes, name: &str, editor: &Arc<Editor>) -> Option<(Vec<u8>, String)> {
     if let Bytes::Asset(root, rel) = from {
-        let m = gz_media::resolve::model(root, rel).ok()?;
+        let m = gz_media::resolve::model(root, rel, &gz_media::GameModels::reader(editor, root)).ok()?;
         return Some((m.object.write(), format!("{rel}.object")));
     }
     read(from, MAX_MODEL_BYTES).map(|b| (b, name.to_owned()))
@@ -456,7 +456,7 @@ impl Pictures {
                             let made = if live {
                                 thumb.or_else(|| {
                                     let renderer = renderer?;
-                                    model_bytes(&r.from, &r.name)
+                                    model_bytes(&r.from, &r.name, &ed)
                                         .and_then(|(bytes, name)| {
                                             thumbs.render(&renderer, &name, &bytes, r.side, background).ok()
                                         })
@@ -493,7 +493,7 @@ impl Pictures {
                     editor.exec.spawn_io(move || {
                         let live = shared.generation.load(Ordering::Acquire) == generation;
                         let made = if live {
-                            model_bytes(&r.from, &r.name)
+                            model_bytes(&r.from, &r.name, &ed)
                                 .and_then(|(bytes, name)| {
                                     thumbs.render(&renderer, &name, &bytes, r.side, background).ok()
                                 })

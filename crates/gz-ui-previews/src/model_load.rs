@@ -188,8 +188,9 @@ pub async fn load(editor: Arc<Editor>, name: String, source: ModelSource) -> Mod
             return ModelData::failed(&name, "no project is open");
         };
         let n = name.clone();
+        let models = gz_media::GameModels::reader(&editor, &root);
         return exec
-            .io(move || match gz_media::resolve::model(&root, &n.replace('\\', "/")) {
+            .io(move || match gz_media::resolve::model(&root, &n.replace('\\', "/"), &models) {
                 Ok(m) => {
                     let mut d = from_object_value(&n, &m.object, sources);
                     "Model Asset".clone_into(&mut d.kind);

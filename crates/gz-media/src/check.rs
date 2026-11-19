@@ -2,7 +2,7 @@
 //!
 //! | Code | |
 //! |---|---|
-//! | `M101` | the source is not there |
+//! | `M101` | the source is not there (a file, or a model of the game) |
 //! | `M102` | the source cannot be read (the reader's sentence) |
 //! | `M103` | two assets of a kind publish one name (on both) |
 //! | `M104` | a texture nobody has: no texture asset, no file of the project, not the game's (warning) |
@@ -79,6 +79,7 @@ pub fn issues(
     value: &gz_luadata::Value,
     index: &Index,
     game: &GameLists,
+    models: &resolve::GameModel,
 ) -> Vec<Issue> {
     let mut out = match kind {
         MediaKind::Model => ModelAsset::from_value(value).1,
@@ -107,11 +108,32 @@ pub fn issues(
         Issue::new(code, Severity::Warning, path, message)
     };
     match kind {
-        MediaKind::Model => match resolve::model(root, rel) {
+        MediaKind::Model => match resolve::model(root, rel, models) {
             Err(f) => out.push(f.issue),
             Ok(m) => {
                 out.extend(m.issues.into_iter().filter(|i| i.code != crate::read::BAD_VALUE));
                 let asset = &m.asset;
+                // a row that names no surface of the model changes nothing: said, with the
+                // names there are
+                for row in &asset.surfaces {
+                    if m.object.surfaces.iter().any(|s| s.name.eq_ignore_ascii_case(&row.name)) {
+                        continue;
+                    }
+                    let mut known: Vec<&str> = m.object.surfaces.iter().map(|s| s.name.as_str()).collect();
+                    let more = known.len().saturating_sub(12);
+                    known.truncate(12);
+                    out.push(Issue::new(
+                        resolve::CANNOT,
+                        Severity::Warning,
+                        vec![Seg::key("surfaces"), Seg::item("name", &row.name)],
+                        format!(
+                            "the model has no surface '{}' (it has: {}{})",
+                            row.name,
+                            known.join(", "),
+                            if more > 0 { format!(" and {more} more") } else { String::new() }
+                        ),
+                    ));
+                }
                 for s in &m.object.surfaces {
                     let row = asset.surfaces.iter().find(|r| r.name.eq_ignore_ascii_case(&s.name));
                     let at = |key: &str| match row {
@@ -171,13 +193,24 @@ pub fn issues(
                 }
                 if game.linked {
                     for b in &asset.bones {
-                        if let Some(mtl) = &b.material
-                            && !game.materials.contains(&mtl.to_lowercase())
-                        {
+                        let Some(mtl) = &b.material else { continue };
+                        let key = mtl.to_lowercase();
+                        let at = vec![Seg::key("bones"), Seg::item("name", &b.name), Seg::key("material")];
+                        if !game.materials.contains(&key) {
                             out.push(warn(
                                 NO_MATERIAL,
-                                vec![Seg::key("bones"), Seg::item("name", &b.name), Seg::key("material")],
-                                format!("the linked game has no game material '{mtl}'"),
+                                at,
+                                format!("the linked game has no game material '{mtl}': the bone keeps the model's own"),
+                            ));
+                        } else if !game.dynamic_materials.contains(&key) {
+                            // the game takes a bone's material from the description only when
+                            // it is one a moving body is made of
+                            out.push(warn(
+                                NO_MATERIAL,
+                                at,
+                                format!(
+                                    "'{mtl}' is no dynamic game material: a bone takes one a moving body is made of (`objects\\...`, `default_object`), and the game keeps the model's own"
+                                ),
                             ));
                         }
                     }
@@ -303,7 +336,8 @@ pub async fn check(ed: Arc<Editor>, file: Arc<AssetFile>, kind: MediaKind) -> Ve
     let root = media.root().to_path_buf();
     let rel = file.path.as_str().to_owned();
     let value = file.doc.value();
-    let found = ed.exec.io(move || issues(&root, &rel, kind, &value, &index, &game)).await;
+    let models = crate::GameModels::reader(&ed, &root);
+    let found = ed.exec.io(move || issues(&root, &rel, kind, &value, &index, &game, &models)).await;
     let mut seen: Vec<(String, Vec<Seg>, String)> = Vec::new();
     let mut out = Vec::new();
     for i in found {

@@ -122,6 +122,29 @@ pub struct GlowData {
     pub flags: u16,
 }
 
+/// The shaders the game draws a glow with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlowShader {
+    /// The lens flares': the picture added to the frame. What a glow that names no shader, the
+    /// game's own glow shader or the flares' is drawn with.
+    Flare,
+    /// The sun's: the same picture, hidden by depth as well.
+    Sun,
+    /// A shader no glow is drawn with: the game takes the flares' in its place.
+    Other,
+}
+
+/// Which of the game's glow shaders a name is. The game's own list (its renderer's glows): a
+/// change of one side is a change of both.
+#[must_use]
+pub fn glow_shader(name: &str) -> GlowShader {
+    match name.trim().replace('/', "\\").to_ascii_lowercase().as_str() {
+        "" | "effects\\glow" | "effects\\flare" => GlowShader::Flare,
+        "effects\\sun" => GlowShader::Sun,
+        _ => GlowShader::Other,
+    }
+}
+
 impl Default for GlowData {
     fn default() -> Self {
         Self {

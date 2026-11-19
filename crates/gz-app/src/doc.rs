@@ -396,6 +396,8 @@ pub type Factory = Box<dyn FnMut(&Arc<Editor>, &OpenRequest) -> Result<Box<dyn D
 pub fn tab_id(kind: &str, path: Option<&str>) -> SmolStr {
     match (kind, path) {
         ("quest" | "beh", Some(p)) => SmolStr::new(format!("{kind}:{p}")),
+        // a text file by its project path with `/`, a file of the game with `game:` before it
+        ("text", Some(p)) => SmolStr::new(format!("text:{}", p.replace('\\', "/").trim_start_matches('/'))),
         _ => SmolStr::new(kind),
     }
 }

@@ -148,7 +148,9 @@ struct BuildParams {
     /// One step and what it needs.
     #[serde(default)]
     only: Option<Step>,
-    /// Build the steps asked for even when they are fresh.
+    /// Build the steps asked for even when they are fresh; with no step named, every step the
+    /// level needs. A scene over a level of the game builds its own layers again (spawn_layer,
+    /// piece): the level itself is the game's and is never compiled there.
     #[serde(default)]
     force: bool,
     /// How long the compiler spends on the light; left out: standard (the level's own settings).
@@ -452,7 +454,8 @@ async fn validate(ed: Arc<Editor>, p: ValidateParams) -> Reply {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum PlayAction {
-    /// Builds what is stale and starts the game on the level.
+    /// Builds what is stale and starts the game on the level; in a project without a scene, the
+    /// module in a new game.
     #[default]
     Start,
     /// Stops the game or the compiler that runs.
@@ -552,7 +555,19 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
             start_game(&ed, &session, &root, &place.params)
         }
         PlayAction::Start => {
-            let (session, svc) = need_scene(&ed).await?;
+            // a project without a scene is a module that changes the game and adds no level: it
+            // plays in a new game, with nothing of a level to build or stage
+            let (session, svc) = match need_scene(&ed).await {
+                Ok(found) => found,
+                Err(e) if e.code == "no_scene" => {
+                    if let Some(b) = busy(&ed) {
+                        return Err(b);
+                    }
+                    let place = play_place(&ed, &session, &p).await?;
+                    return play_module(&ed, &session, None, place, &p).await;
+                }
+                Err(e) => return Err(e),
+            };
             if let Some(b) = busy(&ed) {
                 return Err(b);
             }
@@ -561,7 +576,7 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
             // a level the linked game has plays the module: nothing of the level is compiled
             let level = svc.store.snapshot().meta.level.level_path.to_string();
             if crate::stock::is_stock(&lb.game_levels(&ed).await, &level) {
-                return play_module(&ed, &session, &svc, place, &p, &level).await;
+                return play_module(&ed, &session, Some((&svc, level.as_str())), place, &p).await;
             }
             if p.build != Some(false) {
                 let snap = svc.store.snapshot();
@@ -604,25 +619,27 @@ async fn play(ed: Arc<Editor>, p: PlayParams, _o: Origin) -> Reply {
                     format!("The level {level} is not built: run level.build first."),
                 ));
             }
-            // the level's own pieces (its streaming cells) are read by the game from a module: Play
+            // the level's own pieces (its streaming cells) and the file of its things (glows, sound
+            // environments, the spot lights that shine) are read by the game from a module: Play
             // stages them as one of its own
-            let pieces = session.root.join("levels").join(&level).join("pieces");
-            let p2 = pieces.clone();
-            let with_pieces = ed.exec.io(move || p2.is_dir()).await;
-            let module = with_pieces.then(|| crate::play::PLAY_PIECES_MODULE.to_owned());
+            let layers = session.root.join("levels").join(&level);
+            let l1 = layers.clone();
+            let with_layers = ed.exec.io(move || crate::play::has_module_layers(&l1)).await;
+            let module = with_layers.then(|| crate::play::PLAY_PIECES_MODULE.to_owned());
             let root = prepare_root(&ed, &place, Some((level.clone(), dir.clone(), spawn)), module).await?;
-            if with_pieces {
+            if with_layers {
                 let (r2, l2) = (root.root.clone(), level.clone());
                 ed.exec
-                    .io(move || crate::play::stage_pieces(&r2, &l2, &pieces))
+                    .io(move || crate::play::stage_pieces(&r2, &l2, &layers))
                     .await
                     .map_err(|e| CmdError::new("refused", e))?;
             }
             // what the project's media assets publish, where the module build would put it
             let (r3, project) = (root.root.clone(), session.root.clone());
+            let models = gz_media::GameModels::reader(&ed, &project);
             let (_, unbaked) = ed
                 .exec
-                .io(move || crate::play::stage_media(&r3, &project))
+                .io(move || crate::play::stage_media(&r3, &project, &models))
                 .await
                 .map_err(|e| CmdError::new("refused", e))?;
             for why in unbaked {
@@ -822,16 +839,17 @@ fn dry_answer(root: &crate::play::PlayRoot, params: &str) -> Value {
 /// The job of Play's module build; in the group of the module builds, which share its row.
 pub const JOB_PLAY_MODULE: &str = "play_module";
 
-/// Play on a level the linked game has: the module built into Play's root the way a module build
-/// builds it, Play's own Player Start in its copy when the scene has none, the new game's mode the
-/// module's, and the game started on a new game over the module.
+/// Play on a level the linked game has (`scene`: the open scene and its level): the module built
+/// into Play's root the way a module build builds it, Play's own Player Start in its copy when the
+/// scene has none, the new game's mode the module's, and the game started on a new game over the
+/// module. Without a scene - a module that changes the game and adds no level - the same, with no
+/// piece, no Player Start and nothing of a level checked: the actor starts where the game starts.
 async fn play_module(
     ed: &Arc<Editor>,
     session: &Arc<ProjectSession>,
-    svc: &Arc<SceneService>,
+    scene: Option<(&Arc<SceneService>, &str)>,
     place: PlayPlace,
     p: &PlayParams,
-    level: &str,
 ) -> Reply {
     let manifest = gz_mod::ManifestService::of_session(ed, session).await?;
     manifest.sync().await?;
@@ -841,18 +859,26 @@ async fn play_module(
     let mode =
         crate::module_play::new_game_mode(&m.target, &m.mode).map_err(|e| CmdError::new("refused", e))?;
     // the module's own piece of the level is built below, when the scene has one that is not fresh
-    let note = format!("Playing the module over {level}: the game's level is not compiled.");
+    let note = match scene {
+        Some((_, level)) => format!("Playing the module over {level}: the game's level is not compiled."),
+        None => {
+            "Playing the module in a new game: the project has no scene, so no level is built.".to_owned()
+        }
+    };
     ed.log.info(&note);
-    // what an earlier build left in the level's folder ships with the module and replaces the game's own
     let lb = LevelBuild::of(session);
-    let replaces: Vec<String> =
-        match (lb.record_now(ed, session, level).await, pipeline::level_dir(session, level)) {
+    let level = scene.map(|(_, level)| level.to_owned());
+    // what an earlier build left in the level's folder ships with the module and replaces the game's own
+    let replaces: Vec<String> = match &level {
+        Some(level) => match (lb.record_now(ed, session, level).await, pipeline::level_dir(session, level)) {
             (Some(r), Ok(dir)) => {
                 ed.exec.io(move || crate::stock::replacing(&crate::stock::written(&r, &dir))).await
             }
             _ => Vec::new(),
-        };
-    {
+        },
+        None => Vec::new(),
+    };
+    if let Some(level) = &level {
         let mut all = lb.problems.lock();
         all.retain(|x| x.code != "replaces_stock");
         if let Some(p) = crate::stock::problem(level, &replaces) {
@@ -861,7 +887,7 @@ async fn play_module(
         }
     }
     // the game would load them over its own level - an AI map its cross table does not know - and stop
-    if !replaces.is_empty() {
+    if let (Some(level), false) = (&level, replaces.is_empty()) {
         let named: Vec<&str> = replaces.iter().map(String::as_str).take(5).collect();
         let more = if replaces.len() > named.len() { ", ..." } else { "" };
         return Err(CmdError::new(
@@ -874,17 +900,26 @@ async fn play_module(
         )
         .with_data(json!({ "replaces": replaces })));
     }
-    let (e2, s2, svc2, id, lv, build) =
-        (ed.clone(), session.clone(), svc.clone(), m.id.clone(), level.to_owned(), p.build != Some(false));
+    let (e2, s2, svc2, id, lv, build) = (
+        ed.clone(),
+        session.clone(),
+        scene.map(|(svc, _)| svc.clone()),
+        m.id.clone(),
+        level.clone(),
+        p.build != Some(false),
+    );
     // the module's piece of the level plays as it was built - its quality, the compiler's flags, where
     // its light was baked - unless the call says otherwise; a card asked for is there before anything
     // is built
-    let built = lb.record_now(ed, session, level).await;
+    let built = match &level {
+        Some(level) => lb.record_now(ed, session, level).await,
+        None => None,
+    };
     let built = built.as_ref().and_then(|r| r.steps.get(&Step::Piece));
     let mut piece_opts: Options = service::default_options(ed);
     piece_opts.quality = p.quality.unwrap_or_else(|| built.map_or(Quality::Standard, |r| r.quality));
     piece_opts.flags = with_light(&built.map(|r| r.flags.clone()).unwrap_or_default(), p.light);
-    if build {
+    if build && level.is_some() {
         need_lighter(ed, &piece_opts.flags).await?;
     }
     let place = Arc::new(place);
@@ -900,15 +935,17 @@ async fn play_module(
             let mut files = Value::Null;
             if build {
                 // the module's piece of the level first, when the scene has one that is not fresh
-                let piece = Request {
-                    steps: Some(vec![Step::Piece]),
-                    only: None,
-                    force: false,
-                    opts: piece_opts,
-                    verify_restrictors: false,
-                };
-                pipeline::run(&e2, &s2, &piece, &ctx).await?;
-                ctx.check()?;
+                if svc2.is_some() {
+                    let piece = Request {
+                        steps: Some(vec![Step::Piece]),
+                        only: None,
+                        force: false,
+                        opts: piece_opts,
+                        verify_restrictors: false,
+                    };
+                    pipeline::run(&e2, &s2, &piece, &ctx).await?;
+                    ctx.check()?;
+                }
                 let req = gz_build::BuildRequest {
                     kind: gz_build::BuildKind::ToFolder,
                     target: target.clone(),
@@ -932,21 +969,26 @@ async fn play_module(
                 )));
             }
             ctx.check()?;
-            // the actor's start: the module's, or Play's own where the camera looks
-            let snap = svc2.store.snapshot();
-            let scene_level = gz_export_level::names::resolve_level(None, &snap.meta.name()).unwrap_or_else(|| lv.clone());
-            let has_start = !gz_export_level::starts::scene_starts(&snap, &scene_level).is_empty();
-            let start = if has_start {
-                json!({ "placed": false, "source": "scene" })
-            } else {
-                ctx.stage("Placing the Player Start where the camera looks");
-                svc2.prefetch_library(&e2, &snap).await;
-                let (lib, camera, lv2) = (svc2.library.clone(), gz_editor::ViewCamera::of(&e2).get(), lv.clone());
-                let (start, how) =
-                    e2.exec.cpu(move || crate::module_play::camera_start(&snap, &lib, camera.as_ref(), &lv2)).await;
-                let (r2, id2, st2) = (root.root.clone(), id.clone(), start.clone());
-                let dropped = e2.exec.io(move || crate::play::place_start(&r2, &id2, &st2)).await.map_err(JobError::new)?;
-                json!({ "placed": true, "source": how, "position": start.position, "direction": start.direction, "replaced": dropped })
+            // the actor's start: the module's, or Play's own where the camera looks; without a scene
+            // the game's own
+            let start = match (&svc2, &lv) {
+                (Some(svc2), Some(lv)) => {
+                    let snap = svc2.store.snapshot();
+                    let scene_level = gz_export_level::names::resolve_level(None, &snap.meta.level_name()).unwrap_or_else(|| lv.clone());
+                    if gz_export_level::starts::scene_starts(&snap, &scene_level).is_empty() {
+                        ctx.stage("Placing the Player Start where the camera looks");
+                        svc2.prefetch_library(&e2, &snap).await;
+                        let (lib, camera, lv2) = (svc2.library.clone(), gz_editor::ViewCamera::of(&e2).get(), lv.clone());
+                        let (start, how) =
+                            e2.exec.cpu(move || crate::module_play::camera_start(&snap, &lib, camera.as_ref(), &lv2)).await;
+                        let (r2, id2, st2) = (root.root.clone(), id.clone(), start.clone());
+                        let dropped = e2.exec.io(move || crate::play::place_start(&r2, &id2, &st2)).await.map_err(JobError::new)?;
+                        json!({ "placed": true, "source": how, "position": start.position, "direction": start.direction, "replaced": dropped })
+                    } else {
+                        json!({ "placed": false, "source": "scene" })
+                    }
+                }
+                _ => json!({ "placed": false, "source": "game" }),
             };
             let (r3, game, m3) = (root.root.clone(), pl.game.clone(), mode2.clone());
             e2.exec

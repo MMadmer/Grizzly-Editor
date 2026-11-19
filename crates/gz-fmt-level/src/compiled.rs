@@ -138,6 +138,9 @@ pub struct Visual {
     pub lod: bool,
     /// The visual carries sliding windows (a progressive mesh).
     pub sliding: bool,
+    /// The finest of a progressive mesh's own windows: where its indices start within the
+    /// visual's index range, and how many triangles it draws.
+    pub finest: Option<(u32, u32)>,
     /// The sliding windows a static model's progressive reference takes from the geometry file.
     pub swi: Option<u32>,
     /// The sector the visual lies under, through the sectors' root visuals.
@@ -278,6 +281,19 @@ fn read_geometry(body: &[u8]) -> Result<Geometry> {
     })
 }
 
+/// The first of a list of sliding windows (the finest level): four reserved words, the count,
+/// then `offset, triangles, vertices` each. `None` for an empty list.
+fn first_window(body: &[u8], what: &str) -> Result<Option<(u32, u32)>> {
+    let mut r = Reader::new(body);
+    short(r.advance(16), what)?;
+    if short(r.r_u32(), what)? == 0 {
+        return Ok(None);
+    }
+    let offset = short(r.r_u32(), what)?;
+    let tris = short(r.r_u16(), what)?;
+    Ok(Some((offset, u32::from(tris))))
+}
+
 fn read_visual(index: u32, body: &[u8]) -> Result<Visual> {
     let parts = walk(body, &format!("visual {index}"))?;
     let head = chunk(&parts, OGF_HEADER).ok_or_else(|| invalid(format!("Visual {index} has no header.")))?;
@@ -335,6 +351,10 @@ fn read_visual(index: u32, body: &[u8]) -> Result<Visual> {
         transform,
         lod: chunk(&parts, OGF_LODDEF2).is_some(),
         sliding: chunk(&parts, OGF_SWIDATA).is_some(),
+        finest: match chunk(&parts, OGF_SWIDATA) {
+            Some(body) => first_window(body, &format!("windows of visual {index}"))?,
+            None => None,
+        },
         swi: match chunk(&parts, OGF_SWICONTAINER) {
             Some(body) => Some(short(Reader::new(body).r_u32(), &format!("windows of visual {index}"))?),
             None => None,
@@ -672,6 +692,143 @@ impl GeomTables {
             }
         }
         Ok(out)
+    }
+}
+
+/// The vertices of one vertex buffer of a geometry file: what a picture and a ray need of them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GeomVertices {
+    pub positions: Vec<Vec3>,
+    /// The first texture coordinate set, unpacked; empty when the buffer has none.
+    pub uvs: Vec<[f32; 2]>,
+}
+
+/// A geometry file decoded: every vertex buffer, every index buffer, the finest window of every
+/// set of sliding windows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GeomData {
+    pub vertex_buffers: Vec<GeomVertices>,
+    pub index_buffers: Vec<Vec<u16>>,
+    /// Per set of sliding windows: the finest one, `(offset, triangles)`.
+    pub windows: Vec<Option<(u32, u32)>>,
+}
+
+/// `D3DDECLUSAGE_POSITION` and `_TEXCOORD`.
+const USAGE_POSITION: u8 = 0;
+const USAGE_TEXCOORD: u8 = 5;
+/// What a packed texture coordinate is multiplied by: the engine's `32 / 32768`.
+const TC_SCALE: f32 = 32.0 / 32768.0;
+
+impl GeomData {
+    /// Decodes `level.geom` or `piece.geom`: positions (three floats) and the first texture
+    /// coordinates (two floats, or two packed shorts) of every vertex.
+    pub fn read(bytes: &[u8]) -> Result<Self> {
+        let top = walk(bytes, "geometry file")?;
+        let mut out = Self::default();
+        if let Some(body) = chunk(&top, GEOM_VB) {
+            let mut r = Reader::new(body);
+            let what = "vertex buffers";
+            let count = short(r.r_u32(), what)?;
+            for _ in 0..count {
+                let mut stride = 0usize;
+                // offset of the position, and offset and type of the first texture coordinates
+                let (mut pos, mut tc): (Option<usize>, Option<(usize, u8)>) = (None, None);
+                loop {
+                    let e = short(r.take(8), what)?;
+                    if e[0] == 0xFF {
+                        break;
+                    }
+                    let size = element_size(e[4]).ok_or_else(|| {
+                        invalid(format!("A vertex declaration has an unknown type {}.", e[4]))
+                    })?;
+                    if u16::from_le_bytes([e[0], e[1]]) != 0 {
+                        continue;
+                    }
+                    let offset = usize::from(u16::from_le_bytes([e[2], e[3]]));
+                    stride = stride.max(offset + size);
+                    match (e[6], e[7]) {
+                        (USAGE_POSITION, 0) if e[4] == 2 => pos = Some(offset),
+                        (USAGE_TEXCOORD, 0) => tc = Some((offset, e[4])),
+                        _ => {}
+                    }
+                }
+                let n = short(r.r_u32(), what)? as usize;
+                let data = short(r.take(n.saturating_mul(stride)), what)?;
+                let f = |at: usize| f32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+                let s = |at: usize| f32::from(i16::from_le_bytes([data[at], data[at + 1]]));
+                let mut verts = GeomVertices::default();
+                if let Some(p) = pos {
+                    verts.positions = (0..n)
+                        .map(|i| Vec3::new(f(i * stride + p), f(i * stride + p + 4), f(i * stride + p + 8)))
+                        .collect();
+                }
+                verts.uvs = match tc {
+                    // two floats
+                    Some((at, 1)) => (0..n).map(|i| [f(i * stride + at), f(i * stride + at + 4)]).collect(),
+                    // two or four shorts: the first two are the coordinates
+                    Some((at, 6 | 7)) => (0..n)
+                        .map(|i| [s(i * stride + at) * TC_SCALE, s(i * stride + at + 2) * TC_SCALE])
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                out.vertex_buffers.push(verts);
+            }
+        }
+        if let Some(body) = chunk(&top, GEOM_IB) {
+            let mut r = Reader::new(body);
+            let count = short(r.r_u32(), "index buffers")?;
+            for _ in 0..count {
+                let n = short(r.r_u32(), "index buffers")? as usize;
+                let data = short(r.take(n.saturating_mul(2)), "index buffers")?;
+                out.index_buffers
+                    .push(data.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect());
+            }
+        }
+        if let Some(body) = chunk(&top, GEOM_SWIS) {
+            let mut r = Reader::new(body);
+            let count = short(r.r_u32(), "sliding windows")?;
+            for _ in 0..count {
+                short(r.advance(16), "sliding windows")?;
+                let n = short(r.r_u32(), "sliding windows")? as usize;
+                let data = short(r.take(n.saturating_mul(8)), "sliding windows")?;
+                out.windows.push(data.get(..8).map(|w| {
+                    (
+                        u32::from_le_bytes([w[0], w[1], w[2], w[3]]),
+                        u32::from(u16::from_le_bytes([w[4], w[5]])),
+                    )
+                }));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The triangles of a visual at its finest level: three corners each, with their texture
+    /// coordinates, in the visual's own space (a static model's reference is not placed here:
+    /// its [`Visual::transform`] is the caller's). `None` for a visual without geometry or one
+    /// that names what the file does not hold.
+    #[must_use]
+    pub fn triangles(&self, v: &Visual) -> Option<Vec<(Vec3, [f32; 2])>> {
+        let g = v.geometry?;
+        let vb = self.vertex_buffers.get(g.vertex_buffer as usize)?;
+        let ib = self.index_buffers.get(g.index_buffer as usize)?;
+        let all =
+            ib.get(g.index_start as usize..(g.index_start as usize).checked_add(g.index_count as usize)?)?;
+        // the finest window: the visual's own, else the one a static model's reference names
+        let window = v.finest.or_else(|| v.swi.and_then(|i| self.windows.get(i as usize).copied().flatten()));
+        let range = match window {
+            Some((offset, tris)) => {
+                all.get(offset as usize..(offset as usize).checked_add(tris as usize * 3)?)?
+            }
+            None => all,
+        };
+        let base = g.vertex_start as usize;
+        let mut out = Vec::with_capacity(range.len());
+        for &i in range {
+            let at = base + usize::from(i);
+            let p = *vb.positions.get(at)?;
+            out.push((p, vb.uvs.get(at).copied().unwrap_or([0.0, 0.0])));
+        }
+        Some(out)
     }
 }
 

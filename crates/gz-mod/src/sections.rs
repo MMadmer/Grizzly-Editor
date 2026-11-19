@@ -113,6 +113,40 @@ pub fn read_sections(root: &Path, files: &[RelPath]) -> SectionSet {
     set
 }
 
+/// What answers the sections a module's assets make beside its configs (an item asset is a
+/// section the game makes): asked as the index is built.
+pub type SectionSource =
+    Arc<dyn for<'a> Fn(&'a Editor) -> futures::future::BoxFuture<'a, Vec<String>> + Send + Sync>;
+
+/// The editor's sources of the sections a project's assets make: whoever owns such assets
+/// registers one, once, as the editor starts. A check that asks whether the module brings a
+/// section - a character's kit, a quest's item, the start kit - then knows them all from one
+/// list.
+#[derive(Default)]
+pub struct SectionSources {
+    sources: parking_lot::RwLock<Vec<SectionSource>>,
+}
+
+impl SectionSources {
+    #[must_use]
+    pub fn of(editor: &Editor) -> Arc<Self> {
+        editor.services.get_or_init(Self::default)
+    }
+
+    pub fn add(&self, source: SectionSource) {
+        self.sources.write().push(source);
+    }
+
+    async fn all(editor: &Editor) -> Vec<String> {
+        let sources: Vec<SectionSource> = Self::of(editor).sources.read().clone();
+        let mut out = Vec::new();
+        for source in sources {
+            out.extend(source(editor).await);
+        }
+        out
+    }
+}
+
 /// The index of the open project (`session.services`). Made on first use; it follows the
 /// project's watcher from then on.
 pub struct OwnSections {
@@ -172,6 +206,10 @@ impl OwnSections {
             })
             .await;
         let mut set = set;
+        // what the module's assets make: an item asset is a section like one of a config
+        for name in SectionSources::all(editor).await {
+            set.names.insert(name.to_ascii_lowercase());
+        }
         set.generation = self.builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let set = Arc::new(set);
         *self.current.lock() = Some(set.clone());
@@ -179,10 +217,15 @@ impl OwnSections {
     }
 
     /// Drops the index whenever a `.ltx` of the project changes (`mod.ltx` included: its `[vfs]`
-    /// and `[exclude]` decide what counts).
+    /// and `[exclude]` decide what counts), a patch, or an item asset - the files the sections
+    /// come from.
     fn follow(self: &Arc<Self>, editor: &Editor, session: &ProjectSession) {
         let Some(project) = session.services.get::<Project>() else { return };
-        let mut rx = project.tree.changes().subscribe(Filter::Extensions(vec!["ltx".into()]));
+        let mut rx = project.tree.changes().subscribe(Filter::Extensions(vec![
+            "ltx".into(),
+            "ltxp".into(),
+            "itemasset".into(),
+        ]));
         let me = Arc::downgrade(self);
         editor.exec.spawn(async move {
             while rx.recv().await.is_some() {

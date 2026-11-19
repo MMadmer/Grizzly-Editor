@@ -32,6 +32,8 @@ pub struct GameLists {
     pub shaders: FxHashSet<String>,
     pub compiler_shaders: FxHashSet<String>,
     pub materials: FxHashSet<String>,
+    /// The materials a moving body is made of (the dynamic ones): what a bone may take.
+    pub dynamic_materials: FxHashSet<String>,
     /// The game's own list of copyrighted sounds ([`crate::sound::RIGHTS_FILE`]): names and masks,
     /// keyed by [`name_key`], with what plays instead. Empty when the game has no such file.
     pub rights: Vec<crate::sound::Right>,
@@ -262,6 +264,7 @@ impl Media {
                 let lower =
                     |v: Vec<String>| v.into_iter().map(|s| s.to_lowercase()).collect::<FxHashSet<_>>();
                 let [sh, xrlc, mtl, rights] = read;
+                let materials = mtl.and_then(|b| gz_fmt_xr::GameMaterials::read(&b).ok());
                 GameLists {
                     linked: true,
                     shaders: lower(
@@ -275,8 +278,21 @@ impl Media {
                             .unwrap_or_default(),
                     ),
                     materials: lower(
-                        mtl.and_then(|b| gz_fmt_xr::GameMaterials::read(&b).ok())
+                        materials
+                            .as_ref()
                             .map(|m| m.materials.iter().map(|x| x.name.to_string()).collect())
+                            .unwrap_or_default(),
+                    ),
+                    dynamic_materials: lower(
+                        materials
+                            .as_ref()
+                            .map(|m| {
+                                m.materials
+                                    .iter()
+                                    .filter(|x| x.is_dynamic())
+                                    .map(|x| x.name.to_string())
+                                    .collect()
+                            })
                             .unwrap_or_default(),
                     ),
                     // the game's own text, cp1251 where it is not ASCII
@@ -338,14 +354,58 @@ fn follow(editor: &Arc<Editor>, svc: &Arc<Media>) {
     });
 }
 
+/// The scene's library forgets every model asset made over a model of the game: whoever holds
+/// the game's files calls it when another game takes the place of the one there was, or the
+/// game's index is read again - what such a model is made of may be another file now.
+pub fn forget_game_models(editor: &Editor) {
+    let Some(session) = editor.project_opt() else { return };
+    let Some(index) = session.services.get::<Media>().and_then(|m| m.latest()) else { return };
+    let Some(scene) = session.services.get::<gz_scene::SceneService>() else { return };
+    for e in index.of_kind(MediaKind::Model).filter(|e| e.game.is_some()) {
+        scene.library.forget(e.path.as_str());
+    }
+}
+
+/// What reads a compiled model of the game for a project: `(editor, project root, engine name)`.
+pub type GameModelSource = Arc<dyn Fn(&Editor, &Path, &str) -> Option<Vec<u8>> + Send + Sync>;
+
+/// The compiled models of the game, for the model assets made over one (`source = "game:..."`).
+/// Whoever holds the game's files (the game library) says how one is read; without it no model
+/// of the game is there.
+#[derive(Default)]
+pub struct GameModels {
+    source: RwLock<Option<GameModelSource>>,
+}
+
+impl GameModels {
+    #[must_use]
+    pub fn of(editor: &Editor) -> Arc<Self> {
+        editor.services.get_or_init(Self::default)
+    }
+
+    /// Registers the reader: once, as the editor starts.
+    pub fn provide(&self, source: GameModelSource) {
+        *self.source.write() = Some(source);
+    }
+
+    /// The reader of the game's models for the project at `root`. Reading is blocking: the
+    /// reader is called on the pools.
+    #[must_use]
+    pub fn reader(editor: &Arc<Editor>, root: &Path) -> resolve::GameModel {
+        let Some(source) = Self::of(editor).source.read().clone() else { return resolve::no_game() };
+        let (ed, root) = (Arc::downgrade(editor), root.to_path_buf());
+        Arc::new(move |name: &str| source(&*ed.upgrade()?, &root, name))
+    }
+}
+
 /// The provider of a project's model assets for the scene's library: a reference ending in
 /// `.meshasset` is a project path, made into its model when it is first asked for.
 #[must_use]
-pub fn provider(root: PathBuf) -> gz_scene::library::Provider {
+pub fn provider(root: PathBuf, game: resolve::GameModel) -> gz_scene::library::Provider {
     Arc::new(move |key: &str| {
         if !key.ends_with(MediaKind::Model.extension()) {
             return None;
         }
-        resolve::library_object(&root, key).ok()
+        resolve::library_object(&root, key, &game).ok()
     })
 }

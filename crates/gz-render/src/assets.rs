@@ -21,6 +21,7 @@ use crate::draw_list::DrawList;
 use crate::material::{EditorMaterial, MaterialDesc, MaterialKey, MaterialTable, model_key, texture_key};
 use crate::math::Aabb;
 use crate::mesh::MeshData;
+use crate::paging::{PageData, Piece, page_by_page};
 use crate::texture::{TextureData, level_layout};
 use crate::{Result, invalid};
 
@@ -132,21 +133,29 @@ pub(crate) struct MeshInfo {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SubInfo {
+    /// The part's indices in the mesh as it was handed over: how many triangles it is.
     pub indices: Range<u32>,
-    pub wire: Range<u32>,
     pub material: MaterialHandle,
 }
 
-/// A mesh on the GPU.
-/// A mesh on the GPU: ONE buffer holding its indices, its edges and its vertices, in that order -
-/// a buffer is what the device makes slowest, and a pass that hands over thousands of meshes (the
-/// AI map's cells) waits for each.
-pub(crate) struct GpuMesh {
+/// A buffer of a mesh on the GPU: its indices, its edges and its vertices, in that order, as
+/// byte ranges of the buffer.
+pub(crate) struct GpuPage {
     pub buffer: wgpu::Buffer,
     pub indices: Range<u64>,
     pub wire: Range<u64>,
     pub vertices: Range<u64>,
-    pub info: Arc<MeshInfo>,
+}
+
+/// A mesh on the GPU: ONE buffer holding its indices, its edges and its vertices - a buffer is
+/// what the device makes slowest, and a pass that hands over thousands of meshes (the AI map's
+/// cells) waits for each. A mesh larger than a buffer of the device may be (a level of the game
+/// as one model) is several such pages (`paging.rs`).
+pub(crate) struct GpuMesh {
+    pub pages: Vec<GpuPage>,
+    /// Per part of the mesh (`MeshInfo::submeshes`): where it is drawn from - one piece of the
+    /// only page, or a piece of every page it reaches into.
+    pub parts: Vec<Vec<Piece>>,
 }
 
 pub(crate) struct GpuTexture {
@@ -882,40 +891,37 @@ fn material_slot(inner: &mut Inner, desc: MaterialDesc) -> MaterialHandle {
     MaterialHandle(id)
 }
 
-/// The buffer, the byte ranges of the indices, the edges and the vertices in it, the edges' index
-/// range per part.
-type Uploaded = (wgpu::Buffer, [Range<u64>; 3], Vec<Range<u32>>);
+/// The most one buffer of a mesh holds: filling it takes the device for a few milliseconds.
+const PAGE_BYTES: u64 = 32 << 20;
+
+/// A mesh's buffers and, per part, the pieces it is drawn from.
+struct Uploaded {
+    pages: Vec<GpuPage>,
+    parts: Vec<Vec<Piece>>,
+}
 
 fn finish_mesh_info(inner: &mut Inner, data: &MeshData, uploaded: Option<Uploaded>) -> MeshReady {
-    let wires: Vec<Range<u32>> = uploaded.as_ref().map(|u| u.2.clone()).unwrap_or_default();
     let submeshes = data
         .submeshes
         .iter()
-        .enumerate()
-        .map(|(i, s)| SubInfo {
-            indices: s.indices.clone(),
-            wire: wires.get(i).cloned().unwrap_or(0..0),
-            material: material_slot(inner, s.material.clone()),
-        })
+        .map(|s| SubInfo { indices: s.indices.clone(), material: material_slot(inner, s.material.clone()) })
         .collect();
     let info = Arc::new(MeshInfo { bounds: data.bounds, submeshes, skinned: data.skinned });
-    let gpu = uploaded.map(|(buffer, [indices, wire, vertices], _)| {
-        Arc::new(GpuMesh { buffer, indices, wire, vertices, info: info.clone() })
-    });
+    let gpu = uploaded.map(|u| Arc::new(GpuMesh { pages: u.pages, parts: u.parts }));
     MeshReady { info, gpu }
 }
 
-fn upload_mesh(gpu: &AssetGpu, data: &MeshData) -> Uploaded {
+/// One buffer of indices, edges and vertices, in that order.
+fn upload_page(
+    gpu: &AssetGpu,
+    indices: &[u32],
+    wire: &[u32],
+    vertices: &[crate::mesh::MeshVertex],
+) -> GpuPage {
     use wgpu::util::DeviceExt;
-    // a pool thread that holds the device must not lose the processor to the other pools: the
-    // window's frame waits for the same device
-    #[cfg(windows)]
-    let _drawing = gz_win::drawing_priority();
-    let (wire, ranges) = data.wire_indices();
-    let wire_bytes: &[u8] = if wire.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&wire) };
-    let index_bytes: &[u8] =
-        if data.indices.is_empty() { &[0u8; 4] } else { bytemuck::cast_slice(&data.indices) };
-    let vertex_bytes: &[u8] = bytemuck::cast_slice(&data.vertices);
+    let wire_bytes: &[u8] = if wire.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(wire) };
+    let index_bytes: &[u8] = if indices.is_empty() { &[0u8; 4] } else { bytemuck::cast_slice(indices) };
+    let vertex_bytes: &[u8] = bytemuck::cast_slice(vertices);
     // every part starts on 4 bytes: what an index of u32 and a vertex buffer's offset need
     let (i_len, w_len, v_len) =
         (index_bytes.len() as u64, wire_bytes.len() as u64, vertex_bytes.len() as u64);
@@ -923,15 +929,48 @@ fn upload_mesh(gpu: &AssetGpu, data: &MeshData) -> Uploaded {
     contents.extend_from_slice(index_bytes);
     contents.extend_from_slice(wire_bytes);
     contents.extend_from_slice(vertex_bytes);
-    if contents.is_empty() {
-        contents.extend_from_slice(&[0u8; 4]);
-    }
     let buffer = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("gz-render mesh"),
         contents: &contents,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX,
     });
-    (buffer, [0..i_len, i_len..i_len + w_len, i_len + w_len..i_len + w_len + v_len], ranges)
+    GpuPage {
+        buffer,
+        indices: 0..i_len,
+        wire: i_len..i_len + w_len,
+        vertices: i_len + w_len..i_len + w_len + v_len,
+    }
+}
+
+fn upload_mesh(gpu: &AssetGpu, data: &MeshData) -> Uploaded {
+    // a pool thread that holds the device must not lose the processor to the other pools: the
+    // window's frame waits for the same device
+    #[cfg(windows)]
+    let _drawing = gz_win::drawing_priority();
+    // what the device takes as one buffer, and no more than a frame can wait for: the device
+    // serves one caller at a time, and a buffer of hundreds of megabytes holds the window's
+    // frame for as long as it is filled. A mesh over that is several buffers
+    let budget = gpu.device.limits().max_buffer_size.min(PAGE_BYTES);
+    let fixed = (data.indices.len() * size_of::<u32>()
+        + data.vertices.len() * size_of::<crate::mesh::MeshVertex>()) as u64;
+    // the edges are at most twice the indices: a mesh that fits with that fits
+    if fixed + 2 * (data.indices.len() * size_of::<u32>()) as u64 + 8 <= budget {
+        let (wire, ranges) = data.wire_indices();
+        let page = upload_page(gpu, &data.indices, &wire, &data.vertices);
+        let parts = data
+            .submeshes
+            .iter()
+            .zip(ranges)
+            .map(|(s, wire)| vec![Piece { page: 0, indices: s.indices.clone(), wire }])
+            .collect();
+        return Uploaded { pages: vec![page], parts };
+    }
+    // a page goes to the device as it is filled and is let go of: the mesh is never twice in memory
+    let mut pages = Vec::new();
+    let parts = page_by_page(data, budget, |p: PageData| {
+        pages.push(upload_page(gpu, &p.indices, &p.wire, &p.vertices));
+    });
+    Uploaded { pages, parts }
 }
 
 fn upload_texture(gpu: &AssetGpu, data: &TextureData, label: &str) -> Result<Arc<GpuTexture>> {

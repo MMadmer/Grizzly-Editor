@@ -60,12 +60,14 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod base;
 pub mod bulk;
 pub mod class;
 mod cmd;
 pub mod cmd_edit;
 pub mod debug;
 pub mod edit;
+pub mod facts;
 pub mod format;
 pub mod game;
 mod kind;
@@ -73,6 +75,7 @@ pub mod landing;
 pub mod library;
 pub mod math;
 pub mod model;
+pub mod names;
 pub mod objects;
 pub mod objmotion;
 pub mod objtools;

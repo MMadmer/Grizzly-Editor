@@ -13,6 +13,67 @@ use rustc_hash::FxHashMap;
 
 use crate::math::{Aabb, Vec3};
 
+/// What a surface's faces are for: whether the game draws them and whether they stop a body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceUse {
+    pub draws: bool,
+    pub collides: bool,
+}
+
+impl SurfaceUse {
+    pub const BOTH: Self = Self { draws: true, collides: true };
+    pub const NEITHER: Self = Self { draws: false, collides: false };
+}
+
+/// How a surface's use is told: the model it belongs to and the surface. A library's rule
+/// ([`Library::set_use_rule`]) knows the compiler shaders of the linked game; without one
+/// [`default_use`] answers.
+pub type UseRule = Arc<dyn Fn(&EditObject, &gz_fmt_object::Surface) -> SurfaceUse + Send + Sync>;
+
+/// A surface's use from the model alone: an occluder or a sound occluder is a helper the game
+/// neither draws nor stops a body with, a surface of the occluder material likewise; every
+/// other surface is drawn and stops a body.
+#[must_use]
+pub fn default_use(object: &EditObject, surface: &gz_fmt_object::Surface) -> SurfaceUse {
+    use gz_fmt_object::ObjectFlags;
+    let helper = object.flags.intersects(ObjectFlags::SOUND_OCCLUDER | ObjectFlags::HOM)
+        || surface.game_mtl.eq_ignore_ascii_case("materials\\occ");
+    if helper { SurfaceUse::NEITHER } else { SurfaceUse::BOTH }
+}
+
+/// The faces of an object that stop a body, where they are not the faces it is drawn with: a
+/// level of the game has its picture and its collision apart. Object space.
+pub struct SolidMesh {
+    pub verts: Arc<[Vec3]>,
+    pub tris: Arc<[[u32; 3]]>,
+    /// The game materials the faces are of.
+    pub materials: Vec<SmolStr>,
+    /// Per triangle: an index into `materials`.
+    pub tri_material: Arc<[u16]>,
+    pub bvh: Option<Bvh>,
+}
+
+impl SolidMesh {
+    /// Builds the tree of the faces.
+    #[must_use]
+    pub fn new(
+        verts: Vec<Vec3>,
+        tris: Vec<[u32; 3]>,
+        materials: Vec<SmolStr>,
+        tri_material: Vec<u16>,
+    ) -> Self {
+        let bvh = Bvh::build(&verts, &tris).ok();
+        Self { verts: verts.into(), tris: tris.into(), materials, tri_material: tri_material.into(), bvh }
+    }
+
+    /// The game material of a triangle.
+    #[must_use]
+    pub fn material_of(&self, tri: u32) -> Option<&str> {
+        let m = *self.tri_material.get(tri as usize)?;
+        self.materials.get(usize::from(m)).map(SmolStr::as_str)
+    }
+}
+
 /// A library object as the scene uses it: the model, its box and its picking tree.
 pub struct LibraryObject {
     pub name: SmolStr,
@@ -33,6 +94,14 @@ pub struct LibraryObject {
     /// For a model the module build publishes as a model of its own (a dynamic model asset):
     /// the name the game knows it by. `None` for everything else.
     pub published: Option<SmolStr>,
+    /// The use of every surface as whoever made the object states it (a level of the game: its
+    /// picture and its collision are separate faces). `None`: the library's rule tells.
+    pub stated_uses: Option<Arc<[SurfaceUse]>>,
+    /// The faces that stop a body, when they are not the drawn ones: a ray against what is
+    /// solid ([`crate::pick::RayKinds::Solid`]) and the facts read these instead.
+    pub solid: Option<Arc<SolidMesh>>,
+    /// The uses the library's rule told, with the rule's revision they were told at.
+    uses: Mutex<Option<(u64, Arc<[SurfaceUse]>)>>,
 }
 
 impl std::fmt::Debug for LibraryObject {
@@ -81,7 +150,31 @@ impl LibraryObject {
             bvh,
             stamp: 0,
             published: None,
+            stated_uses: None,
+            solid: None,
+            uses: Mutex::new(None),
         }
+    }
+
+    /// The object with faces of its own that stop a body; the drawn ones then stop nothing.
+    #[must_use]
+    pub fn with_solid(mut self, solid: SolidMesh) -> Self {
+        let drawn = SurfaceUse { draws: true, collides: false };
+        self.stated_uses = Some(vec![drawn; self.object.surfaces.len()].into());
+        let mut bounds = self.bounds;
+        for p in solid.verts.iter() {
+            bounds.modify(*p);
+        }
+        self.bounds = bounds;
+        self.solid = Some(Arc::new(solid));
+        self
+    }
+
+    /// The object with the use of every surface stated by its maker.
+    #[must_use]
+    pub fn with_uses(mut self, uses: Vec<SurfaceUse>) -> Self {
+        self.stated_uses = Some(uses.into());
+        self
     }
 
     /// A library object made in memory from a model (a model asset, a terrain): every mesh's
@@ -218,6 +311,8 @@ pub struct Library {
     disk: Mutex<FxHashMap<String, Disk>>,
     listing: Mutex<Option<Arc<Vec<String>>>>,
     rev: RevCounter,
+    /// What tells a surface's use, and how many times it was set.
+    use_rule: parking_lot::RwLock<(u64, Option<UseRule>)>,
 }
 
 impl Library {
@@ -232,22 +327,65 @@ impl Library {
             disk: Mutex::new(FxHashMap::default()),
             listing: Mutex::new(None),
             rev: RevCounter::new(),
+            use_rule: parking_lot::RwLock::new((0, None)),
         }
+    }
+
+    /// Sets what tells a surface's use (the compiler shaders of the linked game). The uses told
+    /// before are told again when next asked for.
+    pub fn set_use_rule(&self, rule: UseRule) {
+        let mut slot = self.use_rule.write();
+        *slot = (slot.0 + 1, Some(rule));
+    }
+
+    /// The use of every surface of an object, in the order of its surfaces: what its maker
+    /// stated, else what the library's rule tells, else [`default_use`].
+    #[must_use]
+    pub fn uses(&self, o: &LibraryObject) -> Arc<[SurfaceUse]> {
+        if let Some(stated) = &o.stated_uses {
+            return stated.clone();
+        }
+        let (rev, rule) = {
+            let slot = self.use_rule.read();
+            (slot.0, slot.1.clone())
+        };
+        let mut held = o.uses.lock();
+        if let Some((at, uses)) = held.as_ref()
+            && *at == rev
+        {
+            return uses.clone();
+        }
+        let uses: Arc<[SurfaceUse]> = o
+            .object
+            .surfaces
+            .iter()
+            .map(|s| match &rule {
+                Some(rule) => rule(&o.object, s),
+                None => default_use(&o.object, s),
+            })
+            .collect();
+        *held = Some((rev, uses.clone()));
+        uses
     }
 
     /// A library of its own over the same roots and providers, holding what this one has read.
     /// What a long job reads (a level build): an object forgotten here afterwards - its file
     /// changed, the watcher lost count and everything is checked again - stays readable there,
-    /// so nothing takes a model from under the job half way. What the scene itself makes
-    /// (`@...`, [`Self::add_scene_provider`]) is not taken over: the job makes it from the state
-    /// of the scene it works on, with a provider of its own.
+    /// so nothing takes a model from under the job half way. What the scene itself makes of its
+    /// own state (a terrain, a cut model: [`Self::add_scene_provider`]) is not taken over: the
+    /// job makes it from the state of the scene it works on, with a provider of its own. What a
+    /// provider of the library makes of the game (`@level\<name>`: a level whole) is the same
+    /// for every state and is kept - made again it is seconds and the level twice in memory.
     #[must_use]
     pub fn fork(&self) -> Self {
         let cache: FxHashMap<String, Slot> = self
             .cache
             .lock()
             .iter()
-            .filter(|(k, _)| !k.starts_with('@'))
+            .filter(|(k, _)| {
+                !(k.starts_with(crate::objects::terrain::TERRAIN_PREFIX)
+                    || k.starts_with(crate::objects::terrain::CUT_PREFIX))
+            })
             .map(|(k, s)| (k.clone(), s.clone()))
             .collect();
         Self {
@@ -258,6 +396,7 @@ impl Library {
             disk: Mutex::new(self.disk.lock().clone()),
             listing: Mutex::new(self.listing.lock().clone()),
             rev: RevCounter::new(),
+            use_rule: parking_lot::RwLock::new(self.use_rule.read().clone()),
         }
     }
 

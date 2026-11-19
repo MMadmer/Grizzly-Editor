@@ -31,10 +31,38 @@ pub struct Model {
     pub object: Object,
     /// What the file says that does not read, and what the model cannot take, at their keys.
     pub issues: Vec<Issue>,
-    /// The source file (none for `parts`).
+    /// The source file (none for `parts` and for a model of the game).
     pub source: Option<PathBuf>,
+    /// The compiled model the asset is made over, when its source is an `.ogf`.
+    pub compiled: Option<Compiled>,
     /// The asset's text and its source's bytes as one number.
     pub stamp: u64,
+}
+
+/// The compiled model (`.ogf`) a model asset is made over: a file of the project, or a model
+/// of the game by its engine name. `object` is its geometry in the rest pose; the skeleton, the
+/// motions and the levels of detail stay the file's own, and a dynamic model is published as
+/// these bytes with what the asset changes said again.
+#[derive(Clone, Debug)]
+pub struct Compiled {
+    pub bytes: Arc<[u8]>,
+    /// The game's model by its engine name, when the source is `game:`.
+    pub game: Option<String>,
+    /// The names of its bones, in the file's order.
+    pub bones: Vec<String>,
+    /// The names of the motions the file itself holds: the ones the game changes for this model
+    /// alone (a motion of a motion file the model names is shared with every model that names it).
+    pub motions: Vec<String>,
+}
+
+/// What reads a compiled model of the game by its engine name (`dynamics\box\box_wood_01`):
+/// the project's own `gamedata\meshes` first, then the linked game.
+pub type GameModel = Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+
+/// A reader of no game: every model of the game is missing.
+#[must_use]
+pub fn no_game() -> GameModel {
+    Arc::new(|_| None)
 }
 
 /// Why an asset could not be made: the code of the check and its sentence, at a key.
@@ -104,8 +132,29 @@ fn stamp_files(mut h: u64, files: &[PathBuf]) -> u64 {
     h
 }
 
+/// The compiled model a source names: its geometry as the source model, with its bones' names.
+fn compiled(
+    bytes: Vec<u8>,
+    file: &str,
+    game: Option<String>,
+    at: &'static str,
+) -> Result<(Object, Compiled), Failure> {
+    let visual =
+        gz_fmt_ogf::Visual::read(&bytes).map_err(|e| Failure::new(UNREADABLE, at, format!("{file}: {e}")))?;
+    let src =
+        gz_fmt_mesh::object_of_ogf(&visual, file).map_err(|e| Failure::new(UNREADABLE, at, e.to_string()))?;
+    let bones = visual.bones.iter().map(|b| b.name.to_string()).collect();
+    let motions = visual
+        .motions
+        .as_ref()
+        .map(|m| m.motions.iter().map(|x| x.name.to_string()).collect())
+        .unwrap_or_default();
+    Ok((src.object, Compiled { bytes: Arc::from(bytes), game, bones, motions }))
+}
+
 /// A model asset of the project (`rel` project-relative, either slash), made into its model.
-pub fn model(root: &Path, rel: &str) -> Result<Model, Failure> {
+/// `game` reads a model of the game a `source = "game:..."` names.
+pub fn model(root: &Path, rel: &str, game: &GameModel) -> Result<Model, Failure> {
     let abs = root.join(rel.replace('/', "\\"));
     let text = read_text(&abs, rel)?;
     let (asset, mut issues) = loaded(MediaKind::Model, rel, &text, ModelAsset::from_value)?;
@@ -118,7 +167,29 @@ pub fn model(root: &Path, rel: &str) -> Result<Model, Failure> {
             "a model takes its geometry from 'source' or from 'parts', not from both",
         ));
     }
-    let (mut object, mesh_source, source) = if asset.parts.is_empty() {
+    let mut made_over = None;
+    let (mut object, mesh_source, source) = if let Some(name) = files::game_model(asset.source.as_deref())
+        && asset.parts.is_empty()
+    {
+        if !files::plain_game_name(&name) {
+            return Err(Failure::new(
+                MISSING,
+                "source",
+                format!("'{name}' is no name of a model of the game (game:dynamics/box/box_wood_01.ogf)"),
+            ));
+        }
+        let bytes = game(&name).ok_or_else(|| {
+            Failure::new(
+                MISSING,
+                "source",
+                format!("neither the project nor the linked game has the model meshes\\{name}.ogf (asset.find kind=model lists the game's)"),
+            )
+        })?;
+        stamp = fnv(fnv(stamp, name.as_bytes()), &bytes);
+        let (object, c) = compiled(bytes, &format!("{name}.ogf"), Some(name), "source")?;
+        made_over = Some(c);
+        (object, None, None)
+    } else if asset.parts.is_empty() {
         let source = files::source_of(MediaKind::Model, &abs, asset.source.as_deref()).ok_or_else(|| {
             Failure::new(
                 MISSING,
@@ -134,14 +205,20 @@ pub fn model(root: &Path, rel: &str) -> Result<Model, Failure> {
         all.extend(files::dependencies(&source));
         stamp = stamp_files(stamp, &all);
         let at = if has_source { "source" } else { "" };
-        let is_object = source.extension().is_some_and(|e| e.eq_ignore_ascii_case("object"));
-        if is_object {
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if ext == "object" || ext == "ogf" {
             let bytes = std::fs::read(&source).map_err(|e| {
                 Failure::new(UNREADABLE, at, format!("{}: {}", source.display(), gz_base::io_reason(&e)))
             })?;
-            let object = Object::read(&bytes)
-                .map_err(|e| Failure::new(UNREADABLE, at, format!("{}: {e}", files_name(&source))))?;
-            (object, None, Some(source))
+            if ext == "ogf" {
+                let (object, c) = compiled(bytes, &files_name(&source), None, at)?;
+                made_over = Some(c);
+                (object, None, Some(source))
+            } else {
+                let object = Object::read(&bytes)
+                    .map_err(|e| Failure::new(UNREADABLE, at, format!("{}: {e}", files_name(&source))))?;
+                (object, None, Some(source))
+            }
         } else {
             let src = gz_fmt_mesh::read(&source).map_err(|e| Failure::new(UNREADABLE, at, e.to_string()))?;
             (src.object.clone(), Some(src), Some(source))
@@ -151,9 +228,20 @@ pub fn model(root: &Path, rel: &str) -> Result<Model, Failure> {
             .map_err(|e| Failure::new(CANNOT, "parts", format!("the parts make no model: {e}")))?;
         (object, None, None)
     };
-    transform(&mut object, &asset, &mut issues);
+    if asset.dynamic && made_over.is_some() {
+        over_compiled(&asset, made_over.as_ref(), &mut issues);
+    } else {
+        transform(&mut object, &asset, &mut issues);
+    }
     surfaces(&mut object, &asset, mesh_source.as_ref(), root, &abs);
-    if asset.dynamic {
+    if asset.dynamic && made_over.is_some() {
+        // the skeleton, the motions and the levels of detail are the compiled model's own: the
+        // object is its geometry at rest, for the picture, the rays and the size
+        object.flags.insert(ObjectFlags::DYNAMIC);
+        if let Some(u) = &asset.userdata {
+            object.user_data.clone_from(u);
+        }
+    } else if asset.dynamic {
         object.flags.insert(ObjectFlags::DYNAMIC);
         if object.bones.is_empty() {
             bind_to_root(&mut object);
@@ -172,7 +260,67 @@ pub fn model(root: &Path, rel: &str) -> Result<Model, Failure> {
     } else {
         object.flags.remove(ObjectFlags::DYNAMIC);
     }
-    Ok(Model { asset, object, issues, source, stamp })
+    Ok(Model { asset, object, issues, source, compiled: made_over, stamp })
+}
+
+/// What a dynamic model over a compiled one cannot take, said at its keys: the file keeps its
+/// own skeleton and motions, and only what its parts wear, its user data and its bones' mass
+/// and material are said again.
+fn over_compiled(asset: &ModelAsset, compiled: Option<&Compiled>, issues: &mut Vec<Issue>) {
+    let mut warn = |path: Vec<Seg>, message: String| {
+        issues.push(Issue::new(CANNOT, Severity::Warning, path, message));
+    };
+    if asset.scale != 1.0 {
+        warn(
+            vec![Seg::key("scale")],
+            "'scale' is not applied to a dynamic model over a compiled one: its skeleton is the file's own"
+                .into(),
+        );
+    }
+    if asset.rotate.iter().any(|a| *a != 0.0) {
+        warn(
+            vec![Seg::key("rotate")],
+            "'rotate' is not applied to a dynamic model over a compiled one: turn it where it is placed"
+                .into(),
+        );
+    }
+    // a row sets the speed and the flags of a motion the model itself holds: the game reads them
+    // from the description. A motion is made of no clip here, and one of a shared motion file
+    // keeps what it has.
+    let motions = compiled.map(|c| c.motions.as_slice()).unwrap_or_default();
+    for row in &asset.animations {
+        let at = vec![Seg::key("animations"), Seg::item("name", &row.name)];
+        if !motions.iter().any(|m| m.eq_ignore_ascii_case(&row.name)) {
+            let known = if motions.is_empty() {
+                "it holds none".to_owned()
+            } else {
+                format!("it holds: {}", motions.iter().take(8).cloned().collect::<Vec<_>>().join(", "))
+            };
+            warn(
+                at,
+                format!(
+                    "the compiled model holds no motion '{}' of its own ({known}): a motion of a motion file it names is shared with other models and keeps its speed and flags",
+                    row.name
+                ),
+            );
+        } else if row.clip.is_some() {
+            let mut at = at;
+            at.push(Seg::key("clip"));
+            warn(at, "'clip' is not applied: a compiled model's motions are its own".into());
+        }
+    }
+    let bones = compiled.map(|c| c.bones.as_slice()).unwrap_or_default();
+    for row in &asset.bones {
+        // a bone's `shape` names the kind alone: the game switches to it when the model holds
+        // the size of such a shape for the bone, and keeps the bone's own otherwise
+        if !bones.iter().any(|b| b.eq_ignore_ascii_case(&row.name)) {
+            let known = bones.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+            warn(
+                vec![Seg::key("bones"), Seg::item("name", &row.name)],
+                format!("the compiled model has no bone '{}' (it has: {known})", row.name),
+            );
+        }
+    }
 }
 
 fn files_name(p: &Path) -> String {
@@ -180,8 +328,8 @@ fn files_name(p: &Path) -> String {
 }
 
 /// The scene's object of a model asset: what the library's provider answers.
-pub fn library_object(root: &Path, key: &str) -> Result<Arc<LibraryObject>, Failure> {
-    let m = model(root, key)?;
+pub fn library_object(root: &Path, key: &str, game: &GameModel) -> Result<Arc<LibraryObject>, Failure> {
+    let m = model(root, key, game)?;
     // a dynamic model is published as a model of its own: the scene's layers name it by that name
     let published = m.object.is_dynamic().then(|| {
         let module = match gz_mod::read_manifest_file(root) {
@@ -333,9 +481,9 @@ fn bones(object: &mut Object, asset: &ModelAsset) {
         if let Some(m) = row.mass {
             object.bones[i].mass = m as f32;
         }
-        if let Some(mtl) = &row.material {
-            object.bones[i].game_mtl = mtl.as_str().into();
-        }
+        // the row's material is the description's: the game takes it when it is a dynamic one
+        // and keeps the model's own otherwise. Written into the model, another kind of material
+        // would stop the game as the model loads - so the model keeps the one its source has.
         let Some(shape) = row.shape else { continue };
         let wmap = object.bones[i].wmap.clone();
         let mut b = gz_fmt_object::Aabb::INVALID;

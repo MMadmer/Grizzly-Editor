@@ -282,6 +282,10 @@ fn entry_json(cat: Option<&Catalog>, view: &crate::catalog::ViewEntry) -> Value 
             if cat.source == Source::Library
                 && let Some(f) = cat.file(&e.path)
             {
+                // a level of the game: Open is the project's scene over it
+                if let Some(level) = crate::library::game_level(cat, &e.path) {
+                    out.insert("level".into(), json!(level));
+                }
                 let import = match (cat.category, f.origin) {
                     (model::SCENES, _) => None,
                     (_, FileOrigin::Game) => cat.game_path(&e.path).map(|p| json!({ "from": "game", "path": p.replace('\\', "/") })),

@@ -101,6 +101,10 @@ impl KindOps {
 /// not there): its problems are the manifest's.
 pub type ManifestCheckFn = fn(Arc<Editor>) -> BoxFuture<'static, Vec<Problem>>;
 
+/// A check of a text file that is no asset (a script, XML, JSON), by its path in the project:
+/// its problems, in the file.
+pub type TextCheckFn = fn(Arc<Editor>, RelPath) -> BoxFuture<'static, Vec<Problem>>;
+
 /// Every kind, in the order the kind crates installed them. Lives in `editor.services`.
 #[derive(Default)]
 pub struct Kinds {
@@ -108,6 +112,8 @@ pub struct Kinds {
     /// The build checks whose problems `asset.check` gives per file already (by their stage).
     covered: RwLock<Vec<&'static str>>,
     manifest: RwLock<Vec<ManifestCheckFn>>,
+    /// The checks of text files that are no assets, by the extensions they read.
+    text: RwLock<Vec<(&'static [&'static str], TextCheckFn)>>,
 }
 
 impl Kinds {
@@ -163,5 +169,29 @@ impl Kinds {
     #[must_use]
     pub fn manifest_checks(&self) -> Vec<ManifestCheckFn> {
         self.manifest.read().clone()
+    }
+
+    /// Adds a check of the text files with these extensions (without the dot, any case):
+    /// `asset.check` runs it for such a file that no kind owns. A check added again for an
+    /// extension takes the place of the first.
+    pub fn add_text_check(&self, exts: &'static [&'static str], check: TextCheckFn) {
+        let mut text = self.text.write();
+        text.retain(|(e, _)| !e.iter().any(|x| exts.iter().any(|y| x.eq_ignore_ascii_case(y))));
+        text.push((exts, check));
+    }
+
+    /// The text check of a file, by its name: `None` for an asset of a kind, the manifest, or a
+    /// file no text check reads.
+    #[must_use]
+    pub fn text_check(&self, name: &str) -> Option<TextCheckFn> {
+        if self.of_file(name).is_some() || name.eq_ignore_ascii_case(crate::check::MANIFEST) {
+            return None;
+        }
+        let ext = name.rsplit_once('.').map(|(_, e)| e)?;
+        self.text
+            .read()
+            .iter()
+            .find(|(exts, _)| exts.iter().any(|e| e.eq_ignore_ascii_case(ext)))
+            .map(|(_, f)| *f)
     }
 }

@@ -66,6 +66,23 @@ pub fn install(editor: &Editor) {
             }
         });
     });
+    // a section the module makes or changes is the game's for the scene: an item is placed as a
+    // spawn point like any section of the game
+    gz_game::ComposedConfigs::of(editor)
+        .provide(Arc::new(|ed| Box::pin(async move { Items::of(ed).await.ok()?.composed(ed).await })));
+    // and for whatever asks whether the module brings a section - a character's kit, a quest's
+    // item, the start kit: every section the composed tree holds that the game's own lacks
+    gz_mod::SectionSources::of(editor).add(Arc::new(|ed| {
+        Box::pin(async move {
+            let Ok(items) = Items::of(ed).await else { return Vec::new() };
+            if items.composed(ed).await.is_none() {
+                return Vec::new();
+            }
+            let roster = items.roster(ed).await;
+            let made = roster.composition.ltx.sections().iter();
+            made.filter(|s| !roster.game.section_exist(&s.name)).map(|s| s.name.to_string()).collect()
+        })
+    }));
 }
 
 /// The item kind of `gz-asset`.

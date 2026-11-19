@@ -778,12 +778,40 @@ async fn scene_delete(ed: Arc<Editor>, p: ObjectsParams, o: Origin) -> Reply {
     let svc = service::need_scene(&ed).await?;
     let before = svc.store.snapshot().objects.len();
     select_named(&svc, p.objects.as_deref(), o).await?;
-    if svc.store.snapshot().selection.is_empty() {
+    let s = svc.store.snapshot();
+    if s.selection.is_empty() {
         return Err(CmdError::invalid("nothing is selected to delete"));
     }
+    // over a level of the game: the level's own stays, but a spawn point the scene takes out
+    let level_s: Vec<&str> = s
+        .selection
+        .iter()
+        .filter_map(|id| s.get(*id))
+        .filter(|x| x.marks.base && x.class != ObjClass::SpawnPoint)
+        .map(|x| x.name.as_str())
+        .collect();
+    if let Some(first) = level_s.first() {
+        return Err(CmdError::new(
+            "refused",
+            format!(
+                "'{first}'{} is the level's own (the game's {}): a scene deletes nothing of the level but its spawn points, which it takes out",
+                if level_s.len() > 1 { format!(" and {} more", level_s.len() - 1) } else { String::new() },
+                s.meta.base.level
+            ),
+        ));
+    }
+    let taken =
+        |s: &crate::SceneState| s.objects.values().filter(|x| x.marks.base && x.marks.removed).count();
+    let out_before = taken(&s);
     svc.store.send(SceneCmd::RemoveSelection { label: "Delete".into() }, o).await?;
-    let after = svc.store.snapshot().objects.len();
-    Ok(json!({ "removed": before.saturating_sub(after) }))
+    let now = svc.store.snapshot();
+    let mut out = json!({ "removed": before.saturating_sub(now.objects.len()) });
+    if now.meta.base.is_set()
+        && let Value::Object(m) = &mut out
+    {
+        m.insert("taken_out".into(), json!(taken(&now).saturating_sub(out_before)));
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]

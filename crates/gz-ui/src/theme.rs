@@ -183,6 +183,34 @@ pub struct Palette {
     pub shadow_dialog: Shadow,
     /// What a drawer, a toast, the Task card and a graph node cast.
     pub shadow_card: Shadow,
+    /// The colours of code text (`code`).
+    pub syntax: Syntax,
+}
+
+/// The colours of code text, by the kind of token: the theme's own token colours where it
+/// publishes them, each reading on inset and base as muted text does (`min::SYNTAX`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Syntax {
+    /// `local`, `function`, `if`, `nil`; a Markdown emphasis.
+    pub keyword: Color32,
+    pub string: Color32,
+    pub number: Color32,
+    /// The theme's muted text.
+    pub comment: Color32,
+    /// A function's name; a key of Lua data or JSON; an LTX section.
+    pub function: Color32,
+    /// A script's name before its dot; an LTX section's parents.
+    pub name: Color32,
+    /// An XML tag; a Markdown heading.
+    pub tag: Color32,
+    /// An XML attribute; an LTX key.
+    pub attribute: Color32,
+    /// Operators and brackets: the secondary text.
+    pub punct: Color32,
+    /// A diff's added line.
+    pub added: Color32,
+    /// A diff's removed line.
+    pub removed: Color32,
 }
 
 impl Default for Palette {

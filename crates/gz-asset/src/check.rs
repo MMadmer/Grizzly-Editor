@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use gz_base::{Problem, RelPath, Severity};
 use gz_build::{BuildChecks, BuildWalk, WalkScope};
-use gz_editor::{CmdError, Editor};
-use gz_project::{Project, is_editor_only_entry, is_tooling_entry};
+use gz_editor::{CmdError, Editor, ProjectSession};
+use gz_project::{FileTree, Project, is_editor_only_entry, is_tooling_entry};
 use serde::Serialize;
 
 use gz_mod::{ManifestDoc, Spot};
@@ -118,7 +118,10 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
     let (is_file, is_dir) = editor.exec.io(move || (probe.is_file(), probe.is_dir())).await;
     if is_file {
         let name = under.file_name();
-        if kinds.of_file(name).is_some() || name.eq_ignore_ascii_case(MANIFEST) {
+        if kinds.of_file(name).is_some()
+            || name.eq_ignore_ascii_case(MANIFEST)
+            || kinds.text_check(name).is_some()
+        {
             return Ok(vec![under]);
         }
         return Err(CmdError::invalid(format!(
@@ -128,10 +131,14 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
     if !is_dir {
         return Err(CmdError::not_found(format!("{under} does not exist in the project")));
     }
+    let mut tree = None;
     let files: Vec<RelPath> = match session.services.get::<Project>() {
         Some(project) => {
             project.tree.refresh().await;
-            project.tree.snapshot().files_under(&under).into_iter().map(|(p, _)| p).collect()
+            let snap = project.tree.snapshot();
+            let files = snap.files_under(&under).into_iter().map(|(p, _)| p).collect();
+            tree = Some(snap);
+            files
         }
         None => {
             let start = under.clone();
@@ -145,14 +152,19 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
                 .await
         }
     };
-    let mut out: Vec<RelPath> = files
+    let files: Vec<RelPath> = files.into_iter().filter(|p| !in_editor_scratch(&under, p)).collect();
+    let (texts, assets): (Vec<RelPath>, Vec<RelPath>) =
+        files.into_iter().partition(|p| kinds.text_check(p.file_name()).is_some());
+    let mut out: Vec<RelPath> = assets
         .into_iter()
-        .filter(|p| !in_editor_scratch(&under, p))
         .filter(|p| {
             kinds.of_file(p.file_name()).is_some()
                 || (p.parent().is_some_and(|d| d.is_root()) && p.file_name().eq_ignore_ascii_case(MANIFEST))
         })
         .collect();
+    if !texts.is_empty() {
+        out.extend(text_targets(editor, &session, &under, texts, tree).await);
+    }
     if out.is_empty()
         && let Some(owner) = asset_beside(editor, &under).await
     {
@@ -160,6 +172,61 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
     }
     out.sort();
     Ok(out)
+}
+
+/// The text files of a folder's check: not a part of an asset (a file in a folder that has the
+/// asset of its name beside it - a scene's), and not one the build leaves out unless the folder
+/// asked for is left out itself (a check asked for such a folder looks into it).
+async fn text_targets(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    under: &RelPath,
+    texts: Vec<RelPath>,
+    tree: Option<Arc<FileTree>>,
+) -> Vec<RelPath> {
+    let rules = match gz_mod::ManifestService::of_session(editor, session).await {
+        Ok(m) => m.snapshot().manifest().map(|m| m.exclude.clone()).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    let asked_outside = gz_mod::outside_build(&rules, under.as_str());
+    let texts: Vec<RelPath> =
+        texts.into_iter().filter(|p| asked_outside || !gz_mod::outside_build(&rules, p.as_str())).collect();
+    let exts: Vec<&'static str> = Kinds::of(editor).all().iter().map(|k| k.ext).collect();
+    let root = session.root.clone();
+    editor
+        .exec
+        .io(move || {
+            let mut own: std::collections::HashMap<RelPath, bool> = std::collections::HashMap::new();
+            let mut is_own = |folder: &RelPath| -> bool {
+                if let Some(&known) = own.get(folder) {
+                    return known;
+                }
+                let up = folder.parent().unwrap_or_else(RelPath::root);
+                let found = exts
+                    .iter()
+                    .filter_map(|e| up.join(&format!("{}{e}", folder.file_name())).ok())
+                    .any(|c| match &tree {
+                        Some(t) => t.entry(&c).is_some_and(gz_project::Entry::is_file),
+                        None => c.to_fs(&root).is_file(),
+                    });
+                own.insert(folder.clone(), found);
+                found
+            };
+            texts
+                .into_iter()
+                .filter(|p| {
+                    let mut folder = p.parent();
+                    while let Some(f) = folder.filter(|f| !f.is_root()) {
+                        if is_own(&f) {
+                            return false;
+                        }
+                        folder = f.parent();
+                    }
+                    true
+                })
+                .collect()
+        })
+        .await
 }
 
 /// The problems of one asset file: what reading it found, then its kind's check.
@@ -298,11 +365,19 @@ pub async fn run(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Report,
     let in_flight = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
     use futures::StreamExt as _;
     // each check owns its path: the stream holds them past this function's borrows
+    let kinds = Kinds::of(editor);
     let checks: Vec<_> = assets
         .iter()
         .map(|f| {
             let (editor, path) = (editor.clone(), (*f).clone());
-            async move { check_file(&editor, &path).await }
+            // a text file that is no asset has a check of its own
+            let text = kinds.text_check(path.file_name());
+            async move {
+                match text {
+                    Some(check) => check(editor, path).await,
+                    None => check_file(&editor, &path).await,
+                }
+            }
         })
         .collect();
     let mut problems: Vec<Problem> = futures::stream::iter(checks)

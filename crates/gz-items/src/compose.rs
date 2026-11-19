@@ -106,7 +106,8 @@ pub struct AppliedTable {
 /// The game's tree with the module laid over it.
 #[derive(Clone, Debug, Default)]
 pub struct Composition {
-    pub ltx: Ltx,
+    /// Shared: the scene's settings read this very tree.
+    pub ltx: std::sync::Arc<Ltx>,
     /// Per item of the roster, in its order.
     pub applied: Vec<Applied>,
     /// Per table file of the roster, in its order.
@@ -912,6 +913,6 @@ pub fn compose(
     for p in &cfg.patches {
         out.file_patches.extend(b.patch(&p.rel, &p.text, 2));
     }
-    out.ltx = b.finish().ltx;
+    out.ltx = std::sync::Arc::new(b.finish().ltx);
     out
 }

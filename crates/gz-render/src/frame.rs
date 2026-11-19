@@ -615,7 +615,8 @@ fn draw_helpers(
 fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], ids: bool) {
     let mut last_pipe: Option<(MeshPipe, Option<IdPipe>)> = None;
     let mut last_material = usize::MAX;
-    let mut last_mesh: (usize, bool) = (0, false);
+    // the mesh, its page and whether its edges are bound
+    let mut last_mesh: (usize, u32, bool) = (0, 0, false);
     for d in draws {
         if let Some(range) = &d.dynamic {
             // a sprite batch: its own vertices, no index buffer
@@ -641,7 +642,7 @@ fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], i
                 last_material = d.material as usize;
             }
             pass.set_vertex_buffer(0, ctx.dynamic.slice(..));
-            last_mesh = (usize::MAX, false);
+            last_mesh = (usize::MAX, 0, false);
             pass.draw(range.clone(), d.instances.clone());
             continue;
         }
@@ -649,7 +650,7 @@ fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], i
             Some(Some(m)) => (m, d.submesh as usize),
             _ => (ctx.placeholder, 0),
         };
-        let Some(info) = mesh.info.submeshes.get(sub) else { continue };
+        let Some(pieces) = mesh.parts.get(sub) else { continue };
         let pipe = if ids {
             let Some(p) = d.pipe.id_pipe() else { continue };
             (d.pipe, Some(p))
@@ -657,8 +658,8 @@ fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], i
             (d.pipe, None)
         };
         let wire = !ids && d.pipe.is_wire();
-        let range = if wire { info.wire.clone() } else { info.indices.clone() };
-        if range.is_empty() || d.instances.is_empty() {
+        let run = |p: &crate::paging::Piece| if wire { p.wire.clone() } else { p.indices.clone() };
+        if d.instances.is_empty() || pieces.iter().all(|p| run(p).is_empty()) {
             continue;
         }
         if last_pipe != Some(pipe) {
@@ -673,18 +674,23 @@ fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], i
             pass.set_bind_group(1, bg.as_ref(), &[]);
             last_material = d.material as usize;
         }
-        let key = (Arc::as_ptr(mesh) as usize, wire);
-        if key != last_mesh {
-            if mesh.vertices.is_empty() {
+        // a part is one piece of the mesh's only buffer, or a piece of every page it reaches into
+        for piece in pieces {
+            let range = run(piece);
+            let Some(page) = mesh.pages.get(piece.page as usize) else { continue };
+            if range.is_empty() || page.vertices.is_empty() {
                 continue;
             }
-            pass.set_vertex_buffer(0, mesh.buffer.slice(mesh.vertices.clone()));
-            pass.set_index_buffer(
-                mesh.buffer.slice(if wire { mesh.wire.clone() } else { mesh.indices.clone() }),
-                wgpu::IndexFormat::Uint32,
-            );
-            last_mesh = key;
+            let key = (Arc::as_ptr(mesh) as usize, piece.page, wire);
+            if key != last_mesh {
+                pass.set_vertex_buffer(0, page.buffer.slice(page.vertices.clone()));
+                pass.set_index_buffer(
+                    page.buffer.slice(if wire { page.wire.clone() } else { page.indices.clone() }),
+                    wgpu::IndexFormat::Uint32,
+                );
+                last_mesh = key;
+            }
+            pass.draw_indexed(range, 0, d.instances.clone());
         }
-        pass.draw_indexed(range, 0, d.instances.clone());
     }
 }

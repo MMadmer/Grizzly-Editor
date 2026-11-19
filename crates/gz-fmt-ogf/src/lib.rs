@@ -13,6 +13,8 @@
 //!                                           (a progressive one through the VIPM pass, `vipm`)
 //! export_breakable(&BreakablePart) -> Export   a breakable part's rigid skeleton
 //! export_omf(&Object) -> Vec<u8>         the motions of an object as an `.omf`
+//! restate(&[u8], &Restate) -> Vec<u8>    a compiled model with what its parts wear, its user
+//!                                           data and its bones' physics changed, the rest as it was
 //! min_box / rapid_box -> Obb             the minimal box and the moment box
 //! ```
 //!
@@ -26,10 +28,15 @@ mod format;
 mod motion;
 mod obb;
 mod optimize;
+mod restate;
 mod skeleton;
 mod vertex;
 mod vipm;
 mod visual;
+
+/// The texture the game keeps for "there, but not drawn": a model whose every surface wears it
+/// works - it stops a body, it is a container - and nobody sees it.
+pub const UNDRAWN_TEXTURE: &str = "glow\\glow_ghost";
 
 pub use bones::{BoneIk, BoneName, Obb};
 pub use export::{
@@ -43,6 +50,7 @@ pub use motion::{
 };
 pub use obb::{min_box, rapid_box};
 pub use optimize::{optimize_faces, optimize_vertices};
+pub use restate::{BoneChange, Restate, Restated, restate};
 pub use skeleton::{Skeleton, origin_of};
 pub use vertex::{Vertex, VertexBuffer, VertexFormat};
 pub use vipm::{Swr, VipmResult, vipm_convert};

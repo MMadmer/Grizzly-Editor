@@ -68,7 +68,47 @@ shortest text that reads back to the very value; the few values a number of the 
         row(&mut out, f);
     }
     out.push_str(
-        "\n## Every object\n\n\
+        "\n## A scene over a level of the game\n\n\
+A module that adds to a level of the game says `base = \"<level>\"` and writes only what it adds:\n\n\
+```lua\n\
+-- rawdata/levels/agroprom_base.scene\n\
+return {\n\
+  scene = 2,\n\
+  base = \"l03_agroprom\",\n\
+}\n\
+-- rawdata/levels/agroprom_base/spawns.lua\n\
+return {\n\
+  spawns = {\n\
+    { name = \"agr_smart_terrain_1_2_anomal_zone\", removed = true },\n\
+    { name = \"base_guard_gate\", pos = { 40, 2.5, -12 }, rot = { 0, 90, 0 }, section = \"agro_base_guard\" },\n\
+  },\n\
+}\n\
+```\n\n\
+The level itself is the game's and is never copied into the project: as the scene is read its objects come from \
+the game library (`docs/GAME_LIBRARY.md`) - the level's geometry as one object (`level_geometry`, with the level's \
+own collision), every spawn point of the game's spawn that stands on it, its patrol paths, lights, glows, sounds \
+and effects, fog volumes and sound environments, and its AI map. They stand in the scene for every query, check and picture; `scene.objects` answers \
+them with `level = true` (`own = true` leaves them out), and nothing of them is the scene's to change. What the \
+library holds of the level - the same objects as text, and the level's passport: its structures, floors, materials \
+and heights - is `asset.card ref=<level> kind=level`.\n\n\
+- Everything the scene's files hold is the module's: `authored` is implied and not written.\n\
+- An entry of `spawns.lua` with `removed = true` and no `section` is no spawn point of the scene's: it takes the \
+level's spawn point of that `name` out of the game for the module's mode. It says `name` and `removed` alone. An \
+entry that names what the level has not is a warning (`S061`) and stays in the file.\n\
+- A key of the `.scene` left out is the level's: its folder, its sun, its light controls.\n\
+- The level's painted layers are the level's; a layer file in the scene's folder is the module's own, made \
+when the scene paints it. Wallmarks painted so ship as part of the module's piece of the level; details \
+(grass) and a painted AI map do not ship - the game grows the level's own grass and keeps the level's own \
+AI map, which a module changes under a terrain that cuts the ground alone (`S223`).\n\
+- What the module adds beside objects and spawn points - sound sources, particle effects, lights that shine \
+in the game, environment modifiers, glows, fog volumes, sound environments - the build writes into \
+`levels\\<level>\\overlay.things`, which the game puts beside the level's own. Sectors, portals, the bound of \
+the level and of its AI map are the game's there (`S222`).\n\
+- A level the game library cannot give (`S060`: no game linked, no level of that name) leaves the scene with what \
+its own files say; a save then writes them as they are.\n\n\
+A scene without `base` is a level of the module's own, or an X-Ray SDK scene imported whole, where `authored` and \
+`removed` are said object by object.\n\
+\n## Every object\n\n\
 Each list of a folder's file holds one table per object, on its own line or block, `name` first:\n\n\
 ```lua\n\
 return {\n\
@@ -104,6 +144,12 @@ and transform. A part the entity lacks is `false`. The editor proves every save:
 the very spawn packet the entity writes, or the spawn is kept as its packet (`raw`, hex) and `asset.check` names it. \
 An entity of an X-Ray SDK text scene whose class the linked game does not know has no packet: it keeps the \
 section's numbered values as they were (`values`).\n\n\
+A zone's volume is said once, by the point's `shape`: `shape = { shapes = { { kind = \"box\", size = { 20, 6, 12 } } } }`. \
+The entity carries the same shapes and `props` does not repeat them; a file that says `props.shapes` and no `shape` \
+is read into the point's shape.\n\n\
+A section is one of the linked game's (`game.lookup type=spawn_section`) or one the game makes of the module's own \
+assets: a character `characters/guard.npcasset` of the module `agro_base` is the section `agro_base_guard`, placed \
+like any other.\n\n\
 ## The painted layers\n\n\
 `ai_map.bin`, `details.bin` and `wallmarks.bin` start with the magic `GZLAYER\\0`, the layer format's version and \
 the layer's kind (little-endian 32-bit words), then the layer's data as the editor holds it.\n\n",
@@ -127,17 +173,29 @@ stay with their layers.\n",
 fn kind_text(class: ObjClass) -> &'static str {
     match class {
         ObjClass::SceneObject => "Static and dynamic objects of the library.",
-        ObjClass::Light => "The lights the build bakes and the game shines.",
-        ObjClass::Glow => "Glows: light halos the game draws.",
+        ObjClass::Light => {
+            "The lights the build bakes and the game shines. Every kind is baked into the lightmaps (`lightmap`): a point light all around, a spot light inside its `cone` along where it looks (all of it on the axis, none at the cone's edge), a directional one from its direction. In the game (`dynamic`) a point light and a spot light shine - the spot through the level's `overlay.things` -; a directional one never does, the game's one directional light being the level's sun (`S221`)."
+        }
+        ObjClass::Glow => {
+            "Glows: a picture that always faces the viewer, at a place - the halo of a lamp. The game draws the ones a module brings (the level's `overlay.things`), fading each in while its place is in sight."
+        }
         ObjClass::SoundSrc => "Sound sources: a sound of the game played at a place.",
-        ObjClass::SoundEnv => "Sound environments: volumes that change how sound echoes.",
+        ObjClass::SoundEnv => {
+            "Sound environments: boxes that change how sound echoes. `pos`, `rot` and `scale` say the box (a unit box scaled: `scale = { 12, 4, 7 }` is 12 x 4 x 7 m). Inside it the game plays `inner`; straight above it, `outer`. `asset.find kind=sound_env` lists the game's environments. They reach the game through the level's `overlay.things`, on a level of the module's own and over a level of the game alike."
+        }
         ObjClass::Particles => "Particle effects placed in the level.",
         ObjClass::Shape => "Shapes: volumes of spheres and boxes (and the level's bound).",
-        ObjClass::FogVolume => "Fog volumes: one box each.",
+        ObjClass::FogVolume => {
+            "Fog volumes: one box each (`pos`, `rot`, `scale`: a unit box scaled). An emitter's box fills with fog that flows by its `profile`; the occlusion volumes of its `group` are what the fog flows around. A group has one emitter. The fog fills its whole box and is lit by the lights around it: a small box in a still place reads as mist, a large one as smoke. The game shows it with volumetric fog on."
+        }
         ObjClass::SpawnPoint => "Spawn points: what the game spawns, and the editor's own points.",
         ObjClass::Way => "Way paths: named points and the links between them; orders and quests walk them.",
-        ObjClass::Sector => "Sectors: the cells the level's visibility is divided into.",
-        ObjClass::Portal => "Portals: the openings between two sectors.",
+        ObjClass::Sector => {
+            "Sectors: the cells the visibility of a level of the module's own is divided into. Over a level of the game the cells are the game's and a module adds none (`S222`)."
+        }
+        ObjClass::Portal => {
+            "Portals: the openings between two sectors of a level of the module's own (`S222` over a level of the game)."
+        }
         ObjClass::Group => "Groups: objects held together; the members stay in their own files.",
         ObjClass::Terrain => {
             "Terrains: a height grid over a rectangle that replaces the ground under it. `pos` is its centre, `rot` turns it by its heading alone. Its model is made from these keys (and, on the ground, from the static objects under it that the module does not add); with `cut` on, the ground it replaces is cut out of the level wherever the editor and the game look: a triangle of a static object that is not `authored` is clipped by the rectangle, and the part inside goes where it lies within 0.5 m of the old ground."
