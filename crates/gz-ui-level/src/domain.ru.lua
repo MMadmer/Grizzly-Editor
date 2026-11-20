@@ -704,6 +704,11 @@ return {
   { "Loading the scene", "Загрузка сцены" },
   -- the game library's job (gz-gamelib)
   { "Reading the Game", "Чтение игры" },
+  -- the media area's import in place (gz-media) and a module build's preparations
+  { "Importing Media", "Импорт медиа" },
+  { "Writing the assets of {n} files", "Запись ассетов для файлов: {n}" },
+  { "Importing the module's new media", "Импорт новых медиафайлов модуля" },
+  { "Building the module's piece of {level}", "Сборка куска модуля на уровне {level}" },
   { "Reading the game's configs", "Чтение конфигов игры" },
   { "Reading the scene", "Чтение сцены" },
   { "Laying the slots on the ground", "Размещение слотов на земле" },

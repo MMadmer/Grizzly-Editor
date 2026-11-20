@@ -136,6 +136,10 @@ fn main() -> ExitCode {
     gz_characters::install(&editor);
     gz_items::install(&editor);
     gz_media::install(&editor);
+    // raw files of the module's game data get their assets by themselves where a person works
+    if !cli.commandlet() {
+        gz_media::auto::install(&editor);
+    }
     gz_world::install(&editor);
     gz_catalog::install(&editor);
     // the editor's own updates: a finished one tidied up, a download continued
@@ -149,6 +153,7 @@ fn main() -> ExitCode {
     // the game as the editor's library: a run that stays up keeps it current by itself
     gz_gamelib::install(&editor, !cli.commandlet());
     gz_export_level::install(&editor);
+    gz_levelbuild::install(&editor);
     gz_ui_content::install_hooks(&editor);
     // a project handed over by a second start asks about unsaved work in the window
     gz_ui_app::launch::install_hooks(&editor);

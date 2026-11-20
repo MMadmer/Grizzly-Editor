@@ -40,6 +40,7 @@ import os
 import struct
 import sys
 import tempfile
+import time
 
 import qa
 from qa import check, cmd, short
@@ -454,9 +455,17 @@ def run_own_things() -> None:
     try:
         game = cmd("game.library").get("game", "")
         listed_game = game_listing(game) if game else {}
+        before = time.time()
         built = cmd("mod.build", target="folder", path=out, timeout=1200)
         check(built.get("ok"), "E the module builds to a folder", short(built, 900))
         root = os.path.join(out, "modules", module)
+        # the static model is level geometry: the module build builds the piece itself, no Build Level asked
+        made = os.path.join(CTX.project, "levels", LEVEL, "pieces", "main", "piece.ltx")
+        check(os.path.isfile(made) and os.path.getmtime(made) >= before - 1
+              and os.path.isfile(os.path.join(root, "levels", LEVEL, "pieces", "main", "piece.ltx")),
+              "E the module build builds the piece of the static model first and ships it", made)
+        piece = {s.get("step"): s.get("state") for s in cmd("level.status", timeout=120).get("steps", [])}.get("piece")
+        check(piece == "fresh", "E and the piece is fresh after it", str(piece))
         ogf = os.path.join(root, "gamedata", "meshes", module, "qa_box.ogf")
         data = open(ogf, "rb").read() if os.path.isfile(ogf) else b""
         check(other.encode("ascii", "replace") in data and worn.encode("ascii", "replace") not in data,

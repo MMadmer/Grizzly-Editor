@@ -166,12 +166,40 @@ module that ships the game's formats - a classic mod made into one - keeps every
 and says what the game reads of a `.thm` or an `.ogg`'s comment in the asset's text. `asset.import` makes those
 assets in place, each read back from the text it writes before it is trusted: a `.thm` beside a picture becomes
 its asset's keys (every key the game reads stated, so the game's own `.thm` under that name says nothing more;
-none only the SDK reads) and stays beside it, shipped, unless the caller says `remove_descriptions` - the destroy
-door, since what only the SDK read of it goes too; a `.thm` alone becomes `source = "game:<name>"`, a description
+none only the SDK reads) and stays beside it - the asset's from then on, read by nobody and never shipped -
+unless the caller says `remove_descriptions` - the destroy door, since what only the SDK read of it goes too; a `.thm` alone becomes `source = "game:<name>"`, a description
 of the game's texture; an `.ogg`'s comment becomes the sound's keys; a `.ogf` there is a dynamic model. A picture
-the game cannot load by its name (`<name>.dds.dds`, a name ending in a space) or that is no DDS, a file an asset
-cannot say the same way, and a file of the game's formats in `gamedata` outside its kind's folder (a level's
-lightmap, which the game reads where it lies) stay files of their own, shipped as they are, with no asset.
+the game cannot load by its name (`<name>.dds.dds`, a name ending in a space) or that is no DDS gets no asset and
+does not ship (the game could not read it). A file an asset cannot say the same way (a `.thm` or a sound's
+parameters the asset's keys would change) stays a file of its own with what goes with it, and ships as it is: the
+game reads it as it did. A file of the game's formats in `gamedata` outside its kind's folder (a level's lightmap,
+which the game reads where it lies) stays a file of its own too.
+
+**A raw file is the project's only through its wrapper.** A raw file is one of a format a media asset wraps - a
+picture (`.png`, `.jpg`, `.jpeg`, `.tga`, `.bmp`, `.dds`), a sound (`.wav`, `.ogg`), a model (`.glb`, `.gltf`,
+`.obj`, `.ogf`) - or a file that goes with one (`.thm`, a glTF's `.bin`, an OBJ's `.mtl`, a bump pair's
+`<stem>#.dds`); an X-Ray SDK `.object` is a library object of its own. One raw file has one asset, and the asset is all there is of it: the content browser shows the
+asset and never the raw file, and the build ships what the asset publishes and never the raw file on its own. A
+raw file two assets wrap is an error on both (`M117`). A raw file no asset wraps is nowhere: the browser does not
+list it and the build leaves it out (`left_out`, "raw data no asset wraps") - but for what another thing names as its
+own data and ships or packs itself: an item's icon picture (packed into the module's atlas), a screen's layer and
+a track's file (`mod.ltx`), the module's `thumbnail.dds`, what `[vfs]` mounts, what a level build writes
+(`levels\<level>\`, `gamedata\levels\<level>\`), and the files of the module's game data an asset cannot say
+(above). An asset that `[exclude]` leaves out is no wrapper: its source is a raw file again. The X-Ray SDK library (`rawdata\`) is a library of its own and
+keeps its files. A file of a format no asset wraps (a script, a config, Markdown, XML) is the project's as it is.
+**A raw file in the module's game folders becomes an asset by itself**: under `gamedata\textures\`, `sounds\` and
+`meshes\` the editor imports every raw file no asset wraps, in place, when the project opens and when one appears
+there - never replacing a file; a commandlet does not watch, and every module build does it first, so a file put
+there a moment ago ships in any build (a job, `asset.import` without `remove_descriptions`: a
+`.thm` beside a picture goes with it, a `#` companion with its texture; the `.thm` stays in the project as the
+X-Ray SDK's word, and ships no more - its asset says all the game reads of it, and a `.thm` that says otherwise is
+`M118`). Elsewhere a raw file is brought in by an import (a drop, Add > Import, `asset.import`). **`asset.export`**
+writes an asset's raw file back where the author says (a folder of the computer, never inside the project or a
+game), as it was imported: its source with what goes with it (a glTF's buffers and pictures, an OBJ's materials, a
+bump pair, the `.thm`), each where it lay beside the source; a description of the game's texture or model writes
+the game's file (the `.dds`, the `.ogf`). A model of `parts` has no file: its geometry is the asset's text. A
+source is its asset's wherever it lies - in the module's own game data too, where the asset says where it ships;
+a file an asset only names (a picture a model wears) ships by its own name unless an asset of its own wraps it.
 
 Binary by nature, and staying so: the X-Ray SDK library as it is (`rawdata\objects\*.object`, `.thm`,
 `.wav`, read as before; an asset may wrap an `.object` to restate its surfaces), the painted layers of a scene

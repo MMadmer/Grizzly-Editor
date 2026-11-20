@@ -150,7 +150,7 @@ class Run:
         self.ensure_built()
         before = fingerprint(self.module)
         for i in range(PAYLOAD_FILES):
-            with open(os.path.join(self.payload, f"p_{i:02}.dds"), "r+b") as f:
+            with open(os.path.join(self.payload, f"p_{i:02}.dat"), "r+b") as f:
                 f.write((i + 1000).to_bytes(4, "little"))
         job = Job("mod.build", target="folder", path=self.target)
         check(bool(wait_for_copy(job)), "B the changed files are being copied")
@@ -162,7 +162,7 @@ class Run:
         check(not os.path.exists(self.scratch), "B and nothing is left beside it")
         # the payload as it was written: the next phase starts from it
         for i in range(PAYLOAD_FILES):
-            with open(os.path.join(self.payload, f"p_{i:02}.dds"), "r+b") as f:
+            with open(os.path.join(self.payload, f"p_{i:02}.dat"), "r+b") as f:
                 f.write(i.to_bytes(4, "little"))
 
     # ---- C: what the last build holds is not written again ----------------------------------------------------------
@@ -170,13 +170,13 @@ class Run:
         self.ensure_built()
         built = cmd("mod.build", target="folder", path=self.target, timeout=590.0)
         check(built.get("ok"), "C a build after that goes through", json.dumps(built)[:300])
-        again_ids = {n: os.stat(os.path.join(self.module, n)).st_ino for n in fingerprint(self.module) if n.endswith(".dds")}
-        with open(os.path.join(self.payload, "p_05.dds"), "r+b") as f:
+        again_ids = {n: os.stat(os.path.join(self.module, n)).st_ino for n in fingerprint(self.module) if n.endswith(".dat")}
+        with open(os.path.join(self.payload, "p_05.dat"), "r+b") as f:
             f.write(b"NEW!")
         began = time.monotonic()
         built = cmd("mod.build", target="folder", path=self.target, timeout=590.0)
         spent = time.monotonic() - began
-        rel = os.path.join("gamedata", "textures", "qa_job", "p_05.dds")
+        rel = os.path.join("gamedata", "textures", "qa_job", "p_05.dat")
         now = {n: os.stat(os.path.join(self.module, n)).st_ino for n in again_ids}
         same = sum(1 for n in again_ids if n != rel and now[n] == again_ids[n])
         check(built.get("ok") and same == len(again_ids) - 1, f"C it reuses the {same} unchanged files ({spent:.1f} s)",
@@ -187,7 +187,7 @@ class Run:
     # ---- D: a module the game holds -----------------------------------------------------------------------------------
     def d(self) -> None:
         self.ensure_built()
-        rel = os.path.join("gamedata", "textures", "qa_job", "p_05.dds")
+        rel = os.path.join("gamedata", "textures", "qa_job", "p_05.dat")
         before = fingerprint(self.module)
         held = open(os.path.join(self.module, rel), "rb")
         try:
@@ -231,7 +231,7 @@ class Run:
     def e(self) -> None:
         # the project is enough to package: random payload only costs the zip its time
         for i in range(PAYLOAD_FILES):
-            p = os.path.join(self.payload, f"p_{i:02}.dds")
+            p = os.path.join(self.payload, f"p_{i:02}.dat")
             if os.path.exists(p):
                 os.remove(p)
         job = Job("mod.package", path=self.release.replace("\\", "/"), requires_game="")
@@ -263,7 +263,7 @@ def run(ctx: qa.Run) -> None:
     files = PAYLOAD_FILES if set(only) - {"E"} else 0
     block = os.urandom(PAYLOAD_MB << 20)
     for i in range(files):
-        with open(os.path.join(payload, f"p_{i:02}.dds"), "wb") as f:
+        with open(os.path.join(payload, f"p_{i:02}.dat"), "wb") as f:
             f.write(i.to_bytes(4, "little") + block)
     qa.mark("payload")
     # shown, never activated: a hidden editor draws no frame by itself, and A times the frames

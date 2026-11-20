@@ -92,6 +92,13 @@ pub use cmd::{JOB_BUILD, JOB_PLAY_MODULE, JOB_RUN, register};
 pub use service::{LevelBuild, LevelProblem, Running, Status, StepState, StepStatus};
 pub use steps::{Quality, Step};
 
+/// What the level build plugs into the module build once the editor exists: the module's piece
+/// of a level of the game built first when it is due (`gz_build::PrepareHook`).
+pub fn install(editor: &gz_editor::Editor) {
+    gz_build::BuildChecks::of(editor)
+        .add_prepare(|ed, session, ctx, flat| Box::pin(cmd::before_module_build(ed, session, ctx, flat)));
+}
+
 /// Why a build step stopped: a sentence for the author.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]

@@ -53,6 +53,10 @@ return {
   { "Models, pictures and sounds", "Модели, изображения и звуки" },
   { "Made {n} {n:asset|assets}.", "Создано ассетов: {n}." },
   { "Import", "Импорт", ctx = "dlg.cb_import_replace" },
+  { "Export", "Экспорт", ctx = "dlg.cb_export_replace" },
+  { "{n} {n:file is|files are} in the folder already and will be replaced:", "В папке уже есть {n} {n:такой файл|таких файла|таких файлов}, {n:он будет заменён|они будут заменены|они будут заменены}:" },
+  { "Exported {n} {n:file|files} to {to}.", "Экспортировано файлов: {n}, в {to}." },
+  { "Write the file it was made from into a folder of this computer", "Записать файл, из которого он сделан, в папку на этом компьютере" },
   { "{n} {n:file is|files are} in the project already and will be replaced:", "В проекте уже есть {n} {n:такой файл|таких файла|таких файлов}, {n:он будет заменён|они будут заменены|они будут заменены}:" },
 
   -- the toolbar and the breadcrumbs

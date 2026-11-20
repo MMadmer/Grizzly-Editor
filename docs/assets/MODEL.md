@@ -143,3 +143,5 @@ Every face of a part looks outward and every edge is hard; the texture is laid b
 | `M114` | warning | A sound's `streamer` on a sound that is not `copyrighted`: the replacement never plays. |
 | `M115` | error | A sound's replacement that is copyrighted itself: the streamer mode keeps it from playing too. |
 | `M116` | error | A sound's replacement nobody has: no sound asset of the project, no sound of the linked game. |
+| `M117` | error | Two assets over one file (on both): a file has one asset, which says where it ships. |
+| `M118` | warning | The `.thm` beside a texture's picture says to the game what the asset does not: the game reads the asset, and the `.thm` ships no more - remove it, or say it in the asset. |

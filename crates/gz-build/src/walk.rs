@@ -80,6 +80,8 @@ pub enum LeftOutReason {
     /// A level build's own file (`build.prj`, `build.state`): what the compiler reads, never what
     /// the game does.
     LevelBuild,
+    /// Raw data no media asset wraps and no owner names (`docs/ASSETS.md` section 6).
+    Raw,
     PathTooLong,
 }
 
@@ -99,6 +101,7 @@ impl LeftOut {
         match self.reason {
             LeftOutReason::KeyFile => format!("{rel} (a key file never ships)"),
             LeftOutReason::LevelBuild => format!("{rel} (the level build's own file)"),
+            LeftOutReason::Raw => format!("{rel} (raw data no asset wraps)"),
             LeftOutReason::PathTooLong => format!("{rel} (path too long)"),
             _ => rel,
         }
@@ -149,6 +152,8 @@ struct Walker<'a> {
     root_len: usize,
     tooling: Option<&'a Tooling>,
     sources: &'a Sources,
+    /// What owners ship of the raw files; `None`: a walk that tells no raw file apart.
+    ships: Option<&'a Sources>,
     out: BuildWalk,
     /// The folders entered, for the tooling listing.
     entered: Vec<RelPath>,
@@ -206,11 +211,41 @@ impl Walker<'_> {
             self.out.left_out.push(LeftOut { rel: rel.clone(), reason });
             return true;
         }
+        // raw data is the module's only through the asset that wraps it, or an owner that names it
+        if !folder && matches!(seen, Seen::Tree(_)) && self.unowned_raw(rel) {
+            self.out.left_out.push(LeftOut { rel: rel.clone(), reason: LeftOutReason::Raw });
+            return true;
+        }
         if self.root_len + rel.as_str().len() + 2 >= PATH_LIMIT {
             self.out.left_out.push(LeftOut { rel: rel.clone(), reason: LeftOutReason::PathTooLong });
             return true;
         }
         false
+    }
+
+    /// A raw file nobody ships: no asset wraps it (those are passed by as sources before), no owner
+    /// names it or a folder above it, and it is no file a level build wrote (`levels\<level>\`,
+    /// `gamedata\levels\<level>\`).
+    fn unowned_raw(&self, rel: &RelPath) -> bool {
+        let Some(ships) = self.ships else { return false };
+        let tree = self.tree;
+        if !gz_project::is_raw(rel.as_str(), |b| RelPath::new(b).is_ok_and(|r| tree.contains(&r))) {
+            return false;
+        }
+        let key = source_key(rel.as_str());
+        if key.starts_with("levels/") || key.starts_with("gamedata/levels/") {
+            return false;
+        }
+        let mut at = key.as_str();
+        loop {
+            if ships.contains(at) {
+                return false;
+            }
+            match at.rfind('/') {
+                Some(i) => at = &at[..i],
+                None => return true,
+            }
+        }
     }
 
     fn walk(&mut self, dir_rel: &RelPath) {
@@ -251,6 +286,7 @@ impl BuildWalk {
         scope: WalkScope,
         tooling: Option<&Tooling>,
         sources: &Sources,
+        ships: Option<&Sources>,
     ) -> (BuildWalk, Vec<RelPath>) {
         let root_len = tree.root().as_os_str().len();
         let mut w = Walker {
@@ -259,6 +295,7 @@ impl BuildWalk {
             root_len,
             tooling,
             sources,
+            ships,
             out: BuildWalk { root: tree.root().to_path_buf(), ..BuildWalk::default() },
             entered: Vec::new(),
         };
@@ -285,14 +322,15 @@ impl BuildWalk {
         scope: WalkScope,
         tooling: &Tooling,
         sources: &Sources,
+        ships: Option<&Sources>,
     ) -> Self {
-        Self::run(tree, rules, scope, Some(tooling), sources).0
+        Self::run(tree, rules, scope, Some(tooling), sources, ships).0
     }
 
     /// The folders a walk enters.
     #[must_use]
     pub fn folders(tree: &FileTree, rules: &[String], scope: WalkScope) -> Vec<RelPath> {
-        Self::run(tree, rules, scope, None, &Sources::default()).1
+        Self::run(tree, rules, scope, None, &Sources::default(), None).1
     }
 
     /// The walk, with the folders it enters listed for tooling in parallel on the IO pool. The
@@ -300,10 +338,12 @@ impl BuildWalk {
     /// names them. Blocking: call it on the IO pool.
     #[must_use]
     pub fn scan(tree: &FileTree, rules: &[String], scope: WalkScope, exec: &Executors) -> Self {
-        Self::scan_with(tree, rules, scope, exec, &Sources::default())
+        Self::scan_with(tree, rules, scope, exec, &Sources::default(), None)
     }
 
-    /// [`Self::scan`] with the files the media assets are made of left out. Blocking.
+    /// [`Self::scan`] with the files the media assets are made of left out and, given `ships`
+    /// (what owners ship of the raw files), every raw file no asset wraps and no owner names
+    /// (`LeftOutReason::Raw`): a build's walk. Blocking.
     #[must_use]
     pub fn scan_with(
         tree: &FileTree,
@@ -311,6 +351,7 @@ impl BuildWalk {
         scope: WalkScope,
         exec: &Executors,
         sources: &Sources,
+        ships: Option<&Sources>,
     ) -> Self {
         let folders = Self::folders(tree, rules, scope);
         let root = tree.root().to_path_buf();
@@ -319,7 +360,7 @@ impl BuildWalk {
             (rel, names)
         });
         let tooling: Tooling = listed.into_iter().filter(|(_, n)| !n.is_empty()).collect();
-        Self::from_tree(tree, rules, scope, &tooling, sources)
+        Self::from_tree(tree, rules, scope, &tooling, sources, ships)
     }
 
     /// Adds what the media assets publish. A published file takes the place of a project file
@@ -483,7 +524,7 @@ mod tests {
                 .unwrap();
         let exec = rt.exec();
         let sources: Sources = [source_key("art\\WALL.png")].into_iter().collect();
-        let mut walk = BuildWalk::scan_with(&tree, &[], WalkScope::Module, &exec, &sources);
+        let mut walk = BuildWalk::scan_with(&tree, &[], WalkScope::Module, &exec, &sources, None);
         let files: Vec<&str> = walk.files.iter().map(|f| f.rel.as_str()).collect();
         assert_eq!(files, ["art/notes.png", "gamedata/textures/od/floor.dds", "mod.ltx"]);
         assert!(walk.left_out.is_empty(), "{:?}", walk.left_out_texts());
@@ -508,6 +549,93 @@ mod tests {
         assert!(walk.keys().contains("gamedata\\textures\\od\\floor.texasset"));
         assert_eq!(walk.files.last().unwrap().source(&dir), None);
         assert_eq!(walk.files[0].source(&dir), Some(dir.join("art").join("notes.png")));
+        drop(rt);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_raw_file_ships_only_through_its_asset_or_an_owner() {
+        let dir = std::env::temp_dir().join(format!("gz-build-raw-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        for f in [
+            "mod.ltx",
+            "thumbnail.dds",
+            "art\\loose.png",
+            "art\\crate.obj",
+            "art\\crate.mtl",
+            "art\\icon.thm",
+            "art\\icon.tga",
+            "gamedata\\textures\\od\\floor.dds",
+            "gamedata\\textures\\od\\floor.thm",
+            "gamedata\\textures\\od\\lone.thm",
+            "gamedata\\sounds\\od\\hum.ogg",
+            "gamedata\\scripts\\od.script",
+            "gamedata\\levels\\od_base\\lmap#1_1.dds",
+            "levels\\l01_escape\\pieces\\main\\lmap#1_1.dds",
+            "screens\\night.dds",
+            "screens\\page\\index.html",
+            "screens\\page\\logo.png",
+            "music\\theme.ogg",
+            "pack\\textures\\ui\\x.dds",
+            "docs\\notes.md",
+            "art\\hut.object",
+            "art\\hut.thm",
+        ] {
+            let p = dir.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "x").unwrap();
+        }
+        let tree = FileTree::scan(&dir);
+        let rt =
+            gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 2 })
+                .unwrap();
+        let exec = rt.exec();
+        let ships: Sources =
+            ["thumbnail.dds", "screens/night.dds", "screens/page", "music/theme.ogg", "pack"]
+                .into_iter()
+                .map(source_key)
+                .collect();
+        let walk =
+            BuildWalk::scan_with(&tree, &[], WalkScope::Module, &exec, &Sources::default(), Some(&ships));
+        let mut files: Vec<&str> = walk.files.iter().map(|f| f.rel.as_str()).collect();
+        files.sort_unstable();
+        assert_eq!(
+            files,
+            [
+                "art/hut.object",
+                "art/hut.thm",
+                "docs/notes.md",
+                "gamedata/levels/od_base/lmap#1_1.dds",
+                "gamedata/scripts/od.script",
+                "levels/l01_escape/pieces/main/lmap#1_1.dds",
+                "mod.ltx",
+                "music/theme.ogg",
+                "pack/textures/ui/x.dds",
+                "screens/night.dds",
+                "screens/page/index.html",
+                "screens/page/logo.png",
+                "thumbnail.dds",
+            ]
+        );
+        let mut out: Vec<String> = walk.left_out_texts();
+        out.sort_unstable();
+        assert_eq!(
+            out,
+            [
+                "art\\crate.mtl (raw data no asset wraps)",
+                "art\\crate.obj (raw data no asset wraps)",
+                "art\\icon.tga (raw data no asset wraps)",
+                "art\\icon.thm (raw data no asset wraps)",
+                "art\\loose.png (raw data no asset wraps)",
+                "gamedata\\sounds\\od\\hum.ogg (raw data no asset wraps)",
+                "gamedata\\textures\\od\\floor.dds (raw data no asset wraps)",
+                "gamedata\\textures\\od\\floor.thm (raw data no asset wraps)",
+                "gamedata\\textures\\od\\lone.thm (raw data no asset wraps)",
+            ]
+        );
+        // a walk that tells no raw file apart ships them all
+        let plain = BuildWalk::scan(&tree, &[], WalkScope::Module, &exec);
+        assert_eq!(plain.files.len(), files.len() + out.len());
         drop(rt);
         fs::remove_dir_all(&dir).unwrap();
     }

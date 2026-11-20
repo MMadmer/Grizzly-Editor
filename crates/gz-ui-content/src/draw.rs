@@ -154,8 +154,18 @@ fn take_inbox(ctx: &egui::Context, editor: &Arc<Editor>, st: &mut Inner, browser
     {
         gz_ui::state::toast(ctx, gz_ui::Tone::Success, tr!("Made {n} {n:asset|assets}.", n = n));
     }
+    if let Some((n, to)) = inbox.exported.take() {
+        gz_ui::state::toast(
+            ctx,
+            gz_ui::Tone::Success,
+            tr!("Exported {n} {n:file|files} to {to}.", n = n, to = to.as_str()),
+        );
+    }
     if let Some(clash) = inbox.import_clash.take() {
         actions::ask_import_clash(ctx, editor, clash);
+    }
+    if let Some(clash) = inbox.export_clash.take() {
+        actions::ask_export_clash(ctx, editor, clash);
     }
     if let Some((was, now)) = inbox.renamed.take() {
         st.follow_rename(&was, &now);
@@ -1663,6 +1673,17 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
         Some(Origin::None) => "It has no file of its own: place it in a level instead.",
         _ => "",
     };
+    // the media assets of the selection: what Export... writes out
+    let export: Vec<String> = if st
+        .sel
+        .entries()
+        .iter()
+        .all(|e| !e.folder && gz_project::asset_kind::MediaKind::of_file(e.path.as_str()).is_some())
+    {
+        st.sel.entries().iter().map(|e| e.path.to_string()).collect()
+    } else {
+        Vec::new()
+    };
     let (rules, _) = ContentBrowser::rules(f.editor);
     let toggle = (writable && f.has_project).then(|| actions::build_toggle(&rules, st.sel.entries()));
     let head =
@@ -1682,6 +1703,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
         Include,
         CopyPath,
         Reveal,
+        Export,
     }
     let mut pick: Option<Pick> = None;
     let p = f.p.clone();
@@ -1816,6 +1838,19 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
         if writable {
             row(ui, "Show in Explorer", MenuItem { icon: Icon::Reveal, ..MenuItem::default() }, Pick::Reveal);
         }
+        // a model, a texture or a sound goes out as the file it was brought in as
+        if writable && !export.is_empty() {
+            row(
+                ui,
+                "Export...",
+                MenuItem {
+                    icon: Icon::External,
+                    tip: "Write the file it was made from into a folder of this computer".into(),
+                    ..MenuItem::default()
+                },
+                Pick::Export,
+            );
+        }
     });
     let Some(pick) = pick else { return };
     st.menu = None;
@@ -1856,6 +1891,7 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
             _ => {}
         },
         Pick::CopyPath => f.ctx.copy_text(entry.path.to_string()),
+        Pick::Export => actions::export_dialog(f.editor, f.browser, export),
         Pick::Reveal => {
             let root = f.editor.project_root();
             let path = entry.path.to_string();

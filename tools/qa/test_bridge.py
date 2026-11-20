@@ -446,7 +446,7 @@ def run(ctx: qa.Run) -> None:
     os.makedirs(payload, exist_ok=True)
     block = os.urandom(PAYLOAD_MB << 20)
     for i in range(PAYLOAD_FILES):
-        with open(os.path.join(payload, "p_%02d.dds" % i), "wb") as f:
+        with open(os.path.join(payload, "p_%02d.dat" % i), "wb") as f:
             f.write(i.to_bytes(4, "little") + block)
     ed = qa.Editor(project).start()
     bridge = Bridge(qa.PORT)

@@ -74,6 +74,57 @@ impl Plan {
     }
 }
 
+/// Writes what a plan writes and removes the descriptions it says all of, on the IO pool: each
+/// file atomically, said to the project's watcher as the editor's own write, the file tree
+/// brought up to date after. The sentence of the first failure, with what was written before
+/// it kept.
+pub async fn write(
+    ed: &std::sync::Arc<gz_editor::Editor>,
+    project: &std::sync::Arc<gz_project::Project>,
+    root: &Path,
+    writes: Vec<(RelPath, Content)>,
+    removes: Vec<RelPath>,
+) -> Result<(), String> {
+    let (r, watch) = (root.to_path_buf(), project.clone());
+    let written = ed
+        .exec
+        .io(move || -> Result<Vec<PathBuf>, String> {
+            let mut done = Vec::new();
+            for (rel, content) in writes {
+                let abs = rel.to_fs(&r);
+                let bytes = match content {
+                    Content::Bytes(b) => b,
+                    Content::Copy(src) => std::fs::read(&src)
+                        .map_err(|e| format!("{}: {}", src.display(), gz_base::io_reason(&e)))?,
+                };
+                if let Some(dir) = abs.parent() {
+                    std::fs::create_dir_all(dir)
+                        .map_err(|e| format!("{}: {}", dir.display(), gz_base::io_reason(&e)))?;
+                }
+                gz_editor::fsx::write_atomic(&abs, &bytes)
+                    .map_err(|e| format!("{rel}: {}", gz_base::io_reason(&e)))?;
+                watch.tree.changes().note_written(&rel, &bytes);
+                done.push(abs);
+            }
+            // the descriptions the assets now say all of, once every asset is written
+            for rel in removes {
+                let abs = rel.to_fs(&r);
+                match std::fs::remove_file(&abs) {
+                    Ok(()) => done.push(abs),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(format!("{rel}: {}", gz_base::io_reason(&e))),
+                }
+            }
+            Ok(done)
+        })
+        .await?;
+    for abs in &written {
+        project.tree.mark_fs(abs);
+    }
+    project.tree.refresh().await;
+    Ok(())
+}
+
 /// The folder each kind goes into when the import names none.
 #[must_use]
 pub fn default_folder(kind: MediaKind) -> &'static str {
@@ -204,6 +255,34 @@ fn texture_from_thm(params: &gz_fmt_tex::TextureParams, name: &str, as_is: bool)
         p
     };
     (said(&back) == said(params)).then_some(top)
+}
+
+/// Whether a `.thm` says to the game what a texture asset does not (`M118`): what the game
+/// reads of both differs, and the `.thm` says something at all. `as_is`: the picture is a game
+/// texture published as it is.
+#[must_use]
+pub(crate) fn thm_says_other(
+    thm: &gz_fmt_tex::TextureParams,
+    asset: &crate::texture::TextureAsset,
+    name: &str,
+    as_is: bool,
+) -> bool {
+    if says_nothing_to_the_game(thm) {
+        return false;
+    }
+    let size = (thm.width.max(0) as u32, thm.height.max(0) as u32);
+    let ours = asset.to_params(name, size, thm.has_alpha());
+    let said = |p: &gz_fmt_tex::TextureParams| {
+        let mut p = if as_is { as_published(p) } else { p.clone() };
+        if !matches!(p.bump_mode, gz_fmt_tex::BumpMode::USE | gz_fmt_tex::BumpMode::USE_PARALLAX) {
+            p.bump_name = Default::default();
+        }
+        // the source picture's size is the picture's, never a word of either
+        p.width = 0;
+        p.height = 0;
+        p
+    };
+    said(&ours) != said(thm)
 }
 
 /// Whether a texture description says nothing the game reads of a texture beyond what it gives

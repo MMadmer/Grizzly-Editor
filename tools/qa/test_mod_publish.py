@@ -412,7 +412,7 @@ class Run:
         # the upload has to outlast the second before the cancel, and a package the socket's buffers swallow whole
         # never would: the trimmed copy gets a few megabytes that do not pack. The throttle is chosen from the package
         # so that it takes about a second and a half: the cancel comes 0.4 s into it
-        weight_file = os.path.join(self.project, "gamedata", "textures", "qa_publish_weight.dds")
+        weight_file = os.path.join(self.project, "gamedata", "textures", "qa_publish_weight.dat")
         os.makedirs(os.path.dirname(weight_file), exist_ok=True)
         with open(weight_file, "wb") as fh:
             fh.write(os.urandom(6 << 20))

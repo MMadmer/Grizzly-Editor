@@ -62,9 +62,11 @@ async fn mod_info(ed: Arc<Editor>, p: InfoParams, _origin: Origin) -> Reply {
     };
     let tree = project.tree.snapshot();
     let exec = ed.exec.clone();
-    let sources = plan.sources.clone();
-    let walk =
-        ed.exec.io(move || BuildWalk::scan_with(&tree, &rules, WalkScope::Module, &exec, &sources)).await;
+    let (sources, ships) = (plan.sources.clone(), plan.ships.clone());
+    let walk = ed
+        .exec
+        .io(move || BuildWalk::scan_with(&tree, &rules, WalkScope::Module, &exec, &sources, Some(&ships)))
+        .await;
     let published: rustc_hash::FxHashSet<String> = plan.published.iter().map(|r| r.to_lowercase()).collect();
     let own: Vec<&str> = walk
         .files

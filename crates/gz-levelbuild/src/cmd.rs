@@ -10,6 +10,7 @@ use gz_editor::{CmdError, Editor, JobError, JsonSchema, ProjectSession, Registry
 use gz_game::GameLink;
 use gz_project::DeleteContext;
 use gz_scene::SceneService;
+use gz_task::JobCtx;
 use serde::Deserialize;
 
 use crate::compile;
@@ -265,6 +266,72 @@ fn start_build(
         .map_err(|b| {
             CmdError::busy(format!("{} is still running", b.title)).with_data(json!({ "job": b.id.0 }))
         })
+}
+
+// ---- before a module build --------------------------------------------------------------------------
+
+/// What a module build needs of the level build first (`gz_build::PrepareHook`), for the open
+/// scene: over a level of the game, its piece built when it is due - the static objects the
+/// module places there are in the game only through it -, as it was built last (its quality, its
+/// flags, where its light was baked); on a level of the module's own, a warning when the level
+/// is not built as the scene is now (its light may take hours: that is Build Level's). A flat
+/// export ships `gamedata` alone, where no piece lies: it builds none.
+pub(crate) async fn before_module_build(
+    ed: Arc<Editor>,
+    session: Arc<ProjectSession>,
+    ctx: JobCtx,
+    flat: bool,
+) -> Result<Vec<gz_base::Finding>, String> {
+    let Some(svc) = session.services.get::<SceneService>() else { return Ok(Vec::new()) };
+    let snap = svc.store.snapshot();
+    if !snap.valid || snap.objects.is_empty() || snap.meta.level.level_path.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let status = LevelBuild::status(&ed, &session, snap.clone(), svc.store.rev()).await;
+    let due: Vec<Step> = status.to_build().into_iter().filter(|s| *s != Step::SpawnLayer).collect();
+    if due.is_empty() {
+        return Ok(Vec::new());
+    }
+    let level = status.level.clone();
+    if !status.stock {
+        let steps = due.iter().map(|s| s.title()).collect::<Vec<_>>().join(", ");
+        return Ok(vec![gz_base::Finding::warning(format!(
+            "The level {level} is not built as the scene is now ({steps}): the module ships it as it was last built - Build Level builds it."
+        ))]);
+    }
+    if flat || !due.contains(&Step::Piece) {
+        return Ok(Vec::new());
+    }
+    if let Some(job) = ed.jobs.running_in(JOB_BUILD) {
+        return Err(format!(
+            "{} is running, and the module's piece of {level} is due: build the module when it has ended.",
+            job.title
+        ));
+    }
+    let lb = LevelBuild::of(&session);
+    let last = lb.record_now(&ed, &session, &level).await;
+    let last = last.as_ref().and_then(|r| r.steps.get(&Step::Piece));
+    let mut opts: Options = service::default_options(&ed);
+    opts.quality = last.map_or(Quality::Standard, |r| r.quality);
+    // where its light was baked follows the machine: a card asked for last time may not be here
+    opts.flags = last
+        .map(|r| {
+            r.flags
+                .split_whitespace()
+                .filter(|w| !w.eq_ignore_ascii_case("-light=gpu"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    need_lighter(&ed, &opts.flags).await.map_err(|e| e.message)?;
+    ctx.stage(format!("Building the module's piece of {level}"));
+    let req =
+        Request { steps: Some(vec![Step::Piece]), only: None, force: false, opts, verify_restrictors: false };
+    match pipeline::run(&ed, &session, &req, &ctx).await {
+        Ok(_) => Ok(Vec::new()),
+        Err(e) if e.cancelled => Err("cancelled".to_owned()),
+        Err(e) => Err(format!("The module's piece of {level} could not be built: {}", e.message)),
+    }
 }
 
 // ---- level.status, level.problems, level.validate --------------------------------------------------

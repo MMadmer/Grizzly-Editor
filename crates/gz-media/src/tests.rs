@@ -17,7 +17,7 @@ use gz_luadata::{LuaDataError, LuaDoc, Seg, write_asset};
 use gz_project::asset_kind::MediaKind;
 
 use crate::check::{self, texture_known};
-use crate::index::{self, Index};
+use crate::index::{self, Entry, Index};
 use crate::model::{BOX, CYLINDER, PLANE, PRISM, Part, RAMP};
 use crate::publish::{Payload, publish};
 use crate::read::Issue;
@@ -803,7 +803,10 @@ fn an_import_copies_a_source_with_what_it_names_and_writes_the_assets() {
         import::Content::Copy(p) => p.display().to_string(),
     };
     let cube = text("models/cube.meshasset");
-    assert!(cube.contains("source = \"cube.obj\"") && cube.contains("texture = \"bunker\\\\brick\""), "{cube}");
+    assert!(
+        cube.contains("source = \"cube.obj\"") && cube.contains("texture = \"bunker\\\\brick\""),
+        "{cube}"
+    );
     assert!(text("models/tri.meshasset").contains("{ name = \"stone\", texture = \"bunker\\\\stone\" }"));
     assert!(text("models/pics/stone.texasset").contains("source = \"stone.png\""));
     // written into a project, every asset reads and the model resolves with its textures
@@ -1110,15 +1113,15 @@ fn a_dynamic_model_over_a_compiled_one_is_published_as_that_file_said_again() {
         .collect();
     assert_eq!(mtl.len(), 1, "{found:?}");
     assert!(mtl[0].message.contains("no dynamic game material"), "{}", mtl[0].message);
-    // a source in the module's own game data keeps shipping where it lies; one beside its asset
-    // is a source and never ships as it is
+    // a source is its asset's wherever it lies - in the module's own game data too: the asset
+    // says where it ships
     d.put("gamedata/meshes/bunker/crate.ogf", &ogf);
     d.put(
         "o/crate.meshasset",
         "return { mesh = 1, kind = \"dynamic\", name = \"bunker\\\\crate_red\", source = \"../gamedata/meshes/bunker/crate.ogf\" }\n",
     );
     let index = index::scan(&d.0);
-    assert!(!index.is_source("gamedata/meshes/bunker/crate.ogf"));
+    assert!(index.is_source("gamedata/meshes/bunker/crate.ogf"));
     assert!(index.is_source("o/own.ogf") && index.is_source("o/crate.meshasset"));
     // and the model of the game a `game:` asset is made over is the project's own file there
     d.put("o/over.meshasset", "return { mesh = 1, source = \"game:bunker/crate.ogf\" }\n");
@@ -1147,6 +1150,166 @@ fn a_surface_row_that_names_no_surface_is_said_with_the_names_there_are() {
 }
 
 /// A game texture of one 4 x 4 level, DXT1.
+#[test]
+fn the_raw_files_nothing_wraps_are_the_automatic_imports_and_go_with_what_they_belong_to() {
+    let d = Dir::new("auto");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    for f in [
+        "gamedata/textures/wpn/ak.dds",
+        "gamedata/textures/wpn/ak.thm",
+        "gamedata/textures/wpn/ak_bump.dds",
+        "gamedata/textures/wpn/ak_bump#.dds",
+        "gamedata/textures/wpn/lens.thm",
+        "gamedata/textures/wpn/done.dds",
+        "gamedata/textures/wpn/done.thm",
+        "gamedata/sounds/bunker/hum.ogg",
+        "gamedata/meshes/bunker/crate.ogf",
+        "gamedata/scripts/bunker.script",
+        "gamedata/levels/bunker/lmap#1_1.dds",
+        "art/loose.png",
+    ] {
+        d.put(f, "x");
+    }
+    d.put("gamedata/textures/wpn/done.texasset", "return { tex = 1 }\n");
+    let tree = gz_project::FileTree::scan(&d.0);
+    let index = index::scan(&d.0);
+    let mut got: Vec<String> =
+        crate::auto::unwrapped(&tree, &index).iter().map(ToString::to_string).collect();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        [
+            "gamedata/meshes/bunker/crate.ogf",
+            "gamedata/sounds/bunker/hum.ogg",
+            "gamedata/textures/wpn/ak.dds",
+            "gamedata/textures/wpn/ak_bump.dds",
+            "gamedata/textures/wpn/lens.thm",
+        ]
+    );
+}
+
+#[test]
+fn an_export_writes_the_file_an_asset_was_made_over_with_what_goes_with_it() {
+    use crate::export::{From, files_of, target};
+    let d = Dir::new("export");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    d.put("m/cube.obj", CUBE_OBJ);
+    d.put("m/cube.mtl", CUBE_MTL);
+    d.put("m/cube.meshasset", "return { mesh = 1 }\n");
+    d.put("gamedata/textures/wpn/ak.dds", dds());
+    d.put("gamedata/textures/wpn/ak.thm", "x");
+    d.put("gamedata/textures/wpn/ak.texasset", "return { tex = 1 }\n");
+    d.put("t/lens.texasset", "return { tex = 1, source = \"game:wpn/lens\" }\n");
+    d.put("o/box.meshasset", "return { mesh = 1, parts = { { shape = \"box\", size = { 1, 1, 1 } } } }\n");
+    let index = index::scan(&d.0);
+    let there = |r: &RelPath| r.to_fs(&d.0).is_file();
+    let names = |rel: &str| -> Vec<(String, From)> {
+        files_of(index.at(rel).unwrap(), there).unwrap().into_iter().map(|o| (o.name, o.from)).collect()
+    };
+    let at = |r: &str| From::Project(RelPath::new(r).unwrap());
+    assert_eq!(
+        names("m/cube.meshasset"),
+        [("cube.obj".to_owned(), at("m/cube.obj")), ("cube.mtl".to_owned(), at("m/cube.mtl"))]
+    );
+    assert_eq!(
+        names("gamedata/textures/wpn/ak.texasset"),
+        [
+            ("ak.dds".to_owned(), at("gamedata/textures/wpn/ak.dds")),
+            ("ak.thm".to_owned(), at("gamedata/textures/wpn/ak.thm"))
+        ]
+    );
+    assert_eq!(
+        names("t/lens.texasset"),
+        [("lens.dds".to_owned(), From::GameTexture("wpn\\lens".to_owned()))]
+    );
+    assert!(files_of(index.at("o/box.meshasset").unwrap(), there).unwrap_err().contains("parts"));
+    // a name never climbs out of the folder it is written into
+    let to = Path::new("D:\\out");
+    assert_eq!(target(to, "tex\\a.png"), Some(PathBuf::from("D:\\out\\tex\\a.png")));
+    assert_eq!(target(to, "..\\a.png"), None);
+    assert_eq!(target(to, "C:\\a.png"), None);
+}
+
+#[test]
+fn what_an_asset_takes_is_one_set_and_what_no_asset_can_say_ships_as_it_is() {
+    let d = Dir::new("taken");
+    d.put("mod.ltx", "[module]\nid = bunker\n[exclude]\nwip\n");
+    // a texture asset with its .thm kept beside its picture, a model of the game over the
+    // project's own file, an excluded asset over a picture
+    d.put("gamedata/textures/wpn/ak.dds", dds());
+    d.put("gamedata/textures/wpn/ak.thm", "x");
+    d.put("gamedata/textures/wpn/ak.texasset", "return { tex = 1 }\n");
+    d.put("gamedata/meshes/dyn/box.ogf", "x");
+    d.put("o/box.meshasset", "return { mesh = 1, kind = \"dynamic\", source = \"game:dyn/box.ogf\" }\n");
+    d.put("wip/old.png", png(2, 2, [1, 2, 3, 255]));
+    d.put("wip/old.texasset", "return { tex = 1 }\n");
+    let index = index::scan(&d.0);
+    let taken = index.taken();
+    for k in ["gamedata/textures/wpn/ak.dds", "gamedata/textures/wpn/ak.thm", "gamedata/meshes/dyn/box.ogf"] {
+        assert!(taken.contains(k), "{k}: {taken:?}");
+    }
+    assert!(!taken.contains("wip/old.png"), "an excluded asset wraps nothing");
+    // nothing the project holds is left to the import
+    let tree = gz_project::FileTree::scan(&d.0);
+    assert!(crate::auto::unwrapped(&tree, &index).is_empty());
+
+    // what the import cannot say ships as it is; a picture the game cannot load does not
+    d.put("gamedata/textures/wpn/odd.dds", dds());
+    d.put("gamedata/textures/wpn/odd.thm", "x");
+    d.put("gamedata/textures/wpn/bad.dds", "not a picture");
+    d.put("gamedata/textures/wpn/note.png", png(2, 2, [1, 2, 3, 255]));
+    d.put("gamedata/sounds/amb/wind.ogg", "x");
+    let tree = gz_project::FileTree::scan(&d.0);
+    let index = index::scan(&d.0);
+    let mut kept = crate::auto::kept_as_files(&d.0, &tree, &index);
+    kept.sort_unstable();
+    assert_eq!(
+        kept,
+        ["gamedata/sounds/amb/wind.ogg", "gamedata/textures/wpn/odd.dds", "gamedata/textures/wpn/odd.thm"]
+    );
+}
+
+#[test]
+fn an_asset_made_in_place_from_its_thm_says_what_the_thm_says() {
+    let d = Dir::new("thm-same");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    let mut p = TextureParams {
+        material: gz_fmt_tex::TextureMaterial(2),
+        material_weight: 0.25,
+        width: 4,
+        height: 4,
+        ..TextureParams::default()
+    };
+    p.detail_name = "detail\\detail_grnd_grass".into();
+    p.detail_scale = 4.0;
+    p.flags.insert(gz_fmt_tex::TextureFlags::DIFFUSE_DETAIL);
+    d.put("gamedata/textures/wpn/ak.dds", dds());
+    d.put(
+        "gamedata/textures/wpn/ak.thm",
+        gz_fmt_tex::write_texture_thm(&gz_fmt_tex::TextureThm { pixels: None, params: p }).unwrap(),
+    );
+    let plan = import::plan(&[d.0.join("gamedata\\textures\\wpn\\ak.dds")], None, "bunker", &d.0);
+    assert_eq!(plan.assets, ["gamedata/textures/wpn/ak.texasset"], "{:?}", plan.problems);
+    for (rel, content) in plan.writes {
+        if let import::Content::Bytes(b) = content {
+            d.put(rel.as_str(), b);
+        }
+    }
+    let found = issues_of(
+        &d,
+        "gamedata/textures/wpn/ak.texasset",
+        MediaKind::Texture,
+        &index::scan(&d.0),
+        &game(true),
+    );
+    assert!(!found.iter().any(|i| i.code == check::STALE_THM), "{found:?}");
+}
+
+/// The number the game reads for a lighting model's word.
+fn gz_media_material(word: &str) -> u32 {
+    crate::fields::MATERIALS.iter().find(|(w, _)| *w == word).map(|(_, n)| *n).unwrap()
+}
+
 fn dds() -> Vec<u8> {
     let img = gz_fmt_tex::Image::filled(4, 4, [40, 80, 120, 255]).unwrap();
     gz_fmt_tex::encode_dds(&[img], gz_fmt_tex::DdsEncoding::Dxt1).unwrap()
@@ -1312,7 +1475,7 @@ fn game_files_of_the_project_become_assets_in_place_and_ship_as_they_are() {
 /// A file of the module's game data an asset publishes under another name keeps shipping
 /// where it lies; one the asset publishes at its own place is the asset's.
 #[test]
-fn a_game_file_is_the_assets_only_where_the_asset_publishes_it() {
+fn a_file_has_one_asset_and_a_game_file_ships_where_its_asset_publishes_it() {
     let d = Dir::new("takes");
     d.put("mod.ltx", "[module]\nid = bunker\n");
     d.put("gamedata/textures/wpn/ak.dds", dds());
@@ -1324,8 +1487,66 @@ fn a_game_file_is_the_assets_only_where_the_asset_publishes_it() {
     let index = index::scan(&d.0);
     let ak = index.at("gamedata/textures/wpn/ak.texasset").unwrap();
     let red = index.at("art/red.texasset").unwrap();
-    assert!(ak.takes("gamedata/textures/wpn/ak.dds") && !red.takes("gamedata/textures/wpn/ak.dds"));
+    // a source is its asset's: two assets over one file are an error on both
+    assert!(ak.takes("gamedata/textures/wpn/ak.dds") && red.takes("gamedata/textures/wpn/ak.dds"));
     assert!(index.is_source("gamedata/textures/wpn/ak.dds"));
+    for rel in ["gamedata/textures/wpn/ak.texasset", "art/red.texasset"] {
+        let found = issues_of(&d, rel, MediaKind::Texture, &index, &game(false));
+        assert!(
+            found.iter().any(|i| i.code == check::WRAPPED_TWICE
+                && i.severity == Severity::Error
+                && i.path == vec![Seg::key("source")]),
+            "{rel}: {found:?}"
+        );
+    }
+    std::fs::remove_file(d.0.join("art\\red.texasset")).unwrap();
+    let index = index::scan(&d.0);
+    assert!(
+        !issues_of(&d, "gamedata/textures/wpn/ak.texasset", MediaKind::Texture, &index, &game(false))
+            .iter()
+            .any(|i| i.code == check::WRAPPED_TWICE)
+    );
+    // a picture a model wears is the game's data where it lies: the model does not take it
+    d.put("gamedata/meshes/wpn/crate.meshasset", "return { mesh = 1, source = \"crate.obj\" }\n");
+    let crate_entry = Entry {
+        uses: vec![RelPath::new("gamedata/textures/wpn/skin.dds").unwrap()],
+        ..index::scan(&d.0).at("gamedata/meshes/wpn/crate.meshasset").unwrap().clone()
+    };
+    assert!(!crate_entry.takes("gamedata/textures/wpn/skin.dds"));
+    std::fs::remove_file(d.0.join("gamedata\\meshes\\wpn\\crate.meshasset")).unwrap();
+    // a .thm kept beside the picture that says to the game what the asset does not: a warning;
+    // one that says the same, or nothing the game reads, is no news
+    let thm = |params: &TextureParams| {
+        gz_fmt_tex::write_texture_thm(&gz_fmt_tex::TextureThm { pixels: None, params: params.clone() })
+            .unwrap()
+    };
+    let stale = |d: &Dir| {
+        issues_of(d, "gamedata/textures/wpn/ak.texasset", MediaKind::Texture, &index::scan(&d.0), &game(true))
+            .iter()
+            .filter(|i| i.code == check::STALE_THM)
+            .map(|i| i.severity)
+            .collect::<Vec<_>>()
+    };
+    let mut lit = TextureParams {
+        material: gz_fmt_tex::TextureMaterial(2),
+        material_weight: 0.25,
+        width: 4,
+        height: 4,
+        ..TextureParams::default()
+    };
+    d.put("gamedata/textures/wpn/ak.thm", thm(&lit));
+    assert_eq!(stale(&d), [Severity::Warning]);
+    d.put("gamedata/textures/wpn/ak.texasset", "return { tex = 1, material = \"metal\", weight = 0.25 }\n");
+    lit.material = gz_fmt_tex::TextureMaterial(gz_media_material("metal"));
+    d.put("gamedata/textures/wpn/ak.thm", thm(&lit));
+    assert!(stale(&d).is_empty(), "the asset says what the .thm says");
+    d.put("gamedata/textures/wpn/ak.texasset", "return { tex = 1 }\n");
+    d.put(
+        "gamedata/textures/wpn/ak.thm",
+        thm(&TextureParams { width: 4, height: 4, ..TextureParams::default() }),
+    );
+    assert!(stale(&d).is_empty(), "a .thm that says nothing to the game");
+    std::fs::remove_file(d.0.join("gamedata\\textures\\wpn\\ak.thm")).unwrap();
     // a texture asset there alone, named after the file, and a description of the game's texture
     // that names another texture is refused
     d.put(

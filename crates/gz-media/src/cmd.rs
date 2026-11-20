@@ -1,6 +1,6 @@
 //! What the media area hangs on the editor: the three kinds of `gz-asset`, their `file.create`
 //! templates, the provider of the scene's model assets, the index made when a project opens;
-//! and the commands `asset.import`, `model.info`, `model.list`.
+//! and the commands `asset.import`, `asset.export`, `model.info`, `model.list`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::import::{self, Content};
+use crate::import;
 use crate::kind;
 use crate::resolve;
 use crate::service::{Media, provider};
@@ -79,7 +79,8 @@ pub struct ImportParams {
     pub overwrite: bool,
     /// Remove each `.thm` of the project its asset now says all the game reads of (what only the
     /// X-Ray SDK reads of it - its thumbnail, how its picture was made - is lost with it). Left
-    /// out, the `.thm` stays beside its picture and ships as it did.
+    /// out, the `.thm` stays beside its picture, read by nobody: the game reads the asset, and
+    /// the build ships no `.thm`.
     #[serde(default)]
     pub remove_descriptions: bool,
     /// Answer what the import would write, keep and remove, and write nothing.
@@ -160,47 +161,184 @@ async fn asset_import(ed: Arc<Editor>, p: ImportParams, _o: Origin) -> Reply {
             json!({ "dry_run": true, "assets": plan.assets, "copied": plan.copied, "kept": plan.kept, "removed": removed, "descriptions": left, "writes": writes, "problems": plan.problems }),
         );
     }
-    let (writes, r, watch) = (plan.writes.clone(), root.clone(), project.clone());
-    let written = ed
-        .exec
-        .io(move || -> Result<Vec<PathBuf>, String> {
-            let mut done = Vec::new();
-            for (rel, content) in writes {
-                let abs = rel.to_fs(&r);
-                let bytes = match content {
-                    Content::Bytes(b) => b,
-                    Content::Copy(src) => std::fs::read(&src)
-                        .map_err(|e| format!("{}: {}", src.display(), gz_base::io_reason(&e)))?,
-                };
+    import::write(&ed, &project, &root, plan.writes.clone(), removes).await.map_err(CmdError::io)?;
+    Ok(
+        json!({ "assets": plan.assets, "copied": plan.copied, "kept": plan.kept, "removed": removed, "descriptions": left, "problems": plan.problems }),
+    )
+}
+
+/// One path or several.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Paths {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Paths {
+    fn list(&self) -> Vec<String> {
+        match self {
+            Paths::One(p) => vec![p.clone()],
+            Paths::Many(v) => v.clone(),
+        }
+        .into_iter()
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty())
+        .collect()
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportParams {
+    /// The media assets (`*.meshasset`, `*.texasset`, `*.sndasset`), project-relative: one or a
+    /// list.
+    pub path: Paths,
+    /// The folder of this computer they are written into, absolute; made when it is not there.
+    /// Never inside the project or a game.
+    pub to: String,
+    /// Replace files that are there already (they are lost).
+    #[serde(default)]
+    pub overwrite: bool,
+    /// Answer what would be written, and write nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// A path with its `.` and `..` worked out by their words.
+fn lexical(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A path as the file system says it is from the nearest part of it that is there: links and
+/// short names resolved, what is not there yet added back.
+fn real(p: &Path) -> PathBuf {
+    let flat = lexical(p);
+    let (mut head, mut tail) = (flat.clone(), Vec::new());
+    loop {
+        if let Ok(c) = std::fs::canonicalize(&head) {
+            let s = c.to_string_lossy();
+            let mut out = PathBuf::from(s.strip_prefix(r"\\?\").map_or_else(|| s.to_string(), str::to_owned));
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let Some(name) = head.file_name().map(std::ffi::OsStr::to_owned) else { return flat };
+        tail.push(name);
+        if !head.pop() {
+            return flat;
+        }
+    }
+}
+
+async fn asset_export(ed: Arc<Editor>, p: ExportParams, _o: Origin) -> Reply {
+    let (session, project) = Project::of(&ed)?;
+    let root = session.root.clone();
+    let wanted = p.path.list();
+    if wanted.is_empty() {
+        return Err(CmdError::invalid("path names no asset"));
+    }
+    let to = lexical(Path::new(p.to.trim()));
+    if !to.is_absolute() {
+        return Err(CmdError::invalid("to is a folder of this computer, written whole (D:/export)"));
+    }
+    let (r, t) = (real(&root), real(&to));
+    let same = |a: &Path, b: &Path| {
+        a.to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .eq_ignore_ascii_case(b.to_string_lossy().trim_end_matches(['\\', '/']))
+    };
+    if same(&root, &to) || same(&r, &t) || crate::files::inside(&root, &to) || crate::files::inside(&r, &t) {
+        return Err(CmdError::new("refused", "an export goes out of the project: to is a folder inside it"));
+    }
+    project.write_guard(None).check(&to).map_err(|e| CmdError::new("refused", e.0))?;
+    let media = Media::of(&ed).await?;
+    let index = media.fresh_index().await;
+    let models = crate::GameModels::reader(&ed, &root);
+    let files = project.game_snapshot().ok().map(|(f, _)| f);
+    let textures = move |name: &str| files.as_ref()?.read(&format!("textures\\{name}.dds")).ok();
+    // the files of every asset, each name once
+    let mut outs: Vec<(String, crate::export::Out)> = Vec::new();
+    for w in &wanted {
+        let rel = rel_param(&root, w)?;
+        let Some(entry) = index.at(rel.as_str()) else {
+            return Err(CmdError::new("not_found", format!("{rel} is no media asset of the project")));
+        };
+        let r = root.clone();
+        let entry = entry.clone();
+        let got = ed
+            .exec
+            .io(move || crate::export::files_of(&entry, |t| t.to_fs(&r).is_file()))
+            .await
+            .map_err(|why| CmdError::new("refused", why))?;
+        for o in got {
+            if let Some((other, _)) =
+                outs.iter().find(|(_, x)| x.name.eq_ignore_ascii_case(&o.name) && x.from != o.from)
+            {
+                return Err(CmdError::new(
+                    "refused",
+                    format!("{rel} and {other} both write {}: export them into folders of their own", o.name),
+                ));
+            }
+            if !outs.iter().any(|(_, x)| x.from == o.from) {
+                outs.push((rel.to_string(), o));
+            }
+        }
+    }
+    let mut there = Vec::new();
+    let mut targets = Vec::new();
+    for (_, o) in &outs {
+        let Some(abs) = crate::export::target(&to, &o.name) else {
+            return Err(CmdError::new("refused", format!("{} would land outside {}", o.name, to.display())));
+        };
+        if abs.exists() {
+            there.push(abs.to_string_lossy().into_owned());
+        }
+        targets.push(abs);
+    }
+    let answer: Vec<String> = targets.iter().map(|t| t.to_string_lossy().into_owned()).collect();
+    if !there.is_empty() && !p.overwrite {
+        return Err(CmdError::new(
+            "exists",
+            format!(
+                "{} of the files are there already: asset.export overwrite=true replaces them",
+                there.len()
+            ),
+        )
+        .with_data(json!({ "files": there })));
+    }
+    if p.dry_run {
+        return Ok(json!({ "dry_run": true, "files": answer, "replaces": there }));
+    }
+    let r = root.clone();
+    ed.exec
+        .io(move || -> Result<(), String> {
+            for ((_, o), abs) in outs.iter().zip(&targets) {
+                let bytes = crate::export::read(&r, &o.from, &models, &textures)?;
                 if let Some(dir) = abs.parent() {
                     std::fs::create_dir_all(dir)
                         .map_err(|e| format!("{}: {}", dir.display(), gz_base::io_reason(&e)))?;
                 }
-                gz_editor::fsx::write_atomic(&abs, &bytes)
-                    .map_err(|e| format!("{rel}: {}", gz_base::io_reason(&e)))?;
-                watch.tree.changes().note_written(&rel, &bytes);
-                done.push(abs);
+                gz_editor::fsx::write_atomic(abs, &bytes)
+                    .map_err(|e| format!("{}: {}", abs.display(), gz_base::io_reason(&e)))?;
             }
-            // the descriptions the assets now say all of, once every asset is written
-            for rel in removes {
-                let abs = rel.to_fs(&r);
-                match std::fs::remove_file(&abs) {
-                    Ok(()) => done.push(abs),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(format!("{rel}: {}", gz_base::io_reason(&e))),
-                }
-            }
-            Ok(done)
+            Ok(())
         })
         .await
         .map_err(CmdError::io)?;
-    for abs in &written {
-        project.tree.mark_fs(abs);
-    }
-    project.tree.refresh().await;
-    Ok(
-        json!({ "assets": plan.assets, "copied": plan.copied, "kept": plan.kept, "removed": removed, "descriptions": left, "problems": plan.problems }),
-    )
+    Ok(json!({ "files": answer, "replaced": there }))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -429,5 +567,14 @@ pub fn register(reg: &mut Registry) {
         .destroys_with(&["overwrite", "remove_descriptions"])
         .example("from=[\"D:/art/wall.glb\"] to=models/bunker"),
         asset_import,
+    );
+    reg.cmd(
+        Spec::write(
+            "asset.export",
+            "Writes media assets' files out of the project as they were brought in: the source with what it names beside it and its .thm, or the game's file an asset describes.",
+        )
+        .destroys_with(&["overwrite"])
+        .example("path=textures/wall.texasset to=D:/export"),
+        asset_export,
     );
 }

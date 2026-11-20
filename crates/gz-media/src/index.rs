@@ -50,18 +50,34 @@ impl Entry {
         !self.excluded && self.error.is_none() && (self.kind != MediaKind::Model || self.dynamic)
     }
 
+    /// The project file a model of the game is made of when the project has it: a `game:` model
+    /// is read from the project's own `gamedata\meshes` first.
+    #[must_use]
+    pub fn game_model_file(&self) -> Option<String> {
+        (self.kind == MediaKind::Model)
+            .then_some(self.game.as_ref())
+            .flatten()
+            .map(|g| format!("gamedata/meshes/{}.ogf", g.replace('\\', "/").to_lowercase()))
+    }
+
     /// Whether the asset takes this project file in (its source, a file the source names, a
-    /// bump picture, a `#` companion), so the build never ships the file as it is. A file of the
-    /// module's `gamedata` is the game's data where it lies: it is the asset's only when the
-    /// asset publishes it at that very path - an asset beside a file of the game's data - and
-    /// ships by its own name when the asset publishes another one.
+    /// bump picture, a `#` companion, the `.thm` beside its source), so the build never ships
+    /// the file as it is. Its source is its own while the asset is the module's (not excluded):
+    /// a file has one asset, which says where it ships - a `game:` model's file of the project
+    /// too. Another file of the module's `gamedata` is the game's data where it lies: it is the
+    /// asset's only when the asset publishes it at that very path, and ships by its own name
+    /// when the asset publishes another one (a picture a model wears).
     #[must_use]
     pub fn takes(&self, rel: &str) -> bool {
         let key = rel.replace('\\', "/").to_lowercase();
         let same = |p: &RelPath| p.as_str().to_lowercase() == key;
-        let named = self.source.as_ref().is_some_and(same)
-            || self.uses.iter().any(same)
-            || self.companion.as_ref().is_some_and(same);
+        if !self.excluded
+            && (self.source.as_ref().is_some_and(|s| same(s) || same(&s.with_extension("thm")))
+                || self.game_model_file().is_some_and(|g| g == key))
+        {
+            return true;
+        }
+        let named = self.uses.iter().any(same) || self.companion.as_ref().is_some_and(same);
         if !named {
             return false;
         }
@@ -146,6 +162,25 @@ impl Index {
     #[must_use]
     pub fn is_source(&self, rel: &str) -> bool {
         gz_project::rules::is_media_asset_name(rel) || self.entries.iter().any(|e| e.takes(rel))
+    }
+
+    /// Every file of the project some asset takes ([`Entry::takes`]), lower case with `/`: made
+    /// once, for whoever asks about many files.
+    #[must_use]
+    pub fn taken(&self) -> rustc_hash::FxHashSet<String> {
+        let mut out = rustc_hash::FxHashSet::default();
+        for e in &self.entries {
+            let thm = e.source.as_ref().map(|s| s.with_extension("thm"));
+            for r in e.source.iter().chain(&e.uses).chain(&e.companion).chain(&thm) {
+                if e.takes(r.as_str()) {
+                    out.insert(r.as_str().replace('\\', "/").to_lowercase());
+                }
+            }
+            if let Some(g) = e.game_model_file().filter(|g| e.takes(g)) {
+                out.insert(g);
+            }
+        }
+        out
     }
 
     /// The paths the build writes for the assets that ship, relative to the module's root,

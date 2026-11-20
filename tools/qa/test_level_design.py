@@ -801,12 +801,15 @@ def phase_h() -> None:
     tex = os.path.join(root, "gamedata", "textures", CTX.module)
     dds = os.path.join(tex, "planks.dds")
     magic = open(dds, "rb").read(4) if os.path.isfile(dds) else b""
-    sources = [os.path.relpath(os.path.join(d, n), root) for d, _, fs in os.walk(root) for n in fs
-               if n.lower().endswith((".png", ".gltf", ".obj", ".mtl", ".meshasset"))]
+    # a dynamic model of the module's game data ships its description beside it; no other model asset
+    # or source does
+    sources = [r for r in (os.path.relpath(os.path.join(d, n), root) for d, _, fs in os.walk(root) for n in fs
+               if n.lower().endswith((".png", ".gltf", ".obj", ".mtl", ".meshasset")))
+               if not r.lower().startswith(os.path.join("gamedata", "meshes", ""))]
     check(made.get("ok") and (made.get("media") or 0) >= 1 and magic == b"DDS "
           and os.path.isfile(os.path.join(tex, "planks.texasset")) and not sources,
           "H mod.build publishes the texture asset: gamedata\\textures\\%s\\planks.dds and .texasset, no source (%s media)"
-          % (CTX.module, made.get("media")), short({"answer": made, "sources": sources}))
+          % (CTX.module, made.get("media")), short({"sources": sources, "answer": made}))
     check(all(os.path.isfile(os.path.join(root, "levels", "l01_escape", n)) for n in ("overlay.cut", "overlay.aiedit")),
           "H and the module carries the level's overlay.cut and overlay.aiedit")
 

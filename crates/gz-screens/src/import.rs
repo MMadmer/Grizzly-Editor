@@ -1,7 +1,8 @@
 //! The one way a file enters the screens: a file of the project
 //! stays where it is, one from outside is copied into `<project>\screens`, a PNG / JPG / TGA /
 //! BMP becomes a `.dds`, and a `.ps` gets the `.s` the game asks for. THE KIND IS THE FILE'S
-//! EXTENSION: nothing is declared.
+//! EXTENSION: nothing is declared. A texture asset brings in the picture it is made over (a
+//! picture of the project is shown as its asset).
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -118,6 +119,25 @@ pub struct Plan {
 }
 
 /// A given path made absolute: a relative one is the project's.
+/// The picture a texture asset (`.texasset`) is made over, absolute; `None` for any other file.
+/// A description of a texture of the game has no file a screen could show.
+fn picture_of_asset(root: &str, given: &str) -> Result<Option<String>, String> {
+    if !given.to_ascii_lowercase().ends_with(".texasset") {
+        return Ok(None);
+    }
+    let abs = source_of(root, given);
+    let text = fs::read_to_string(&abs).map_err(|_| format!("The file cannot be read: {given}"))?;
+    let value = gz_luadata::parse(&text).map_err(|e| format!("{given}: {e}"))?;
+    let source = value.get("source").and_then(gz_luadata::Value::as_str);
+    if source.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("game:")) {
+        return Err(format!("{given} describes a texture of the game: a screen shows a file"));
+    }
+    let picture =
+        gz_media::files::source_of(gz_project::asset_kind::MediaKind::Texture, Path::new(&abs), source)
+            .ok_or_else(|| format!("The picture of {given} is not there"))?;
+    Ok(Some(picture.to_string_lossy().into_owned()))
+}
+
 fn source_of(root: &str, given: &str) -> String {
     let n = normalize_path(given);
     let absolute = n.len() > 2 && n.as_bytes().get(1) == Some(&b':');
@@ -191,6 +211,8 @@ fn make_picture(image: &str, dds: &str) -> Result<(), String> {
 /// Blocking file work: run it on the IO pool. Several imports may run at once.
 pub fn import(root: &str, given: &str) -> Result<String, String> {
     let root = normalize_path(root);
+    let picture = picture_of_asset(&root, given)?;
+    let given = picture.as_deref().unwrap_or(given);
     if !Path::new(&source_of(&root, given)).is_file() {
         return Err(format!("The file does not exist: {given}"));
     }

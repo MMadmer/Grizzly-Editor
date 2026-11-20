@@ -450,6 +450,19 @@ async fn build(
     // for the other (each is parallel work of its own on the pools). The files are listed again
     // once the bake has written its layer.
     let checks = BuildChecks::of(editor);
+    // what the areas owe the module first: the assets of new raw files, the piece of a level
+    let mut notes = Vec::new();
+    for prepare in checks.prepare() {
+        for f in prepare(editor.clone(), session.clone(), ctx.clone(), flat).await? {
+            if f.severity == gz_base::Severity::Warning {
+                warnings.push(f.text);
+            } else {
+                notes.push(f);
+            }
+        }
+        still_open(editor, session, ctx)?;
+        project.tree.refresh().await;
+    }
     let baking = {
         let (bake, ed, s) = (checks.bake(), editor.clone(), session.clone());
         async move {
@@ -467,6 +480,7 @@ async fn build(
     if let Some(note) = baked {
         out.bake_note = note;
     }
+    out.bake_note.splice(0..0, notes);
     let (m, dst) = checked?;
     out.path.clone_from(&dst);
     still_open(editor, session, ctx)?;
@@ -494,9 +508,12 @@ async fn build(
     let tree = project.tree.snapshot();
     let scope = if flat { WalkScope::Gamedata } else { WalkScope::Module };
     let (rules, walk_tree, exec) = (m.exclude.clone(), tree.clone(), editor.exec.clone());
-    let sources = publication.as_ref().map(|p| p.sources.clone()).unwrap_or_default();
-    let mut walk =
-        editor.exec.io(move || BuildWalk::scan_with(&walk_tree, &rules, scope, &exec, &sources)).await;
+    let (sources, ships) =
+        publication.as_ref().map(|p| (p.sources.clone(), p.ships.clone())).unwrap_or_default();
+    let mut walk = editor
+        .exec
+        .io(move || BuildWalk::scan_with(&walk_tree, &rules, scope, &exec, &sources, Some(&ships)))
+        .await;
     if let Some(p) = publication {
         for rel in walk.publish(p.files) {
             warnings.push(format!(
@@ -636,10 +653,14 @@ async fn check_module(
     // the files the project holds now: what the areas check
     let tree = project.tree.snapshot();
     let scope = if flat { WalkScope::Gamedata } else { WalkScope::Module };
-    let sources = checks.plan(editor.clone(), session.clone()).await.sources;
+    let plan = checks.plan(editor.clone(), session.clone()).await;
+    let (sources, ships) = (plan.sources, plan.ships);
     let (rules, walk_tree, exec) = (m.exclude.clone(), tree, editor.exec.clone());
     let walk = Arc::new(
-        editor.exec.io(move || BuildWalk::scan_with(&walk_tree, &rules, scope, &exec, &sources)).await,
+        editor
+            .exec
+            .io(move || BuildWalk::scan_with(&walk_tree, &rules, scope, &exec, &sources, Some(&ships)))
+            .await,
     );
     still_open(editor, session, ctx)?;
 

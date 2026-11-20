@@ -213,6 +213,15 @@ What the suites hold, beyond what their names say:
   `tools/radio/test_radio_scripts.lua`): the sound asset as the one place of the copyright mark; a refused,
   a replaced and a free sound started 2D, 3D and looped; the mode switched while something plays; the radio's
   pickers with a module's music, with a playlist, and with no module at all.
+- **One raw file, one asset** (`gz-project`'s `is_raw` tests, `gz-build`'s walk test, `gz-media`'s tests of
+  `taken`, `unwrapped`, `kept_as_files`, M117 and M118, `asset.export`'s `files_of`; `test_build_contents` D,
+  `test_level_design` H, `test_build_job`, `test_mod_publish`, `test_bridge`): a picture no asset wraps is no
+  tile and is left out of the build with its reason; a game texture dropped into the module's game data gets
+  its asset from the build itself and ships byte for byte; a dynamic model of the game data ships its
+  description beside it; what the screens and the manifest own still ships. The automatic import on open and
+  the browser's Export... are not driven by a suite.
+- **A module build builds a stale piece first** (`test_game_library` E): Build Mod over a level of the game
+  writes `levels\<level>\pieces\main` and ships it, and the piece is fresh after.
 
 ## 2. Not proven by a run
 
@@ -722,3 +731,18 @@ What the suites hold, beyond what their names say:
 - Problems is a panel beside the Output Log, not a tab inside it.
 - Details' Reset arrow shows only where the scene's field table has a default to compare with.
 - The PDA tab's Source pane lays a big text out over frames, so its first frame is no stall.
+- A raw file is the project's only through its asset, like an engine's imported asset: a picture, a sound or a
+  model nothing wraps is no tile and no file of the build (`LeftOutReason::Raw`), so a file never has two
+  faces in the browser and never ships by accident. The owners that ship a raw file where it lies say so to the
+  build (`MediaPlan::ships`: a screen's layer, a track's file, the thumbnail, `[vfs]`), a level build's output
+  is told by its place, and `rawdata\` stays the SDK's library. A source is its asset's wherever it lies, so
+  two assets over one file are an error (`M117`) rather than two publications.
+- The automatic import runs only under `gamedata\textures|sounds|meshes`: there a file is the game's container
+  already and its asset publishes it byte for byte at the same path, so an import changes nothing that ships
+  and an owner that named the file still finds it. Elsewhere a raw file is the author's to import. It never
+  replaces a file. A commandlet does not watch, but every module build imports first (a preparation of the
+  build, before the piece): a file an agent writes and builds at once ships the same in the window and in a
+  commandlet, never by the luck of the watcher's timing.
+- A module build builds a stale piece of a level of the game first (`gz_build::PrepareHook`): Build Mod alone
+  puts a static object placed over a level of the game into the game, as before there were pieces. A level of
+  the module's own is only warned about - its light may take hours.

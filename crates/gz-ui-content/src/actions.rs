@@ -16,7 +16,7 @@ use crate::catalog::{Catalog, Origin};
 use crate::icons;
 use crate::model::{self, Location, Source, leaf_of, parent_of};
 use crate::select::Entry;
-use crate::service::{CatKey, Clip, Clipboard, ContentBrowser, ImportClash, Inner, Rename};
+use crate::service::{CatKey, Clip, Clipboard, ContentBrowser, ExportClash, ImportClash, Inner, Rename};
 
 /// Who answers the browser's questions from the window.
 #[must_use]
@@ -620,9 +620,20 @@ async fn names_its_source(editor: &Arc<Editor>, rel: &str) -> bool {
 
 // ---- delete ------------------------------------------------------------------------------------
 
-/// The confirmation of a deletion: it names what goes.
+/// The project's files as they are, every one: a raw file no asset wraps is no tile, and a guard
+/// that counted tiles would miss it.
+fn project_files(editor: &Editor) -> Option<Arc<gz_project::FileTree>> {
+    gz_project::Project::of(editor).ok().map(|(_, p)| p.tree.snapshot())
+}
+
+/// The confirmation of a deletion: it names what goes. A folder's files are counted from the
+/// project's files (`tree`) when there is one - tiles or not -, else from the catalog.
 #[must_use]
-pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSpec {
+pub(crate) fn delete_spec(
+    entries: &[Entry],
+    cat: Option<&Catalog>,
+    tree: Option<&gz_project::FileTree>,
+) -> ConfirmSpec {
     let mut folders = 0usize;
     let mut files = 0usize;
     let mut inside = 0usize;
@@ -631,7 +642,10 @@ pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSp
         items.push(e.wire());
         if e.folder {
             folders += 1;
-            inside += cat.map_or(0, |c| c.files_below(&e.path).len());
+            inside += match (tree, gz_base::RelPath::new(&e.path.replace('\\', "/"))) {
+                (Some(t), Ok(rel)) => t.files_under(&rel).len(),
+                _ => cat.map_or(0, |c| c.files_below(&e.path).len()),
+            };
         } else {
             files += 1;
         }
@@ -687,7 +701,8 @@ pub(crate) fn delete_selection(
     }
     let doomed: Vec<Entry> = st.sel.entries().to_vec();
     let cat = browser.cats.peek((Source::Project, 0));
-    let spec = delete_spec(&doomed, cat.as_deref());
+    let files = project_files(editor);
+    let spec = delete_spec(&doomed, cat.as_deref(), files.as_deref());
     let project = st.scope.0.clone();
     let ed = editor.clone();
     let inbox = browser.inbox.clone();
@@ -901,13 +916,19 @@ pub(crate) fn paste(
     }
     let dst = st.loc.folder.clone();
     let project = browser.cats.peek((Source::Project, 0));
+    // what is in the way is every file of the project, a raw one no tile shows included
+    let files = project_files(editor);
     let clashes: Vec<String> = st
         .clip
         .items
         .iter()
         .filter(|c| {
             let target = if dst.is_empty() { c.rel.clone() } else { format!("{dst}\\{}", c.rel) };
-            project.as_ref().is_some_and(|p| p.file(&target).is_some() || p.folder(&target).is_some())
+            let on_disk = files.as_ref().is_some_and(|t| {
+                gz_base::RelPath::new(&target.replace('\\', "/")).is_ok_and(|r| t.contains(&r))
+            });
+            on_disk
+                || project.as_ref().is_some_and(|p| p.file(&target).is_some() || p.folder(&target).is_some())
         })
         .map(|c| c.rel.clone())
         .collect();
@@ -1274,6 +1295,94 @@ pub(crate) fn import_dialog(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
         import_files(&ed, &b, vec![file], &dst);
     });
     if let Err(line) = picked {
+        editor.log.finding(&line);
+    }
+}
+
+/// Export...: the system's folder picker, then `asset.export` of the media assets into the folder
+/// picked. Files there in the way are named in a question; the files written are the toast.
+pub(crate) fn export_dialog(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, paths: Vec<String>) {
+    let request = gz_ui::file_dialog::FileRequest::folder("Export");
+    let (ed, b) = (editor.clone(), browser.clone());
+    let picked = gz_ui::file_dialog::pick(&editor.exec, None, asker(editor), request, move |folder| {
+        let to = folder.display().to_string();
+        let (ed, b) = (ed.clone(), b.clone());
+        ed.exec.clone().spawn(async move {
+            export_assets(&ed, &b, paths, to, false).await;
+        });
+    });
+    if let Err(line) = picked {
+        editor.log.finding(&line);
+    }
+}
+
+/// `asset.export` of `paths` into `to`: the files written are a toast, files in the way go to the
+/// frame's question, a failure is a notice.
+pub(crate) async fn export_assets(
+    editor: &Arc<Editor>,
+    browser: &Arc<ContentBrowser>,
+    paths: Vec<String>,
+    to: String,
+    overwrite: bool,
+) {
+    let mut pairs = vec![("path", json!(paths)), ("to", json!(to))];
+    if overwrite {
+        pairs.push(("overwrite", json!(true)));
+    }
+    let files = |r: &Value| r.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+    match call(editor, "asset.export", &pairs).await {
+        Ok(r) => {
+            let n = files(&r);
+            editor.log.info(format!("Exported {n} file(s) into {to}."));
+            browser.inbox.lock().exported = Some((n as u64, to));
+        }
+        Err((_, r)) if r.get("code").and_then(Value::as_str) == Some("exists") => {
+            let there = r
+                .get("files")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                .unwrap_or_default();
+            browser.inbox.lock().export_clash = Some(ExportClash { paths, to, there });
+        }
+        Err((e, _)) => editor.notices.error(format!("Cannot export: {e}")),
+    }
+    editor.exec.wake().ping();
+}
+
+/// The question of an export whose files would replace files of its folder: it names them.
+#[must_use]
+pub(crate) fn export_replace_spec(there: &[String]) -> ConfirmSpec {
+    ConfirmSpec {
+        id: "cb_export_replace".into(),
+        title: Tx::ctx("dlg.cb_export_replace", "Export"),
+        headline: tr!(
+            "{n} {n:file is|files are} in the folder already and will be replaced:",
+            n = there.len()
+        ),
+        total: there.len(),
+        items: there.iter().map(|t| Tx::raw(t.clone())).collect(),
+        consequence: "What they replace is gone for good - this cannot be undone.".into(),
+        action: "Replace".into(),
+        destructive: true,
+    }
+}
+
+/// An export the frame found files in the way of: the author is asked, and Replace sends it again
+/// with `overwrite=true`. Under `-nodlg` the answer is No and nothing is replaced.
+pub(crate) fn ask_export_clash(ctx: &egui::Context, editor: &Arc<Editor>, clash: ExportClash) {
+    let spec = export_replace_spec(&clash.there);
+    let ed = editor.clone();
+    let line = dialog::confirm(ctx, asker(editor), spec, move |answer| {
+        if answer != Answer::Yes {
+            return;
+        }
+        let ed2 = ed.clone();
+        ed.exec.spawn(async move {
+            let browser = ContentBrowser::of(&ed2);
+            export_assets(&ed2, &browser, clash.paths, clash.to, true).await;
+        });
+    });
+    if let Some(line) = line {
         editor.log.finding(&line);
     }
 }
@@ -1712,9 +1821,9 @@ mod tests {
             placeable(&project, "rawdata\\objects\\box\\b.object").map(|p| p.2),
             Some("box\\b".into())
         );
-        let spec = delete_spec(&[Entry::new("a\\b.txt", false)], None);
+        let spec = delete_spec(&[Entry::new("a\\b.txt", false)], None, None);
         assert_eq!(spec.headline.en(), "Delete b.txt?");
-        let spec = delete_spec(&[Entry::new("a", true), Entry::new("b.txt", false)], None);
+        let spec = delete_spec(&[Entry::new("a", true), Entry::new("b.txt", false)], None, None);
         assert_eq!(spec.headline.en(), "Delete 1 folder and 1 file?");
         assert!(spec.destructive && spec.items == [Tx::raw("a\\"), Tx::raw("b.txt")]);
         assert_eq!(free_folder_name(None, ""), Some("New Folder".into()));

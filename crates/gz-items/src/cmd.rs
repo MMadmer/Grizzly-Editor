@@ -317,7 +317,7 @@ impl MediaPublisher for ItemsPublisher {
                 published.push(plan.path.clone());
                 published.extend(plan.placed.iter().map(|p| p.file.replace('/', "\\")));
             }
-            MediaPlan { sources: sources_of(&session.root, plan), published }
+            MediaPlan { sources: sources_of(&session.root, plan), published, ..MediaPlan::default() }
         })
     }
 

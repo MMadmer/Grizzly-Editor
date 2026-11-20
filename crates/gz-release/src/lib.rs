@@ -69,5 +69,28 @@ pub use package::{PackageRequest, PackageResult, Releases, packaged_files, run_p
 /// module build's media publisher.
 pub fn install(editor: &gz_editor::Editor) {
     browser::install_manifest_args(editor);
-    gz_build::BuildChecks::of(editor).set_media(std::sync::Arc::new(media::MediaBuild));
+    let checks = gz_build::BuildChecks::of(editor);
+    checks.set_media(std::sync::Arc::new(media::MediaBuild));
+    // a raw file of the module's game data dropped a moment ago ships like one the watcher took in
+    checks.add_prepare(|ed, session, ctx, _flat| {
+        Box::pin(async move {
+            ctx.stage("Importing the module's new media");
+            Ok(match gz_media::auto::import_now(&ed, &session).await {
+                Ok(made) if made.is_empty() => Vec::new(),
+                Ok(made) => {
+                    let more = made.len().saturating_sub(10);
+                    let named = made.iter().take(10).cloned().collect::<Vec<_>>().join(", ");
+                    let tail = if more > 0 { format!(" and {more} more") } else { String::new() };
+                    vec![gz_base::Finding::info(format!(
+                        "Made {} asset(s) in place for the new media of the module's game data: {named}{tail}",
+                        made.len()
+                    ))]
+                }
+                // the files stay what they are; what the game reads of them still ships
+                Err(why) => vec![gz_base::Finding::warning(format!(
+                    "The new media of the module's game data got no assets: {why}"
+                ))],
+            })
+        })
+    });
 }

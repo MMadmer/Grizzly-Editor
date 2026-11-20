@@ -384,6 +384,13 @@ impl Catalog {
                                 .push(SmolStr::new(&full));
                             continue;
                         }
+                        // raw data is the project's only through the asset that wraps it: one no
+                        // asset wraps is no tile at all
+                        if gz_project::is_raw(&full, |b| {
+                            dir.get(b.rsplit(['/', '\\']).next().unwrap_or(b)).is_some()
+                        }) {
+                            continue;
+                        }
                         items.push(FileItem::new(&full, size, asset, Origin::Disk));
                     }
                     EntryKind::Link => {}
@@ -926,11 +933,12 @@ mod tests {
         let wall = c.file("models\\wall.meshasset").unwrap();
         assert_eq!(wall.companions, ["models\\wall.glb"]);
         assert_eq!(wall.asset, Some(AssetKind::Model));
-        // a picture beside a model is no source of the model's kind: a tile of its own
-        assert!(c.file("models\\wall.png").is_some());
+        // a picture beside a model is no source of the model's kind - and raw data no asset wraps is
+        // no tile at all
+        assert!(c.file("models\\wall.png").is_none());
         assert!(c.file("models\\wall.glb").is_none());
         assert_eq!(c.file("sounds\\hum.sndasset").unwrap().companions, ["sounds\\hum.wav"]);
-        assert!(c.file("sounds\\hum_take2.wav").is_some());
+        assert!(c.file("sounds\\hum_take2.wav").is_none());
         // with it: the source the asset names, what its source uses, the pictures no texture asset wraps
         let index = gz_media::Index {
             stamp: gz_base::Rev(1),
@@ -975,13 +983,17 @@ mod tests {
         assert_eq!(tex.companions, ["models\\tex\\crate_d.png"], "the tree's own spelling");
         assert_eq!(tex.published.as_deref(), Some("qa\\crate_d"));
         assert_eq!(c.file("sounds\\hum.sndasset").unwrap().companions, ["sounds\\hum_take2.wav"]);
-        // the index knows hum.sndasset names another file: the one with its name is a tile
-        assert!(c.file("sounds\\hum.wav").is_some());
+        // the index knows hum.sndasset names another file: the one with its name is nobody's, so nowhere
+        assert!(c.file("sounds\\hum.wav").is_none());
         assert!(
             c.file("models\\crate.meshasset").is_some()
                 && c.file("models\\wall.meshasset").unwrap().companions.is_empty()
         );
-        assert!(c.file("notes.png").is_some());
+        assert!(c.file("notes.png").is_none(), "a picture no asset wraps is no tile");
+        // the X-Ray SDK library keeps its files
+        put(root, "rawdata\\textures\\wall.tga");
+        let c = Catalog::from_project_with(&FileTree::scan(root), Some(&index));
+        assert!(c.file("rawdata\\textures\\wall.tga").is_some());
         let tiles = build_view(&c, "models\\tex", "", ViewInput::default());
         let names: Vec<&str> = tiles.entries.iter().map(|e| e.entry.path.as_str()).collect();
         assert_eq!(names, ["models\\tex\\crate_d.texasset"]);

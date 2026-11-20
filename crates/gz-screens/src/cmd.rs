@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use gz_base::{Origin, Problem};
-use gz_build::{BuildCheck, BuildChecks, BuildWalk};
+use gz_build::{
+    BuildCheck, BuildChecks, BuildWalk, MediaPlan, MediaPublisher, Publication, Sources, source_key,
+};
 use gz_editor::{Args, CmdError, Editor, Executors, NoParams, ProjectSession, Registry, Reply, Spec};
 use gz_media::sound::Mark;
 use gz_mod::{Issue, ManifestService};
@@ -405,9 +407,66 @@ impl BuildCheck for ScreensCheck {
     }
 }
 
-/// Hangs the area on the editor: the build's check.
+/// The files the screens and the music ship where they lie (`docs/ASSETS.md` section 6): every
+/// layer's file and its shader's picture, the folder of a page or a sequence, and
+/// a track's plain file. A track that names its sound ships it through the sound's asset.
+#[must_use]
+pub fn ships_of(s: &Screens) -> Sources {
+    let mut out = Sources::default();
+    for l in s.screens.iter().flat_map(|sc| &sc.layers) {
+        for f in [&l.file, &l.texture].into_iter().filter(|f| !f.trim().is_empty()) {
+            out.insert(source_key(f.trim()));
+        }
+        // a page reads the files beside it, a sequence names its frames
+        if matches!(file_kind(&l.file), FileKind::Page)
+            || l.file.trim().to_ascii_lowercase().ends_with(".seq")
+        {
+            let file = source_key(l.file.trim());
+            if let Some((folder, _)) = file.rsplit_once('/') {
+                out.insert(folder.to_owned());
+            }
+        }
+    }
+    out.extend(
+        s.tracks
+            .iter()
+            .filter(|t| t.sound.trim().is_empty() && !t.file.trim().is_empty())
+            .map(|t| source_key(t.file.trim())),
+    );
+    out
+}
+
+/// Tells the build which raw files of the project the screens and the music ship.
+struct ScreensFiles;
+
+async fn screen_ships(editor: Arc<Editor>, session: Arc<ProjectSession>) -> Sources {
+    let Ok(manifest) = ManifestService::of_session(&editor, &session).await else {
+        return Sources::default();
+    };
+    let _ = manifest.sync().await;
+    let snap = manifest.snapshot();
+    snap.doc().map(|doc| ships_of(&Screens::parse(doc))).unwrap_or_default()
+}
+
+impl MediaPublisher for ScreensFiles {
+    fn plan(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> BoxFuture<'static, MediaPlan> {
+        Box::pin(
+            async move { MediaPlan { ships: screen_ships(editor, session).await, ..MediaPlan::default() } },
+        )
+    }
+
+    fn publish(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> BoxFuture<'static, Publication> {
+        Box::pin(async move {
+            Publication { ships: screen_ships(editor, session).await, ..Publication::default() }
+        })
+    }
+}
+
+/// Hangs the area on the editor: the build's check and what the screens ship.
 pub fn install(editor: &Editor) {
-    BuildChecks::of(editor).add(Arc::new(ScreensCheck));
+    let checks = BuildChecks::of(editor);
+    checks.add(Arc::new(ScreensCheck));
+    checks.add_publisher(Arc::new(ScreensFiles));
 }
 
 // ---- the answer -----------------------------------------------------------------------------

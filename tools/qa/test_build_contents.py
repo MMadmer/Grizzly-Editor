@@ -30,6 +30,7 @@ import io
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -98,12 +99,24 @@ TOOLING = [
 AUTHORED_OUT = ["design/story.md", "docs/notes.md", "docs/index.bleve/store/root.bolt", "art/cover.psd",
                 "art/sheet.psd", "wip_char/ghost.npcasset", "design/wip.nqasset"]
 # what must ship
-SHIPS = ["LICENSE", "README.md", "art/cover.png", "gamedata/configs/qa_keep.ltx", "gamedata/textures/qa/qa_tex.dds",
-         "mod.ltx"]
+SHIPS = ["LICENSE", "README.md", "gamedata/configs/qa_keep.ltx", "gamedata/textures/qa/qa_tex.dds",
+         "gamedata/textures/qa/qa_tex.texasset", "mod.ltx"]
+# a picture no asset wraps: the project's only through an asset, so it never ships on its own
+RAW_OUT = ["art/cover.png"]
 
 
 SETTINGS_PAGES = ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda", "commands"]
 BUILD_DIALOGS = ["build_to_folder", "export_flat", "package_release"]
+
+
+def dds(path: str, w: int, h: int) -> None:
+    # a picture of one colour as an uncompressed 32-bit DDS, the way the game reads one
+    head = struct.pack("<4sIIIIIII44xIIIIIIII", b"DDS ", 124, 0x100F, h, w, w * 4, 0, 1,
+                       32, 0x41, 0, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+    head += struct.pack("<IIIII", 0x1000, 0, 0, 0, 0)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(head + bytes([220, 160, 40, 255]) * (w * h))
 
 
 def labels_of(audit: dict) -> dict:
@@ -274,7 +287,8 @@ def run(ctx: qa.Run) -> None:
     write(project, "LICENSE", "MIT\n")
     write(project, "README.md", "readme\n")
     write(project, "gamedata/configs/qa_keep.ltx", "[qa]\n")
-    write(project, "gamedata/textures/qa/qa_tex.dds", "DDS \n")
+    # a game texture of the module's game data: it gets its asset in place and ships byte for byte
+    dds(os.path.join(project, "gamedata", "textures", "qa", "qa_tex.dds"), 4, 4)
 
     ed = qa.Editor(project)
     target = tempfile.mkdtemp(prefix="grizzly_build_target_")
@@ -356,7 +370,12 @@ def run(ctx: qa.Run) -> None:
         check(not leaked, "D nothing of git, the tools or the author's exclusions is in the module", json.dumps(leaked))
         missing = [p for p in SHIPS if p not in got]
         check(not missing, "D and everything else is", json.dumps(missing))
+        check(os.path.isfile(os.path.join(project, "gamedata", "textures", "qa", "qa_tex.texasset")),
+              "D the build gave the new game texture its asset in place first")
         left = [p.replace("\\", "/") for p in built.get("left_out", [])]
+        for raw in RAW_OUT:
+            check(raw not in got and raw + " (raw data no asset wraps)" in left,
+                  "D a raw file no asset wraps is left out, with why: " + raw, json.dumps(left))
         for want in (".git", ".gitignore", ".vscode", "design", "docs", "art/cover.psd", "wip_char",
                      "gamedata/textures/qa/Thumbs.db", "gamedata/.git"):
             check(want in left, "D left_out names " + want, json.dumps(left))

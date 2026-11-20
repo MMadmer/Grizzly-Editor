@@ -33,7 +33,13 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   freezes and the game starts guaranteeing that mods built by any past release
   of the editor keep working (already written into the game's
   PROJECT_RULES.md). Do not delete this reminder — rewrite this section at
-  release.
+  release. **Every release of the editor freezes its reference module** into the game's archive of old
+  modules (`python tools/qa/freeze_reference_module.py --archive <game>/tools/qa/module/old`: one asset of every
+  kind, built by that release; an entry that is there is never replaced), and the game's
+  `tools/qa/module/Run-OldModulesQa.ps1` loads every frozen module into a new game. Every format a module ships
+  carries its version (the Lua data's header key, `[things] version` of `overlay.things`, `piece.ltx`'s
+  `version`, the binary overlays' own): the game reads every version up to its own and refuses a newer one by
+  name.
 - **Nothing leaves this computer without the author's word**: no push, no release of the editor, no module
   release, no catalog submission. The editor's version is the workspace's (`Cargo.toml`, 0.7.0; `ping` and the
   About note say it).
@@ -425,17 +431,38 @@ A change of plan is a change of its document first.
   under an asset that states none), a project's `.ogf` the asset changes nothing of - byte for byte, nothing
   baked. Over such a picture the keys that say how a picture is made (`texture::MAKING_KEYS`) apply to nothing and
   are a warning at each. Under the module's own `gamedata\textures\`, `sounds\`, `meshes\` such a file has its asset
-  beside it, named by its path below that folder (`Entry::takes`: the file is the asset's only where the asset
-  publishes it). `asset.import` makes those assets in place from what the game reads of the file - a `.thm` beside
+  beside it, named by its path below that folder (`Entry::takes`, `Index::taken`: an asset's source and the `.thm`
+  beside it are its own wherever they lie, a `game:` model's file of the project too, while the asset is not
+  excluded; a file it only names - a picture a model wears - is its only where it publishes it). `asset.import`
+  makes those assets in place from what the game reads of the file - a `.thm` beside
   a picture (every key the game reads stated, none only the SDK reads), a `.thm` alone (`source =
   "game:<name>"`, a description of the game's texture), an `.ogg`'s comment, a `.ogf` there (dynamic) - each read
-  back from the text it writes, else no asset and the file stays as it is. The `.thm` stays and ships unless the
-  caller says `remove_descriptions` (the destroy door: what only the SDK read of it goes with it). A picture the
-  game cannot load by its name (`files::texture_name_reached`) or that is no DDS, and a file of the game's formats
-  in `gamedata` outside its kind's folder (a level's lightmap), get no asset. A file of the project brought into
+  back from the text it writes, else no asset and the file stays as it is. The `.thm` stays (read by nobody, never
+  shipped) unless the caller says `remove_descriptions` (the destroy door: what only the SDK read of it goes with
+  it). A picture the game cannot load by its name (`files::texture_name_reached`) or that is no DDS, a file the
+  asset cannot say the same way, and a file of the game's formats in `gamedata` outside its kind's folder (a level's
+  lightmap), get no asset; the second ships as it is (`auto::kept_as_files`), the first does not. A file of the project brought into
   another folder is copied there; one from outside takes the name of where it lands. A `.thm` is read the way the
   game reads one (`gz-fmt-tex`'s `texture_chunk`: the game's byte-by-byte chunk search, read on in the file);
   change both or neither.
+- **A raw file is the project's only through its wrapper** (`docs/ASSETS.md` section 6): a picture, a sound, a model
+  or what goes with one (`.thm`, `.bin`, `.mtl`, `#.dds`) has ONE asset and is nothing without it - never a tile of
+  the content browser, never shipped on its own (`gz_project::is_raw`). Two assets over one file are `M117` on
+  both. One no asset wraps is left out of the build (`LeftOutReason::Raw`: "raw data no asset wraps") and listed
+  nowhere, but for what another owner ships where it lies (`MediaPlan::ships`, said by the publishers: a screen's
+  layer, a page's or a sequence's folder and a track's file - `gz-screens`; the thumbnail and what `[vfs]` mounts -
+  `gz-release`; the files of the module's game data no asset can say - `gz_media::auto::kept_as_files`), an
+  item's icon (a source of the atlas), a level build's files in `levels\` and `gamedata\levels\` and the X-Ray SDK
+  library (`rawdata\`). The content browser's guards (a deletion's count, a paste's clashes) read the project's
+  files, not the tiles: a raw file no tile shows is still named. Raw files under the module's `gamedata\textures|sounds|meshes` that
+  nothing wraps are imported in place by themselves (`gz-media`'s `auto.rs`: when the project opens and when one
+  appears, a job of the project it planned for that never replaces a file - a commandlet does not watch - and a
+  module build does it first as its own step, `gz_media::auto::import_now`, so a file dropped there a moment ago
+  ships in any build, and the build's answer names the assets it made); a kept
+  `.thm` ships no more, and one
+  that says to the game what its asset does not is `M118`. `asset.export` (and the browser's Export...) writes an
+  asset's file back out as it was brought in: its source with what goes with it, or the game's file it describes;
+  a model of `parts` has none.
 - **What a thing is lives in its asset and nowhere else.** A sound says in its `.sndasset` whether it is
   copyrighted and what plays instead (`copyrighted`, `streamer`: a sound that is not copyrighted; `M114`-`M116`),
   and the Sound tab (`sound`, `gz-ui-previews`' `sound.rs`: Play / Stop and the asset's keys as a grid made from
@@ -751,7 +778,12 @@ A change of plan is a change of its document first.
   such objects; the game's own level is never rebuilt for it, so every other module keeps the level it knows.
   A static object the piece carries is no object of the spawn layer too (`SpawnInput::statics_in_piece`): where
   the game loads pieces the bake leaves it out, or it would stand in the game twice; a game without pieces
-  gets it as a prop of the spawn layer, as before there were pieces.
+  gets it as a prop of the spawn layer, as before there were pieces. **A module build builds the piece first when
+  it is due** (`gz_build::PrepareHook`, after the media import's; `gz-levelbuild`'s `before_module_build`: Build
+  Mod, `mod.build`, the
+  packaging), as it was built last, inside the build's job - so a static object placed over a level of the game is
+  in the game after a module build alone; on a level of the module's own the build only says, in a warning, which
+  steps are not built (Build Level builds them: their light may take hours).
 - **Problems are on the thing they are about**: `level.problems` rows carry the object or the place, the Problems
   panel selects and frames it, the viewport draws refused faces. `level.status` and the status bar's Build chip
   read the same status without waiting (`LevelBuild::status_now`).
@@ -957,6 +989,7 @@ A change of plan is a change of its document first.
   - **media assets and their sources** where they lie (`*.meshasset`, `*.texasset`, `*.sndasset` and the files they
     name): the build publishes what they bake to instead, with the asset's text, under the game's place for the
     asset's `name` (above, "Media assets");
+  - **raw files no asset wraps** and no owner names (above, "Media assets"): left out, said in `left_out`;
   - **mod.ltx `[exclude]`** - the author's call (`gz-mod`'s `exclude.rs`, `exclude_match`): a
     project path (a folder takes everything below it) or a pattern (no slash = a
     name at any depth, `*.psd`; with one = a path, `docs/*.md`). Set from the

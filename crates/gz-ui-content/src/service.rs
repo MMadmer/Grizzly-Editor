@@ -286,9 +286,25 @@ pub(crate) struct Inbox {
     pub clear_selection: bool,
     /// An import made assets: how many, for the frame's toast.
     pub imported: Option<u64>,
+    /// An export wrote files: how many and where, for the frame's toast.
+    pub exported: Option<(u64, String)>,
     /// An import found files of the project in its way: what it was asked, for the frame to ask
     /// the author whether they go (`asset.import overwrite=true`).
     pub import_clash: Option<ImportClash>,
+    /// An export found files in its target folder: what it was asked, for the frame to ask the
+    /// author whether they go (`asset.export overwrite=true`).
+    pub export_clash: Option<ExportClash>,
+}
+
+/// An export that would replace files of the folder it writes into.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExportClash {
+    /// The assets, project-relative.
+    pub paths: Vec<String>,
+    /// The folder of this computer they go into.
+    pub to: String,
+    /// The files there they would replace.
+    pub there: Vec<String>,
 }
 
 /// An import that would replace files of the project.

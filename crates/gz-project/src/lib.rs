@@ -80,8 +80,8 @@ pub use machine::Found;
 pub use ops::{Failure, FileOps, Report};
 pub use project::{ProjectFile, scene_in_project};
 pub use rules::{
-    GITIGNORE_TEXT, ensure_gitignore, is_editor_only_entry, is_level_build_file, is_level_build_name,
-    is_source_only_entry, is_tooling_entry,
+    GITIGNORE_TEXT, RAW_EXTENSIONS, ensure_gitignore, is_editor_only_entry, is_level_build_file,
+    is_level_build_name, is_raw, is_source_only_entry, is_tooling_entry,
 };
 pub use service::{GameSource, LinkScope, NOT_LINKED, Project, Projects, project_state};
 pub use tree::{Dir, Entry, EntryKind, FileTree, TreeWatch};

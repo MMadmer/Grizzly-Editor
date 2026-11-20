@@ -17,6 +17,8 @@
 //! | `M114` | a sound's `streamer` on a sound that is not copyrighted (warning) |
 //! | `M115` | a sound's replacement that is copyrighted itself |
 //! | `M116` | a sound's replacement nobody has |
+//! | `M117` | two assets over one file (on both) |
+//! | `M118` | the `.thm` beside a texture's picture says to the game what the asset does not (warning) |
 
 use std::path::Path;
 use std::sync::Arc;
@@ -44,6 +46,8 @@ pub const BARE_SURFACE: &str = "M112";
 pub const STREAMER_UNUSED: &str = "M114";
 pub const STREAMER_COPYRIGHTED: &str = "M115";
 pub const STREAMER_MISSING: &str = "M116";
+pub const WRAPPED_TWICE: &str = "M117";
+pub const STALE_THM: &str = "M118";
 
 fn problem(i: &Issue) -> Problem {
     Problem::new(i.code, i.severity, i.message.clone())
@@ -102,6 +106,27 @@ pub fn issues(
                 at,
                 format!("another {} publishes the name '{}': {}", kind.name(), me.name, others.join(", ")),
             ));
+        }
+        // one file, one asset: the asset says where it ships, and two would say it twice
+        if let Some(src) = &me.source {
+            let others: Vec<String> = index
+                .entries
+                .iter()
+                .filter(|e| e.path != me.path && !e.excluded)
+                .filter(|e| e.source.as_ref().is_some_and(|s| s.key() == src.key()))
+                .map(|e| e.path.to_string())
+                .collect();
+            if !others.is_empty() {
+                out.push(Issue::new(
+                    WRAPPED_TWICE,
+                    Severity::Error,
+                    vec![Seg::key("source")],
+                    format!(
+                        "another asset is made over {src} too: {} - a file has one asset",
+                        others.join(", ")
+                    ),
+                ));
+            }
         }
     }
     let warn = |code: &'static str, path: Vec<Seg>, message: String| {
@@ -222,6 +247,27 @@ pub fn issues(
             match texture_facts(root, rel, &name, game, &mut out) {
                 Err(f) => out.push(f.issue),
                 Ok(t) => {
+                    // a `.thm` kept beside the picture is read by nobody once the asset is there
+                    let source = index
+                        .at(rel)
+                        .and_then(|e| e.source.clone())
+                        .filter(|s| !s.key().starts_with("rawdata/"));
+                    if let Some(thm) =
+                        source.map(|s| s.to_fs(root).with_extension("thm")).filter(|p| p.is_file())
+                        && let Some(said) =
+                            std::fs::read(&thm).ok().and_then(|b| gz_fmt_tex::read_texture_thm(&b).ok())
+                        && crate::import::thm_says_other(&said.params, &t.asset, &name, t.as_is)
+                    {
+                        let file =
+                            thm.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        out.push(warn(
+                            STALE_THM,
+                            Vec::new(),
+                            format!(
+                                "{file} says to the game what this asset does not: the game reads the asset, and the .thm ships no more - remove it, or say it here"
+                            ),
+                        ));
+                    }
                     let mut named: Vec<(Vec<Seg>, String)> = Vec::new();
                     if let Some(d) = t.asset.detail.as_ref().and_then(|d| d.texture.clone()) {
                         named.push((vec![Seg::key("detail"), Seg::key("texture")], d));

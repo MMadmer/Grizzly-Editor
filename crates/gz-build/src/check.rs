@@ -11,6 +11,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use gz_base::{Finding, Problem, Severity};
 use gz_editor::{Editor, ProjectSession};
+use gz_task::JobCtx;
 use parking_lot::RwLock;
 
 use crate::walk::{BuildFile, BuildWalk, Sources};
@@ -41,12 +42,29 @@ pub trait BuildCheck: Send + Sync {
 pub type BakeHook =
     Arc<dyn Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, Vec<Finding>> + Send + Sync>;
 
+/// What a module build makes ready before it bakes the scene, inside the build's own job (its
+/// Stop stops it), in the order the areas added them: the assets of the raw files of the
+/// module's game data nothing wraps yet (the media area), so a file dropped there a moment ago
+/// ships like one the watcher already took in; the module's piece of a level of the game when it
+/// is not fresh (the level build), so a static object placed over the level is in the game after
+/// a module build alone. It is told whether the build is a flat export (`gamedata` alone). Each
+/// answers what it did - notes and warnings, which the build's answer carries; an error, a
+/// sentence, stops the build (`"cancelled"` when it was stopped).
+pub type PrepareHook = Arc<
+    dyn Fn(Arc<Editor>, Arc<ProjectSession>, JobCtx, bool) -> BoxFuture<'static, Result<Vec<Finding>, String>>
+        + Send
+        + Sync,
+>;
+
 /// What the media assets make a build ship, without baking anything: what `mod.info` and the
 /// checks read.
 #[derive(Clone, Debug, Default)]
 pub struct MediaPlan {
     /// The project files that never ship as they are: what the assets are made of.
     pub sources: Sources,
+    /// The raw files (`gz_project::is_raw`) an owner ships where they lie - a screen's layer, a
+    /// track's file, the thumbnail, what `[vfs]` mounts: a folder takes everything below it.
+    pub ships: Sources,
     /// The paths the build publishes, relative to the module's root (backslashes).
     pub published: Vec<String>,
 }
@@ -55,6 +73,7 @@ impl MediaPlan {
     /// Another publisher's plan added to this one.
     pub fn join(&mut self, other: MediaPlan) {
         self.sources.extend(other.sources);
+        self.ships.extend(other.ships);
         self.published.extend(other.published);
     }
 }
@@ -63,6 +82,8 @@ impl MediaPlan {
 #[derive(Clone, Debug, Default)]
 pub struct Publication {
     pub sources: Sources,
+    /// As [`MediaPlan::ships`].
+    pub ships: Sources,
     /// The files, relative to the module's root, with where each comes from.
     pub files: Vec<BuildFile>,
     /// What stops the build: an asset that could not be baked, a sentence each naming it.
@@ -75,6 +96,7 @@ impl Publication {
     /// Another publisher's files added to these.
     pub fn join(&mut self, other: Publication) {
         self.sources.extend(other.sources);
+        self.ships.extend(other.ships);
         self.files.extend(other.files);
         self.errors.extend(other.errors);
         self.warnings.extend(other.warnings);
@@ -97,6 +119,7 @@ pub trait MediaPublisher: Send + Sync {
 pub struct BuildChecks {
     checks: RwLock<Vec<Arc<dyn BuildCheck>>>,
     bake: RwLock<Option<BakeHook>>,
+    prepare: RwLock<Vec<PrepareHook>>,
     publishers: RwLock<Vec<Arc<dyn MediaPublisher>>>,
 }
 
@@ -129,6 +152,27 @@ impl BuildChecks {
     #[must_use]
     pub fn bake(&self) -> Option<BakeHook> {
         self.bake.read().clone()
+    }
+
+    /// Adds a preparation, run after the ones before it.
+    pub fn add_prepare(
+        &self,
+        prepare: impl Fn(
+            Arc<Editor>,
+            Arc<ProjectSession>,
+            JobCtx,
+            bool,
+        ) -> BoxFuture<'static, Result<Vec<Finding>, String>>
+        + Send
+        + Sync
+        + 'static,
+    ) {
+        self.prepare.write().push(Arc::new(prepare));
+    }
+
+    #[must_use]
+    pub fn prepare(&self) -> Vec<PrepareHook> {
+        self.prepare.read().clone()
     }
 
     /// The media assets' publisher, asked first.

@@ -20,29 +20,60 @@ use gz_media::{Index, Media, Payload};
 pub struct MediaBuild;
 
 /// The files the assets of `index` are made of, as the build's walk leaves them out
-/// ([`gz_media::Entry::takes`]): a file of the module's `gamedata` only when its asset
-/// publishes it at that very path - the game reads it where it lies, by its own name, and an
-/// asset that publishes another name must not take it out of the module.
+/// ([`gz_media::Entry::takes`]): an asset's source and the `.thm` beside it are its own wherever
+/// they lie; a file it only names in the module's `gamedata` (a picture a model wears) only
+/// when the asset publishes it at that very path - the game reads it where it lies, by its own
+/// name.
 #[must_use]
 pub fn sources_of(index: &Index) -> Sources {
-    let mut out = Sources::default();
-    for e in &index.entries {
-        out.extend(
-            e.source
-                .iter()
-                .chain(&e.uses)
-                .chain(&e.companion)
-                .filter(|r| e.takes(r.as_str()))
-                .map(|r| source_key(r.as_str())),
-        );
-    }
-    out
+    index.taken().into_iter().map(|k| source_key(&k)).collect()
 }
 
 /// What `index` would publish, without a bake.
 #[must_use]
 pub fn plan_of(index: &Index) -> MediaPlan {
-    MediaPlan { sources: sources_of(index), published: index.published_paths() }
+    MediaPlan { sources: sources_of(index), published: index.published_paths(), ..MediaPlan::default() }
+}
+
+/// The raw files the manifest ships where they lie (`docs/ASSETS.md` section 6): the thumbnail
+/// the editor made at the root and the one `[module] thumbnail` names, and every folder or file
+/// `[vfs]` mounts.
+#[must_use]
+pub fn manifest_ships(doc: &gz_mod::ManifestDoc, thumbnail: &str) -> Sources {
+    let mut out = Sources::default();
+    out.insert("thumbnail.dds".to_owned());
+    if !thumbnail.trim().is_empty() {
+        out.insert(source_key(thumbnail.trim()));
+    }
+    for (_, inside) in doc.section_entries("vfs") {
+        let key = source_key(inside.trim()).trim_matches('/').to_owned();
+        if !key.is_empty() {
+            out.insert(key);
+        }
+    }
+    out
+}
+
+/// What ships as it lies of the raw files: the manifest's (above), and the files of the module's
+/// game data no asset could say the way they say themselves ([`gz_media::auto::kept_as_files`]).
+async fn ships_now(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    index: Option<Arc<Index>>,
+) -> Sources {
+    let mut out = Sources::default();
+    if let Ok(manifest) = gz_mod::ManifestService::of_session(editor, session).await {
+        let _ = manifest.sync().await;
+        let snap = manifest.snapshot();
+        let thumbnail = snap.manifest().map(|m| m.thumbnail.clone()).unwrap_or_default();
+        out.extend(snap.doc().map(|doc| manifest_ships(doc, &thumbnail)).unwrap_or_default());
+    }
+    if let (Some(index), Some(project)) = (index, session.services.get::<gz_project::Project>()) {
+        let (tree, root) = (project.tree.snapshot(), session.root.clone());
+        let kept = editor.exec.io(move || gz_media::auto::kept_as_files(&root, &tree, &index)).await;
+        out.extend(kept.iter().map(|k| source_key(k)));
+    }
+    out
 }
 
 /// The sentence the build says when the linked game does not read the descriptions: the data
@@ -127,13 +158,22 @@ async fn fresh(editor: &Arc<Editor>) -> Option<Arc<Index>> {
 }
 
 impl MediaPublisher for MediaBuild {
-    fn plan(&self, editor: Arc<Editor>, _session: Arc<ProjectSession>) -> BoxFuture<'static, MediaPlan> {
-        Box::pin(async move { fresh(&editor).await.map(|i| plan_of(&i)).unwrap_or_default() })
+    fn plan(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> BoxFuture<'static, MediaPlan> {
+        Box::pin(async move {
+            let index = fresh(&editor).await;
+            let mut plan = index.as_deref().map(plan_of).unwrap_or_default();
+            plan.ships = ships_now(&editor, &session, index).await;
+            plan
+        })
     }
 
     fn publish(&self, editor: Arc<Editor>, session: Arc<ProjectSession>) -> BoxFuture<'static, Publication> {
         Box::pin(async move {
-            let Some(index) = fresh(&editor).await else { return Publication::default() };
+            let index = fresh(&editor).await;
+            let ships = ships_now(&editor, &session, index.clone()).await;
+            let Some(index) = index else {
+                return Publication { ships, ..Publication::default() };
+            };
             let game = gz_project::Project::of(&editor).map(|(_, p)| p.game_root()).unwrap_or_default();
             let root = session.root.clone();
             let models = gz_media::GameModels::reader(&editor, &root);
@@ -141,7 +181,7 @@ impl MediaPublisher for MediaBuild {
                 .exec
                 .io(move || {
                     let game = (!game.trim().is_empty()).then(|| std::path::PathBuf::from(&game));
-                    publication(&root, &index, game.as_deref(), &models)
+                    Publication { ships, ..publication(&root, &index, game.as_deref(), &models) }
                 })
                 .await
         })
@@ -248,7 +288,8 @@ mod tests {
         let exec = rt.exec();
         let tree = FileTree::scan(&d.0);
         let rules = vec!["wip".to_owned()];
-        let mut walk = BuildWalk::scan_with(&tree, &rules, WalkScope::Module, &exec, &p.sources);
+        let mut walk =
+            BuildWalk::scan_with(&tree, &rules, WalkScope::Module, &exec, &p.sources, Some(&p.ships));
         assert!(walk.publish(p.files).is_empty());
         let mut files: Vec<&str> = walk.files.iter().map(|f| f.rel.as_str()).collect();
         files.sort_unstable();
@@ -284,8 +325,14 @@ mod tests {
         );
         let first = fs::metadata(&dds).unwrap().modified().unwrap();
         let again = publication(&d.0, &gz_media::scan(&d.0), None, &gz_media::resolve::no_game());
-        let mut walk2 =
-            BuildWalk::scan_with(&FileTree::scan(&d.0), &rules, WalkScope::Module, &exec, &again.sources);
+        let mut walk2 = BuildWalk::scan_with(
+            &FileTree::scan(&d.0),
+            &rules,
+            WalkScope::Module,
+            &exec,
+            &again.sources,
+            Some(&again.ships),
+        );
         walk2.publish(again.files);
         let unchanged = walk2.files.iter().filter(|f| gz_build::install::same_file_there(f, &dst)).count();
         assert_eq!(unchanged, 8, "every file of the second build is the first's");

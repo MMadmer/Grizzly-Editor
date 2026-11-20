@@ -42,6 +42,40 @@ pub fn is_source_only_entry(name_in_root: &str) -> bool {
         || GUIDES.iter().any(|n| n.eq_ignore_ascii_case(name_in_root))
 }
 
+/// The extensions of a raw file: what a media asset wraps (`docs/ASSETS.md` section 6). An X-Ray
+/// SDK `.object` is a library object of its own; a glTF's `.bin` and an OBJ's `.mtl` are raw only
+/// as what an asset names.
+pub const RAW_EXTENSIONS: [&str; 12] =
+    ["png", "jpg", "jpeg", "tga", "bmp", "dds", "wav", "ogg", "glb", "gltf", "obj", "ogf"];
+
+/// Whether a project file (project-relative, either slash) is raw data a media asset wraps, which
+/// is the project's only through its asset: a file of [`RAW_EXTENSIONS`], a `.thm` under
+/// `gamedata\textures` or beside a raw file of its name, an OBJ's `.mtl` or a glTF's `.bin` of
+/// its name (`beside` says whether a file of the project is there - an object's or a group's
+/// thumbnail is no raw file). Nothing under `rawdata\`, the X-Ray SDK library, is raw.
+#[must_use]
+pub fn is_raw(rel: &str, beside: impl Fn(&str) -> bool) -> bool {
+    let rel = rel.replace('\\', "/");
+    if rel.split('/').next().is_some_and(|top| top.eq_ignore_ascii_case("rawdata")) {
+        return false;
+    }
+    let Some((stem, ext)) = rel.rsplit_once('.').filter(|(s, _)| !s.ends_with('/')) else { return false };
+    let ext = ext.to_ascii_lowercase();
+    if RAW_EXTENSIONS.contains(&ext.as_str()) {
+        return true;
+    }
+    match ext.as_str() {
+        "thm" => {
+            rel.to_ascii_lowercase().starts_with("gamedata/textures/")
+                || RAW_EXTENSIONS.iter().any(|e| beside(&format!("{stem}.{e}")))
+        }
+        // what goes with a model of its name
+        "mtl" => beside(&format!("{stem}.obj")),
+        "bin" => beside(&format!("{stem}.gltf")),
+        _ => false,
+    }
+}
+
 /// The level build's own files in a level folder: what the compiler reads and the build keeps for
 /// itself, never what the game does.
 const LEVEL_BUILD_FILES: [&str; 9] = [
@@ -199,6 +233,37 @@ mod tests {
         assert!(!is_source_only_entry("gamedata"));
         assert!(is_media_asset_name("Wall.MeshAsset") && is_media_asset_name("hum.sndasset"));
         assert!(!is_media_asset_name("wall.glb") && !is_media_asset_name("meshasset"));
+    }
+
+    #[test]
+    fn raw_files_are_told_by_their_kind_and_what_lies_beside() {
+        let there = ["art/crate.obj", "art/hut.object", "art/tree.gltf", "art/icon.tga"];
+        let beside = |b: &str| there.contains(&b);
+        for p in [
+            "art\\Wall.PNG",
+            "gamedata/sounds/a.ogg",
+            "x.ogf",
+            "art/crate.mtl",
+            "art/tree.bin",
+            "art/icon.thm",
+            "gamedata/textures/od/lone.thm",
+        ] {
+            assert!(is_raw(p, beside), "{p}");
+        }
+        for p in [
+            "rawdata/textures/wall.tga",
+            "RawData\\sounds\\a.wav",
+            "art/hut.thm",
+            "art/other.mtl",
+            "art/data.bin",
+            "art/hut.object",
+            "notes.md",
+            "gamedata/scripts/a.script",
+            "png",
+            "folder.png/",
+        ] {
+            assert!(!is_raw(p, beside), "{p}");
+        }
     }
 
     #[test]

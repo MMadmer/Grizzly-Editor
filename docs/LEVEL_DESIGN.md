@@ -289,7 +289,9 @@ return {
 `level.status` says what is stale and why; `level.build` builds it - on a level of the game the module's piece
 (what it adds to the level's picture: its `authored` static objects and terrains, lit under the whole level) and its
 layers; `level.inspect` reads what was built; `level.play` starts the game on it. `mod.build` publishes the media
-assets with the module (`media` in its answer). `docs/MOD_QUICKSTART.md` has the rest.
+assets with the module (`media` in its answer), bakes the open scene's spawn layer and things, and over a level of the
+game builds the module's piece first when it is due: placing a static object and building the module is enough. On a
+level of the module's own `mod.build` compiles nothing and warns when a step is not built: `level.build` first. `docs/MOD_QUICKSTART.md` has the rest.
 
 ## 8. A worked example: a yard on Escape's slope
 

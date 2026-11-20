@@ -89,6 +89,11 @@ pub fn path(root: &Path, level: &str) -> PathBuf {
 /// The file's first line: what tells a file the level build made from one somebody wrote.
 pub const HEADER: &str = "; What the module adds to the level beside its picture and its spawns. Made by the level build: do not edit.";
 
+/// The version of the file the build writes (`[things] version`): the game reads every version up
+/// to its own and refuses a newer one by name (its `XMS_ARCHITECTURE.md` 8.5). A change of the
+/// file is a new version, with its step in the game.
+pub const VERSION: u32 = 1;
+
 /// Whether a file of this text is the level build's own: it starts with the build's line. A
 /// file that does not was written by somebody, and the build neither replaces nor removes it.
 #[must_use]
@@ -201,7 +206,7 @@ fn box_lines(out: &mut String, b: &BoxSaid) {
 /// The file for what the scene holds; `None` when it holds none of it.
 #[must_use]
 pub fn text(scene: &SceneState, over: Over) -> Option<Things> {
-    let mut out = format!("{HEADER}\r\n");
+    let mut out = format!("{HEADER}\r\n[things]\r\nversion = {VERSION}\r\n");
     let mut n = Counts::default();
     let mut warnings = Vec::new();
     let game = over == Over::Game;
@@ -456,6 +461,11 @@ mod tests {
         let Things { text, counts: n, warnings } = text(&s, Over::Game).unwrap();
         assert_eq!(n, Counts { sounds: 1, particles: 1, lights: 1, ..Counts::default() });
         assert!(warnings.is_empty(), "{warnings:?}");
+        // the build's line, then the file's version: what a later game reads it by
+        assert!(
+            text.starts_with(&format!("{HEADER}\r\n[things]\r\nversion = 1\r\n")) && is_builds(&text),
+            "{text}"
+        );
         assert!(
             text.contains("[sound:fire]\r\nname = ambient\\fire\r\nposition = 1, 2, 3\r\nvolume = 0.5\r\n"),
             "{text}"

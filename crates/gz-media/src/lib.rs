@@ -34,9 +34,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auto;
 pub mod check;
 mod cmd;
 pub mod doc;
+pub mod export;
 pub mod fields;
 pub mod files;
 pub mod import;
