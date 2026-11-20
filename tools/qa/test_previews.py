@@ -13,7 +13,9 @@ What it proves:
   T  preview.texture: a project image, a library texture and a game one open in the texture tab, each
      naming where it lives (origin) apart from its path; fit, 1:1 and a
      factor; the channel views RGBA, R, G, B and A (rgb still names RGBA); a mip; the Details pane on and off
-     and keeping its pt size; a bad channel or zoom is refused; close frees the tab
+     and keeping its pt size; a bad channel or zoom is refused; close frees the tab; a texture asset in place over
+     a .dds of the module's game data shows the file as it is, named by its path, and one that describes a texture
+     of the game (`source = "game:..."`) the game's picture
   M  preview.model: a model (the editor's objects, else the linked game's meshes) opens in the model tab,
      reports its geometry, switches Studio / Unlit, wireframe, bones and Details, frames and resets; a character
      of the linked game names its textures, none of them missing (the loader reads them out of the game)
@@ -248,6 +250,31 @@ def run_texture(project: str, shots: str | None) -> None:
         shot(shots, "texture_game")
     else:
         note("no linked game texture: the game source is not checked")
+    # texture assets in place in the module's game data: one over a .dds of the project shows the file as it is,
+    # one that describes a texture of the game shows the game's picture; both say their name and keys
+    tex = os.path.join(project, "gamedata", "textures", "qa_previews")
+    os.makedirs(tex, exist_ok=True)
+    shutil.copyfile(SHEET, os.path.join(tex, "sheet.dds"))
+    write_text(os.path.join(tex, "sheet.texasset"), 'return {\n  tex = 1,\n  source = "sheet.dds",\n  material = "phong",\n}\n')
+    t = cmd("preview.texture", action="open", path="gamedata/textures/qa_previews/sheet.texasset", source="project")
+    asset = t.get("asset") or {}
+    check(t.get("ok") and t.get("container") == "DDS" and t.get("width", 0) > 0 and t.get("decoded") is False,
+          "T a texture asset over a .dds of the project shows the file as it is", json.dumps(t)[:300])
+    check(asset.get("name", "").replace("/", "\\") == "qa_previews\\sheet" and "material" in asset.get("keys", {}),
+          "T named by its path below gamedata\\textures, with its keys", json.dumps(asset)[:300])
+    shot(shots, "texture_asset_dds")
+    under = cmd("file.list", source="game", kind="dds", path="textures", limit=50)
+    under = [f["path"].replace("\\", "/") for f in (under.get("files", []) if under.get("ok") else [])
+             if f.get("path", "").replace("\\", "/").lower().startswith("textures/")]
+    if under:
+        name = under[0][len("textures/"):-len(".dds")]
+        write_text(os.path.join(tex, "lens.texasset"), 'return {\n  tex = 1,\n  source = "game:' + name + '",\n}\n')
+        t = cmd("preview.texture", action="open", path="gamedata/textures/qa_previews/lens.texasset", source="project")
+        check(t.get("ok") and t.get("container") == "DDS" and t.get("width", 0) > 0,
+              "T a description of a texture of the game shows the game's picture", json.dumps(t)[:300])
+        shot(shots, "texture_asset_game")
+    else:
+        note("no texture of the linked game under textures: a description of one is not checked")
     bad = cmd("preview.texture", action="open", path="qa_previews/none.dds", source="project")
     check(not bad.get("ok"), "T a file that is not there is refused", json.dumps(bad)[:200])
     # it says so in its own sentence (not "cannot be decoded"), the tab shows it as an error state, and ui.audit reports

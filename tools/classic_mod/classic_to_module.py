@@ -16,10 +16,14 @@ mod's work is the mod minus its BASE (the game's files it was made from), applie
     own, cut out of its atlas; particles: the effects and groups it adds or changes, as loose `.pe` / `.pg`;
   * media: the files that are the mod's own bytes, and an older game version only where the mod's work needs it;
     its motion files against the game's of the same paths (`motion_files.py`): a copy of the game's file gets the
-    motions the game has grown since, a file of another skeleton gets a name of its own.
+    motions the game has grown since, a file of another skeleton gets a name of its own;
+  * media assets (`media_assets.py`, the editor's own import): every texture, sound and model of the module's
+    gamedata gets its asset beside it saying what its `.thm`, its `.ogg`'s comment or its `.ogf` said - the
+    `.thm` goes - and the build publishes every file as it is.
 
     python tools/classic_mod/classic_to_module.py --mod <gamedata> --game <game root> --out <new project>
         --id <module id> [--name <title>] [--base <archive names, comma separated, or a folder>]
+        [--editor <Grizzly-Cmd.exe>]
 
 It never changes the mod or the game. Everything it writes is listed in <out>\\temp\\classic_import.files: a
 rerun removes exactly that and nothing a person added. Needs python-lzo, Pillow, numpy and the game's
@@ -43,8 +47,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import compose  # noqa: E402
 import icons  # noqa: E402
 import items  # noqa: E402
+import ledger  # noqa: E402
 import luadata  # noqa: E402
 import media  # noqa: E402
+import media_assets  # noqa: E402
 import motion_files  # noqa: E402
 import notes  # noqa: E402
 import particles  # noqa: E402
@@ -58,7 +64,7 @@ OVERLAYS = ["configs\\dead_air_x64_ai.ltx", "configs\\dead_air_x64_pda3d_items.l
 STATE_FILES = {"configs\\axr_options.ltx": "the player's options, the game writes them",
                "configs\\atmosfear_options.ltx": "the player's weather options, the game writes them",
                "localization.ltx": "the player's language choice; and the engine reads no file at that path"}
-LEDGER = os.path.join("temp", "classic_import.files")
+LEDGER = ledger.LEDGER
 TEXT_EXT = (".ltx", ".xml", ".script")
 ATLAS = "textures\\ui\\ui_icon_equipment.dds"
 
@@ -75,6 +81,7 @@ class Converter:
         self.id = args.id
         self.name = args.name or args.id
         self.base_arg = args.base
+        self.editor = os.path.abspath(args.editor) if getattr(args, "editor", None) else media_assets.EDITOR
         self.t0 = time.time()
         self.written: dict[str, tuple[str, int]] = {}
         self.conflicts: list[str] = []
@@ -1293,6 +1300,30 @@ class Converter:
         self.log(f"motion files: {len(done.merged)} got the game's motions, {len(done.renamed)} of another skeleton "
                  f"renamed, {len(done.pointed)} models pointed at them, {len(done.kept)} left as they are")
 
+    def media_assets(self):
+        """The module's media given their assets in place: what `media_assets.py` does, with the assets it wrote
+        in the ledger and the descriptions they took in out of it."""
+        self.log("media assets of the module's game data")
+        try:
+            done = media_assets.process(self.out, self.editor, say=self.log)
+        except media_assets.Failed as e:
+            # the module stands without them: the files ship as the mod had them
+            self.problems.append(f"media assets: not made - {e}")
+            return
+        self.media_done = done
+        by_lower = {rel.lower(): rel for rel in self.written}
+        for rel in done.removed:
+            old = by_lower.get(rel.replace("/", "\\").lower())
+            if old is not None:
+                del self.written[old]
+        for rel in done.assets:
+            path = os.path.join(self.out, rel.replace("/", os.sep))
+            with open(path, "rb") as f:
+                data = f.read()
+            self.written[rel.replace("/", "\\")] = (hashlib.sha256(data).hexdigest(), len(data))
+        self.problems.extend(f"media asset: {line}" for line in done.problems)
+        self.log(f"media assets: {len(done.assets)} written, {len(done.removed)} descriptions said by them removed")
+
     def run(self):
         os.makedirs(self.out, exist_ok=True)
         self.prepare_out()
@@ -1301,28 +1332,33 @@ class Converter:
         for f in ("check_tree.txt", "check_files.txt"):
             if os.path.exists(os.path.join(self.port, f)):
                 os.remove(os.path.join(self.port, f))
-        self.scan()
-        self.pick_bases()
-        self.views()
-        self.config_tree()
-        self.outside_configs()
-        self.write_strings()
-        self.xml_and_scripts()
-        self.particles()
-        self.use_animations()
-        self.media()
-        self.references()
-        self.motion_files()
-        self.lint_ltxp()
-        self.project()
-        notes.write(self)
-        for f in ("check_tree.txt", "check_files.txt"):
-            p = os.path.join(self.port, f)
-            if os.path.exists(p):
-                data = open(p, "rb").read()
-                self.written[os.path.join("port", f)] = (hashlib.sha256(data).hexdigest(), len(data))
-        self.finish_ledger()
-        self.game.close()
+        # whatever stops the run, what it wrote is in the ledger: a rerun removes exactly that
+        try:
+            self.scan()
+            self.pick_bases()
+            self.views()
+            self.config_tree()
+            self.outside_configs()
+            self.write_strings()
+            self.xml_and_scripts()
+            self.particles()
+            self.use_animations()
+            self.media()
+            self.references()
+            self.motion_files()
+            # the manifest first: the editor opens the folder as a project by it
+            self.project()
+            self.media_assets()
+            self.lint_ltxp()
+            notes.write(self)
+            for f in ("check_tree.txt", "check_files.txt"):
+                p = os.path.join(self.port, f)
+                if os.path.exists(p):
+                    data = open(p, "rb").read()
+                    self.written[os.path.join("port", f)] = (hashlib.sha256(data).hexdigest(), len(data))
+        finally:
+            self.finish_ledger()
+            self.game.close()
         if self.conflicts:
             self.problems.append(f"{len(self.conflicts)} files were in the way and not overwritten: {self.conflicts[:10]}")
         self.log(f"done: {len(self.written)} files written; problems: {len(self.problems)}")
@@ -1442,6 +1478,7 @@ def main() -> int:
     ap.add_argument("--id", required=True, help="the module id")
     ap.add_argument("--name", help="the module's title")
     ap.add_argument("--base", help="what the mod was made from: archive names (comma separated) or a folder")
+    ap.add_argument("--editor", help="Grizzly-Cmd.exe for the media assets (default: the repository's release build)")
     args = ap.parse_args()
     if not re.match(r"^[a-z][a-z0-9_]*$", args.id):
         print("the module id is a-z 0-9 _ and starts with a letter")

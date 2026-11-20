@@ -27,6 +27,14 @@ KEY_FAMILIES = [
 ]
 
 
+def _media_counts(done):
+    """How many assets of each kind a media step wrote: "1793 textures, 888 sounds and 425 models"."""
+    n = collections.Counter(os.path.splitext(a)[1].lower() for a in done.assets)
+    kinds = ((".texasset", "texture"), (".sndasset", "sound"), (".meshasset", "model"))
+    parts = [f"{n[e]} {w}{'' if n[e] == 1 else 's'}" for e, w in kinds if n[e]]
+    return ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1] if parts else "no assets"
+
+
 def key_family(k):
     for name, rx in KEY_FAMILIES:
         if re.search(rx, k, re.I):
@@ -98,7 +106,9 @@ def write(cv):
             ("`gamedata\\configs\\text\\`", ", ".join(f"{lang}: {n} strings" for lang, n in sorted(cv.str_written.items())) or "none"),
             ("`gamedata\\particles\\`", f"{rep['particles']['files'] if rep.get('particles') else 0} effects and groups (`.pe`, `.pg`)"),
             ("`gamedata\\` (media)", f"{m.get('own', {}).get('files', 0)} files of the mod's own ({m.get('own', {}).get('mb', 0)} MB), "
-                                     f"{m.get('kept old', {}).get('files', 0)} older game files its work needs"),
+                                     f"{m.get('kept old', {}).get('files', 0)} older game files its work needs" +
+                                     (f"; {_media_counts(cv.media_done)} beside their files"
+                                      if getattr(cv, "media_done", None) and cv.media_done.assets else "")),
             ("`port\\`", "what the next step needs: scripts, XML diffs, use animations, the lists below (not shipped)")]
     L += _table(rows, ["Where", "What"])
     L += ["", "## How it was made", "",
@@ -176,6 +186,15 @@ def write(cv):
     if md and md.kept:
         L.append(f"- {len(md.kept)} motion files on a game path were left as they are: " +
                  ", ".join(f"`{f}` ({why})" for f, why in sorted(md.kept.items())) + ".")
+    mdone = getattr(cv, "media_done", None)
+    if mdone and (mdone.assets or mdone.problems):
+        gone = len(mdone.removed)
+        L.append(f"- Every texture, sound and model under the module's `gamedata\\textures`, `sounds` and `meshes` has its "
+                 f"asset beside it ({_media_counts(mdone)}): what the game reads of its `.thm`, its `.ogg`'s comment or "
+                 f"its `.ogf`, which the game reads over the file. {gone} `.thm` "
+                 f"{'description is' if gone == 1 else 'descriptions are'} said by their assets and gone; the build "
+                 "ships every file as it is." + (" Left as they are: " + "; ".join(f"`{x}`" for x in mdone.problems) + "."
+                                                 if mdone.problems else ""))
     if cv.recipes:
         L.append(f"- Craft recipes the mod added to `ui_itm_craft.script` are the module's recipes file `{cv.recipe_file}`: " +
                  ", ".join(f"`{r}` at `{at}`" for r, rows in sorted(cv.recipes.items()) for at, _, _ in rows) + ".")

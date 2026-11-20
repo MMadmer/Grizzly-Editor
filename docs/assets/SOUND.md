@@ -21,13 +21,13 @@ return {
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `snd` | integer | - | The header: the format version (1). A file of a newer version is refused by name. |
-| `source` | string (a file beside the asset) | the file with the asset's own name and `.wav` or `.ogg` | The sound. |
-| `name` | string (a game name) | `<module id>\<file name>` | The name the game knows the sound by: it is published as `sounds\<name>.ogg`. |
+| `source` | string (a file beside the asset) | the file with the asset's own name and `.wav` or `.ogg` | The sound. An `.ogg` whose own parameters are the asset's - or one with none the game reads (no comment, an encoder's tag) under an asset that states none - is published as it is; otherwise with the asset's parameters said again in it, its sound untouched. |
+| `name` | string (a game name) | the path below `gamedata\sounds` for an asset that lies there, else `<module id>\<file name>` | The name the game knows the sound by: it is published as `sounds\<name>.ogg`. |
 | `type` | one of these words, or a list of them: `"no_sound"` `"item_picking_up"` `"item_dropping"` `"item_hiding"` `"item_taking"` `"item_using"` `"weapon_shooting"` `"weapon_empty_clicking"` `"weapon_bullet_hit"` `"weapon_recharging"` `"monster_dying"` `"monster_injuring"` `"monster_step"` `"monster_talking"` `"monster_attacking"` `"monster_eating"` `"anomaly_idle"` `"world_object_breaking"` `"world_object_colliding"` `"world_object_exploding"` `"world_ambient"` `"weapon"` `"item"` `"monster"` `"anomaly"` `"world"` `"picking_up"` `"dropping"` `"hiding"` `"taking"` `"using"` `"shooting"` `"empty_clicking"` `"bullet_hit"` `"recharging"` `"dying"` `"injuring"` `"step"` `"talking"` `"attacking"` `"eating"` `"idle"` `"object_breaking"` `"object_colliding"` `"object_exploding"` `"ambient"` | "no_sound" | What NPCs make of it, in the game's own words. |
-| `min_distance` | number, 0 to 10000 | 1 | Up to this distance the sound plays at its full volume, metres. |
-| `max_distance` | number, 0.1 to 10000 | 300 | Beyond this distance it is not heard, metres. |
+| `min_distance` | number, 0 to 1000000 | 1 | Up to this distance the sound plays at its full volume, metres. |
+| `max_distance` | number, 0.1 to 1000000 | 300 | Beyond this distance it is not heard, metres. |
 | `volume` | number, 0 to 10 | 1 | Its base volume. |
-| `ai_distance` | number, 0.1 to 10000 | `max_distance` | How far NPCs hear it, metres. |
+| `ai_distance` | number, 0.1 to 1000000 | `max_distance` | How far NPCs hear it, metres. |
 | `quality` | number, -0.1 to 1 | 0 | The Vorbis quality a `.wav` source is encoded with. |
 | `copyrighted` | boolean | false | A recording that may not be streamed: the game does not play it while its streamer mode is on. |
 | `streamer` | string (a game name) | none: nothing plays | What plays in its place while the streamer mode is on, by its game name: a sound that is not copyrighted itself - a sound asset's `name` without `copyrighted`, or a sound of the game its own list (`configs\dead_air_x64_sound_rights.ltx`) does not name. Only for a copyrighted sound. |

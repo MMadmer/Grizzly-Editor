@@ -256,6 +256,48 @@ mod tests {
         px
     }
 
+    /// Some tools wrote the bump chunk a byte short: the name's terminator lies past its end, and
+    /// the game reads the name through to it - the chunks after it are not found then, by the game
+    /// or here.
+    #[test]
+    fn a_name_its_chunk_was_written_short_of_is_read_as_the_game_reads_it() {
+        let mut p = TextureParams { width: 4, height: 4, ..TextureParams::default() };
+        p.bump_mode = crate::params::BumpMode::USE;
+        p.bump_name = "wpn\\scope_bump".into();
+        p.ext_normal_map_name = "wpn\\scope_n".into();
+        let mut bytes = write_texture_thm(&TextureThm { pixels: None, params: p.clone() }).unwrap();
+        // the bump chunk's length one short: its last byte, the terminator, outside it
+        let name = b"wpn\\scope_bump\0";
+        let at = bytes.windows(name.len()).position(|w| w == name).unwrap();
+        let size_at = at - 8 - 4;
+        let size = u32::from_le_bytes(bytes[size_at..size_at + 4].try_into().unwrap());
+        bytes[size_at..size_at + 4].copy_from_slice(&(size - 1).to_le_bytes());
+        let read = read_texture_thm(&bytes).unwrap().params;
+        assert_eq!(read.bump_name, "wpn\\scope_bump");
+        assert_eq!(read.bump_mode, crate::params::BumpMode::USE);
+        // the game finds what follows where it lies, whatever the length before it said
+        assert_eq!(read.ext_normal_map_name, "wpn\\scope_n");
+    }
+
+    /// A chunk whose length runs past the end of the file is none for the game: it looks on,
+    /// byte by byte, and finds the chunks that lie inside it.
+    #[test]
+    fn a_chunk_longer_than_the_file_is_not_read_and_what_lies_in_it_is() {
+        let mut p = TextureParams { width: 4, height: 4, ..TextureParams::default() };
+        p.bump_mode = crate::params::BumpMode::USE;
+        p.bump_name = "wpn\\mag_bump".into();
+        p.ext_normal_map_name = "wpn\\mag_n".into();
+        p.fade_delay = 3;
+        let mut bytes = write_texture_thm(&TextureThm { pixels: None, params: p }).unwrap();
+        let name = b"wpn\\mag_bump\0";
+        let at = bytes.windows(name.len()).position(|w| w == name).unwrap();
+        let size_at = at - 8 - 4;
+        bytes[size_at..size_at + 4].copy_from_slice(&61u32.to_le_bytes());
+        let read = read_texture_thm(&bytes).unwrap().params;
+        assert_eq!((read.bump_mode, read.bump_name.as_str()), (crate::params::BumpMode::NONE, ""));
+        assert_eq!((read.ext_normal_map_name.as_str(), read.fade_delay), ("wpn\\mag_n", 3));
+    }
+
     #[test]
     fn a_texture_thm_without_a_picture_is_what_the_editor_writes() {
         let thm = TextureThm {

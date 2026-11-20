@@ -61,14 +61,30 @@ return {\n  mesh = 1,\n  surfaces = {\n    { name = \"plank\", texture = \"wood\
 #[serde(deny_unknown_fields)]
 pub struct ImportParams {
     /// The files to bring in: absolute, or project-relative. A model (`.glb`, `.gltf`, `.obj`,
-    /// `.object`), a picture (`.png`, `.jpg`, `.tga`, `.bmp`, `.dds`) or a sound (`.wav`, `.ogg`).
+    /// `.object`, `.ogf`), a picture (`.png`, `.jpg`, `.tga`, `.bmp`, `.dds`), a texture
+    /// description alone (`.thm`: of a texture of the game) or a sound (`.wav`, `.ogg`). A file of
+    /// the project stays where it lies and gets its asset beside it; a file of the game's own
+    /// formats brings what it says of itself (a `.thm` beside a picture, an `.ogg`'s parameters,
+    /// a compiled model of a `gamedata\meshes` tree is dynamic) and keeps its game name - the one
+    /// of where it lies under a `gamedata` tree, else of where it lands. A picture the game cannot
+    /// load (no DDS, a name it never asks for) gets no asset: it stays, or is copied in, as a file.
     pub from: Vec<String>,
-    /// The project folder they go into; left out: `models`, `textures` or `sounds` by kind.
+    /// The project folder the files go into: one from outside, or a file of the project from
+    /// another folder, is copied there. Left out: a file of the project stays where it lies, one
+    /// from outside goes into `models`, `textures` or `sounds` by kind.
     #[serde(default)]
     pub to: Option<String>,
     /// Replace files of the project that are there already (they are lost).
     #[serde(default)]
     pub overwrite: bool,
+    /// Remove each `.thm` of the project its asset now says all the game reads of (what only the
+    /// X-Ray SDK reads of it - its thumbnail, how its picture was made - is lost with it). Left
+    /// out, the `.thm` stays beside its picture and ships as it did.
+    #[serde(default)]
+    pub remove_descriptions: bool,
+    /// Answer what the import would write, keep and remove, and write nothing.
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 fn rel_param(root: &Path, p: &str) -> Result<RelPath, CmdError> {
@@ -98,10 +114,19 @@ async fn asset_import(ed: Arc<Editor>, p: ImportParams, _o: Origin) -> Reply {
         .exec
         .io(move || {
             let module = module.unwrap_or_else(|| crate::files::module_id(&r));
-            import::plan(&from, to.as_ref(), &module)
+            import::plan(&from, to.as_ref(), &module, &r)
         })
         .await;
-    if plan.writes.is_empty() {
+    // the descriptions the assets now say: removed when asked, else they stay and are named
+    let described: Vec<String> = plan.removes.iter().map(ToString::to_string).collect();
+    let removes = if p.remove_descriptions { plan.removes.clone() } else { Vec::new() };
+    let left: Vec<&String> = if p.remove_descriptions { Vec::new() } else { described.iter().collect() };
+    if plan.writes.is_empty() && removes.is_empty() {
+        if !plan.kept.is_empty() {
+            return Ok(
+                json!({ "assets": [], "copied": [], "kept": plan.kept, "removed": [], "descriptions": left, "problems": plan.problems }),
+            );
+        }
         return Err(
             CmdError::new("refused", "nothing to import").with_data(json!({ "problems": plan.problems }))
         );
@@ -125,6 +150,16 @@ async fn asset_import(ed: Arc<Editor>, p: ImportParams, _o: Origin) -> Reply {
         )
         .with_data(json!({ "files": there })));
     }
+    for rel in &removes {
+        guard.check(&rel.to_fs(&root)).map_err(|e| CmdError::new("refused", e.0))?;
+    }
+    let removed: Vec<String> = removes.iter().map(ToString::to_string).collect();
+    if p.dry_run {
+        let writes: Vec<String> = plan.writes.iter().map(|(r, _)| r.to_string()).collect();
+        return Ok(
+            json!({ "dry_run": true, "assets": plan.assets, "copied": plan.copied, "kept": plan.kept, "removed": removed, "descriptions": left, "writes": writes, "problems": plan.problems }),
+        );
+    }
     let (writes, r, watch) = (plan.writes.clone(), root.clone(), project.clone());
     let written = ed
         .exec
@@ -146,6 +181,15 @@ async fn asset_import(ed: Arc<Editor>, p: ImportParams, _o: Origin) -> Reply {
                 watch.tree.changes().note_written(&rel, &bytes);
                 done.push(abs);
             }
+            // the descriptions the assets now say all of, once every asset is written
+            for rel in removes {
+                let abs = rel.to_fs(&r);
+                match std::fs::remove_file(&abs) {
+                    Ok(()) => done.push(abs),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(format!("{rel}: {}", gz_base::io_reason(&e))),
+                }
+            }
             Ok(done)
         })
         .await
@@ -154,7 +198,9 @@ async fn asset_import(ed: Arc<Editor>, p: ImportParams, _o: Origin) -> Reply {
         project.tree.mark_fs(abs);
     }
     project.tree.refresh().await;
-    Ok(json!({ "assets": plan.assets, "copied": plan.copied, "problems": plan.problems }))
+    Ok(
+        json!({ "assets": plan.assets, "copied": plan.copied, "kept": plan.kept, "removed": removed, "descriptions": left, "problems": plan.problems }),
+    )
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -378,9 +424,9 @@ pub fn register(reg: &mut Registry) {
     reg.cmd(
         Spec::write(
             "asset.import",
-            "Brings model, picture and sound files into the project, each with its asset beside it.",
+            "Brings model, picture and sound files into the project, each with its asset beside it; a file of the project gets its asset where it lies, saying what the game's own formats say of it.",
         )
-        .destroys_with(&["overwrite"])
+        .destroys_with(&["overwrite", "remove_descriptions"])
         .example("from=[\"D:/art/wall.glb\"] to=models/bunker"),
         asset_import,
     );

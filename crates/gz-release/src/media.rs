@@ -2,8 +2,9 @@
 //! them ([`MediaBuild`], set by [`crate::install`]). Every asset that ships - a texture, a sound,
 //! a dynamic model - is baked through `gz_media::publish` into the project's `temp\media` and
 //! handed to the build under the game's place for its name; the asset where it lies and every
-//! file it is made of are sources, which the build never ships as they are. A release stages its
-//! module through the same build, so it ships the same files.
+//! file it is made of are sources, which the build never ships as they are - but a source that is
+//! the game's container already, which is handed on itself (`gz_media::publish`). A release stages
+//! its module through the same build, so it ships the same files.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -18,9 +19,10 @@ use gz_media::{Index, Media, Payload};
 /// The publisher the build asks.
 pub struct MediaBuild;
 
-/// The files the assets of `index` are made of, as the build's walk leaves them out. A file of
-/// the module's `gamedata` is none of them: the game reads it where it lies, by its own name,
-/// and an asset made over it must not take it out of the module.
+/// The files the assets of `index` are made of, as the build's walk leaves them out
+/// ([`gz_media::Entry::takes`]): a file of the module's `gamedata` only when its asset
+/// publishes it at that very path - the game reads it where it lies, by its own name, and an
+/// asset that publishes another name must not take it out of the module.
 #[must_use]
 pub fn sources_of(index: &Index) -> Sources {
     let mut out = Sources::default();
@@ -29,7 +31,8 @@ pub fn sources_of(index: &Index) -> Sources {
             e.source
                 .iter()
                 .chain(&e.uses)
-                .filter(|r| !gz_media::index::ships_where_it_lies(r.as_str()))
+                .chain(&e.companion)
+                .filter(|r| e.takes(r.as_str()))
                 .map(|r| source_key(r.as_str())),
         );
     }

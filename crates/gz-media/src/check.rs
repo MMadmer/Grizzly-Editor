@@ -11,7 +11,7 @@
 //! | `M108` | a dynamic model without bones gets one (note) |
 //! | `M109` | a value outside what its key takes |
 //! | `M110` | `parts` together with `source` |
-//! | `M111` | what the model cannot take (warning) |
+//! | `M111` | what the asset cannot take: a surface row the model lacks, a key that says how a picture is made over a game texture (warnings); a description of the game's texture with a name or a bump picture of its own |
 //! | `M112` | a surface that wears no texture |
 //! | `M113` | a source that lies outside the project |
 //! | `M114` | a sound's `streamer` on a sound that is not copyrighted (warning) |
@@ -219,14 +219,16 @@ pub fn issues(
         },
         MediaKind::Texture => {
             let name = index.at(rel).map(|e| e.name.clone()).unwrap_or_default();
-            match resolve::texture(root, rel, &name) {
+            match texture_facts(root, rel, &name, game, &mut out) {
                 Err(f) => out.push(f.issue),
                 Ok(t) => {
                     let mut named: Vec<(Vec<Seg>, String)> = Vec::new();
                     if let Some(d) = t.asset.detail.as_ref().and_then(|d| d.texture.clone()) {
                         named.push((vec![Seg::key("detail"), Seg::key("texture")], d));
                     }
-                    if let Some(n) = &t.asset.normal_map {
+                    // a bump map's own normal map is what it is made from: over a game texture,
+                    // published as it is, nothing reads it
+                    if let Some(n) = t.asset.normal_map.as_ref().filter(|_| !t.as_is) {
                         named.push((vec![Seg::key("normal_map")], n.clone()));
                     }
                     if let Some(b) =
@@ -240,7 +242,7 @@ pub fn issues(
                         }
                     }
                     if let Some(src) = t.asset.bump.as_ref().and_then(|b| b.source.as_deref()) {
-                        let p = crate::files::beside(&t.source.with_file_name("x"), src);
+                        let p = crate::files::beside(&root.join(rel.replace('/', "\\")), src);
                         if !crate::files::inside(root, &p) {
                             out.push(Issue::new(
                                 resolve::OUTSIDE,
@@ -292,6 +294,100 @@ pub fn issues(
         },
     }
     out
+}
+
+/// What the check of a texture asset reads of it: its keys, and its picture's - the header of
+/// a game texture (`.dds`, published as it is), the decoded picture of any other.
+struct TextureFacts {
+    asset: crate::texture::TextureAsset,
+    /// Its picture is a game texture published as it is (a `.dds`), or the game's own.
+    as_is: bool,
+}
+
+/// The keys a texture asset states that say how a picture is made, each a warning at its key:
+/// over a game texture published as it is nothing applies them.
+fn making_keys_unread(value: &gz_luadata::Value, what: &str, out: &mut Vec<Issue>) {
+    for k in crate::texture::MAKING_KEYS {
+        if value.get(k).is_some() {
+            out.push(Issue::new(
+                resolve::CANNOT,
+                Severity::Warning,
+                vec![Seg::key(k)],
+                format!("`{k}` says how a picture is made: {what}, published as it is, nothing applies it"),
+            ));
+        }
+    }
+}
+
+/// A texture asset's facts for its check: a description of a texture of the game is told
+/// against the game's list, a `.dds` by its header, any other picture decoded. Blocking.
+fn texture_facts(
+    root: &Path,
+    rel: &str,
+    name: &str,
+    game: &GameLists,
+    out: &mut Vec<Issue>,
+) -> Result<TextureFacts, resolve::Failure> {
+    let abs = root.join(rel.replace('/', "\\"));
+    let text = std::fs::read_to_string(&abs).map_err(|e| {
+        resolve::Failure::new(resolve::UNREADABLE, "", format!("{rel}: {}", gz_base::io_reason(&e)))
+    })?;
+    let value = crate::kind::load(MediaKind::Texture, rel, &text)
+        .map_err(|e| resolve::Failure::new(resolve::UNREADABLE, "", e))?;
+    let asset = crate::texture::TextureAsset::from_value(&value).0;
+    if let Some(g) = crate::files::game_texture(asset.source.as_deref()) {
+        // a description of the game's texture publishes under that texture's name, or nowhere
+        if asset.name.as_deref().is_some_and(|n| crate::read::name_key(n) != crate::read::name_key(&g)) {
+            out.push(Issue::new(
+                resolve::CANNOT,
+                Severity::Error,
+                vec![Seg::key("name")],
+                format!(
+                    "a description of the game's texture '{g}' is that texture's: leave `name` out (it is '{g}'), or give the asset a picture of its own"
+                ),
+            ));
+        }
+        if game.linked && !game.has_texture(&g) {
+            out.push(Issue::new(
+                NO_TEXTURE,
+                Severity::Warning,
+                vec![Seg::key("source")],
+                format!(
+                    "the game has no texture '{g}': this describes a texture nobody has (`asset.find kind=texture` lists what there is)"
+                ),
+            ));
+        }
+        // nothing is made over the game's picture: a bump picture would bake into nothing
+        if asset.bump.as_ref().is_some_and(|b| b.source.is_some()) {
+            out.push(Issue::new(
+                resolve::CANNOT,
+                Severity::Error,
+                vec![Seg::key("bump"), Seg::key("source")],
+                format!(
+                    "a description of the game's texture '{g}' makes no bump map from a picture: name a bump texture (`bump.texture`) instead"
+                ),
+            ));
+        }
+        making_keys_unread(&value, "the game's texture", out);
+        return Ok(TextureFacts { asset, as_is: true });
+    }
+    let (asset, source, _) = resolve::texture_source(root, rel)?;
+    if crate::files::is_game_texture_file(&source) {
+        let bytes = crate::files::dds_head(&source).map_err(|e| {
+            resolve::Failure::new(
+                resolve::UNREADABLE,
+                "source",
+                format!("{}: {}", source.display(), gz_base::io_reason(&e)),
+            )
+        })?;
+        let leaf = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        gz_fmt_tex::read_dds_info(&bytes)
+            .map_err(|e| resolve::Failure::new(resolve::UNREADABLE, "source", format!("{leaf}: {e}")))?;
+        making_keys_unread(&value, &format!("{leaf} is a game texture already"), out);
+        return Ok(TextureFacts { asset, as_is: true });
+    }
+    let t = resolve::texture(root, rel, name)?;
+    Ok(TextureFacts { asset: t.asset, as_is: false })
 }
 
 /// The problems of a sound's replacement in the streamer mode, at its `streamer` key: one on a

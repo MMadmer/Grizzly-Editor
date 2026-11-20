@@ -4,7 +4,7 @@
 //! changes no file itself, but for a picture from Explorer made into a texture of the project
 //! (`import_files`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gz_app::{DocCx, OpenRequest};
@@ -589,14 +589,17 @@ pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
 
 /// Whether a companion takes the asset's new name: a thumbnail and a scene's folder always do;
 /// what a media asset takes its data from only when it is found by the asset's own name (the
-/// asset names no `source`) and has that name.
+/// asset names no `source`) and has that name - with the `#` companion of a bump pair and the
+/// `.thm` beside the picture.
 #[must_use]
 pub(crate) fn follows_rename(asset: &str, companion: &str, names_source: bool) -> bool {
     if gz_project::asset_kind::MediaKind::of_file(asset).is_none() {
         return true;
     }
+    let (theirs, mine) = (crate::catalog::stem(leaf_of(companion)), crate::catalog::stem(leaf_of(asset)));
     !names_source
-        && crate::catalog::stem(leaf_of(companion)).eq_ignore_ascii_case(crate::catalog::stem(leaf_of(asset)))
+        && (theirs.eq_ignore_ascii_case(mine)
+            || theirs.strip_suffix('#').is_some_and(|t| t.eq_ignore_ascii_case(mine)))
 }
 
 /// Whether the media asset at `rel` (project-relative) names its source in its text.
@@ -1016,14 +1019,54 @@ pub(crate) fn keeps_files_as_they_are(dst: &str) -> bool {
     top.eq_ignore_ascii_case("gamedata") || top.eq_ignore_ascii_case("rawdata")
 }
 
+/// Whether a file of the game's own format lands in `dst` as an asset: a `.dds` or a `.thm`
+/// under `gamedata\textures`, an `.ogg` under `gamedata\sounds`, an `.ogf` under
+/// `gamedata\meshes` - where the game looks for its kind. A `#` companion whose texture comes in
+/// with it travels with that texture instead.
+fn game_format_asset(f: &Path, dst: &str, all: &[PathBuf]) -> bool {
+    let dst = dst.replace('/', "\\").to_ascii_lowercase();
+    let under = |folder: &str| dst == folder || dst.starts_with(&format!("{folder}\\"));
+    let name = f.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let ext = name.rsplit('.').next().unwrap_or("");
+    match ext {
+        "dds" => {
+            let Some(stem) = name.strip_suffix("#.dds") else { return under("gamedata\\textures") };
+            let texture = f.with_file_name(format!("{stem}.dds")).to_string_lossy().to_lowercase();
+            under("gamedata\\textures") && !all.iter().any(|o| o.to_string_lossy().to_lowercase() == texture)
+        }
+        "thm" => under("gamedata\\textures"),
+        "ogg" => under("gamedata\\sounds"),
+        "ogf" => under("gamedata\\meshes"),
+        _ => false,
+    }
+}
+
+/// Whether a file is the `#` companion of a texture brought in with it, which `asset.import`
+/// copies with that texture.
+fn travels_with_its_texture(f: &Path, all: &[PathBuf]) -> bool {
+    let name = f.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    name.strip_suffix("#.dds").is_some_and(|stem| {
+        let texture = f.with_file_name(format!("{stem}.dds")).to_string_lossy().to_lowercase();
+        all.iter().any(|o| o.to_string_lossy().to_lowercase() == texture)
+    })
+}
+
 /// What the files brought into `dst` are made into: the models, pictures and sounds that become
-/// assets (`asset.import`), and the rest, copied as they are.
+/// assets (`asset.import`), and the rest, copied as they are. In the game's own tree the files
+/// of its formats become assets where the game looks for them - a `#` companion goes with its
+/// texture and is neither - and the rest stays as it comes.
 #[must_use]
 pub(crate) fn import_split(files: Vec<PathBuf>, dst: &str) -> (Vec<PathBuf>, Vec<PathBuf>) {
     if keeps_files_as_they_are(dst) {
-        return (Vec::new(), files);
+        let all = files.clone();
+        let game_data = dst.split(['\\', '/']).next().is_some_and(|t| t.eq_ignore_ascii_case("gamedata"));
+        return files
+            .into_iter()
+            .filter(|f| !(game_data && travels_with_its_texture(f, &all)))
+            .partition(|f| game_data && game_format_asset(f, dst, &all));
     }
-    files.into_iter().partition(|f| {
+    let all = files.clone();
+    files.into_iter().filter(|f| !travels_with_its_texture(f, &all)).partition(|f| {
         f.file_name().is_some_and(|n| gz_media::files::kind_of_source(&n.to_string_lossy()).is_some())
     })
 }
@@ -1031,10 +1074,10 @@ pub(crate) fn import_split(files: Vec<PathBuf>, dst: &str) -> (Vec<PathBuf>, Vec
 /// Files from Explorer dropped on a project folder, or picked with Add > Import...: a model
 /// (`.glb`, `.gltf`, `.obj`, `.object`), a picture or a sound becomes an asset there
 /// (`asset.import`: the file copied in, its asset beside it); anything else is copied in
-/// (`file.copy`). The game's and the X-Ray SDK's folders keep what comes in as it is, but for a
-/// picture dropped under `gamedata\textures`, which becomes a `.dds` there, the way the game reads
-/// it. The frame says how many assets were made; files of the project in the way are asked about
-/// first.
+/// (`file.copy`). The game's and the X-Ray SDK's folders keep what comes in as it is: a file of
+/// the game's own format where the game looks for its kind gets its asset beside it, a picture
+/// dropped under `gamedata\textures` becomes a `.dds` there, the way the game reads it. The frame
+/// says how many assets were made; files of the project in the way are asked about first.
 pub(crate) fn import_files(
     editor: &Arc<Editor>,
     browser: &Arc<ContentBrowser>,
@@ -1715,6 +1758,9 @@ mod tests {
         assert!(follows_rename("m\\wall.meshasset", "m\\wall.glb", false));
         assert!(!follows_rename("m\\wall.meshasset", "m\\wall.glb", true));
         assert!(!follows_rename("m\\wall.meshasset", "m\\wall_lod.bin", false));
+        assert!(follows_rename("t\\ak_bump.texasset", "t\\ak_bump#.dds", false));
+        assert!(follows_rename("t\\ak.texasset", "t\\ak.thm", false));
+        assert!(!follows_rename("t\\ak.texasset", "t\\ak#.dds", true));
         assert!(follows_rename("rawdata\\objects\\a.object", "rawdata\\objects\\a.thm", true));
         // what lies below the asset's folder keeps its place there
         assert_eq!(
@@ -1735,6 +1781,33 @@ mod tests {
         assert!(rest[0].ends_with("readme.txt"));
         let (media, rest) = import_split(files(), "gamedata\\textures\\ui");
         assert_eq!((media.len(), rest.len()), (0, 4));
+        // the game's own formats where the game looks for them become assets in place; a `#`
+        // companion travels with its texture, one alone is a texture of its own
+        let game = || {
+            [
+                "D:\\mod\\ak.dds",
+                "D:\\mod\\ak#.dds",
+                "D:\\mod\\ak.thm",
+                "D:\\mod\\lone#.dds",
+                "D:\\mod\\shot.ogg",
+                "D:\\mod\\ak.ogf",
+                "D:\\mod\\ak.omf",
+            ]
+            .map(PathBuf::from)
+            .to_vec()
+        };
+        let names = |v: &[PathBuf]| -> Vec<String> {
+            v.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+        };
+        let (media, rest) = import_split(game(), "gamedata\\textures\\wpn");
+        assert_eq!(names(&media), ["ak.dds", "ak.thm", "lone#.dds"]);
+        assert_eq!(names(&rest), ["shot.ogg", "ak.ogf", "ak.omf"]);
+        let (media, _) = import_split(game(), "gamedata\\sounds");
+        assert_eq!(names(&media), ["shot.ogg"]);
+        let (media, _) = import_split(game(), "gamedata\\meshes\\dynamics");
+        assert_eq!(names(&media), ["ak.ogf"]);
+        let (media, _) = import_split(game(), "rawdata\\textures");
+        assert!(media.is_empty());
         assert!(keeps_files_as_they_are("RawData") && !keeps_files_as_they_are("art\\gamedata"));
         let spec = replace_spec(&["models\\wall.glb".to_owned()]);
         assert!(spec.destructive && spec.items == [Tx::raw("models\\wall.glb")]);

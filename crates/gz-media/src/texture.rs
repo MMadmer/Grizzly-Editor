@@ -67,6 +67,8 @@ pub struct TextureAsset {
     pub bump: Option<Bump>,
     pub detail: Option<Detail>,
     pub extra_flags: Option<u32>,
+    /// The relief's depth of a texture without a `bump` table of its own (a bump map itself).
+    pub depth: Option<f64>,
 }
 
 /// The flags a key names, each with its key.
@@ -91,6 +93,27 @@ fn named_bits() -> TextureFlags {
 
 /// The default bump depth of a description.
 const DEPTH: f64 = 0.05;
+
+/// The keys that say how a picture is made into a game texture, and nothing more: over a game
+/// texture published as it is (a `.dds`) nothing reads them.
+pub const MAKING_KEYS: [&str; 16] = [
+    "format",
+    "mips",
+    "mip_filter",
+    "binary_alpha",
+    "dither",
+    "dither_each_mip",
+    "alpha_border",
+    "color_border",
+    "border_color",
+    "fade_to_color",
+    "fade_to_alpha",
+    "fade_color",
+    "fade_amount",
+    "fade_delay",
+    "normal_map",
+    "depth",
+];
 
 /// The description a texture of this type starts as: the editor's new texture, alpha as the
 /// picture has it, the format by alpha, then what the type needs.
@@ -139,6 +162,7 @@ impl TextureAsset {
         t.weight = read::number(&mut cx, v, TEXTURE, "weight");
         t.normal_map = read::text(&mut cx, v, "normal_map");
         t.extra_flags = read::integer(&mut cx, v, TEXTURE, "extra_flags").map(|n| n as u32);
+        t.depth = read::number(&mut cx, v, TEXTURE, "depth");
         if let Some(b) = v.get("bump") {
             if b.is_table() {
                 t.bump = Some(cx.within(&[Seg::key("bump")], |cx| Bump {
@@ -224,6 +248,9 @@ impl TextureAsset {
         }
         if let Some(n) = &self.normal_map {
             p.ext_normal_map_name = n.as_str().into();
+        }
+        if let Some(d) = self.depth {
+            p.bump_virtual_height = d as f32;
         }
         if let Some(b) = &self.bump {
             p.bump_mode = if b.parallax == Some(true) { BumpMode::USE_PARALLAX } else { BumpMode::USE };
@@ -342,6 +369,10 @@ impl TextureAsset {
         if extra != 0 {
             t.extra_flags = Some(extra);
         }
+        // the relief's depth of a texture with no bump of its own: a bump map's own
+        if t.bump.is_none() && p.bump_virtual_height != start.bump_virtual_height {
+            t.depth = Some(f64::from(p.bump_virtual_height));
+        }
         t
     }
 
@@ -367,6 +398,7 @@ impl TextureAsset {
                 "weight" => self.weight.map(Value::from),
                 "normal_map" => self.normal_map.clone().map(Value::from),
                 "extra_flags" => self.extra_flags.map(Value::from),
+                "depth" => self.depth.map(Value::from),
                 "bump" => self.bump.as_ref().map(|b| {
                     let mut t = Table::new();
                     if let Some(x) = &b.texture {
@@ -384,7 +416,8 @@ impl TextureAsset {
                     if let Some(x) = b.parallax {
                         t.put("parallax", x);
                     }
-                    Value::Table(t)
+                    // the pair under the texture's own name, said the game's short way
+                    if t.is_empty() { Value::from(true) } else { Value::Table(t) }
                 }),
                 "detail" => self.detail.as_ref().map(|d| {
                     let mut t = Table::new();

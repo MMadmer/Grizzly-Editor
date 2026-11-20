@@ -24,7 +24,7 @@ use crate::read::Issue;
 use crate::service::GameLists;
 use crate::sound::SoundAsset;
 use crate::texture::TextureAsset;
-use crate::{fields, import, kind, parts, resolve};
+use crate::{fields, files, import, kind, parts, resolve};
 
 struct Dir(PathBuf);
 
@@ -778,7 +778,7 @@ fn an_import_copies_a_source_with_what_it_names_and_writes_the_assets() {
     src.put("tri.gltf", gltf.to_string());
     let from: Vec<PathBuf> =
         ["cube.obj", "hum.wav", "tri.gltf", "notes.txt"].iter().map(|f| src.0.join(f)).collect();
-    let plan = import::plan(&from, None, "bunker");
+    let plan = import::plan(&from, None, "bunker", Path::new(r"Z:\no-project"));
     let rel: Vec<&str> = plan.writes.iter().map(|(r, _)| r.as_str()).collect();
     for want in [
         "models/cube.obj",
@@ -803,10 +803,7 @@ fn an_import_copies_a_source_with_what_it_names_and_writes_the_assets() {
         import::Content::Copy(p) => p.display().to_string(),
     };
     let cube = text("models/cube.meshasset");
-    assert!(
-        cube.contains("source = \"cube.obj\"") && cube.contains("texture = \"bunker\\\\brick\""),
-        "{cube}"
-    );
+    assert!(cube.contains("source = \"cube.obj\"") && cube.contains("texture = \"bunker\\\\brick\""), "{cube}");
     assert!(text("models/tri.meshasset").contains("{ name = \"stone\", texture = \"bunker\\\\stone\" }"));
     assert!(text("models/pics/stone.texasset").contains("source = \"stone.png\""));
     // written into a project, every asset reads and the model resolves with its textures
@@ -826,7 +823,7 @@ fn an_import_copies_a_source_with_what_it_names_and_writes_the_assets() {
     assert!(index.is_source("models/tri.bin") && index.is_source("models/cube.mtl"));
     // into a folder of its own
     let to = RelPath::new("art/in").unwrap();
-    let plan = import::plan(&from[..1], Some(&to), "");
+    let plan = import::plan(&from[..1], Some(&to), "", &project.0);
     assert!(plan.writes.iter().all(|(r, _)| r.as_str().starts_with("art/in/")));
     assert!(texture_known(Path::new("Z:\\nowhere"), &Index::default(), &game(false), "x"));
 }
@@ -1147,4 +1144,475 @@ fn a_surface_row_that_names_no_surface_is_said_with_the_names_there_are() {
     assert_eq!(row.len(), 1, "{found:?}");
     assert_eq!(row[0].path, vec![Seg::key("surfaces"), Seg::item("name", "door")]);
     assert!(row[0].message.contains("it has: brick"), "{}", row[0].message);
+}
+
+/// A game texture of one 4 x 4 level, DXT1.
+fn dds() -> Vec<u8> {
+    let img = gz_fmt_tex::Image::filled(4, 4, [40, 80, 120, 255]).unwrap();
+    gz_fmt_tex::encode_dds(&[img], gz_fmt_tex::DdsEncoding::Dxt1).unwrap()
+}
+
+/// The game's data of a classic mod lying in the project: a texture with its description and a
+/// bump pair, a description of a texture of the game alone, a sound with its parameters, a
+/// compiled model. Imported in place, each gets its asset beside it saying what the file says,
+/// and the build publishes every file as it is - nothing is made again.
+#[test]
+fn game_files_of_the_project_become_assets_in_place_and_ship_as_they_are() {
+    let d = Dir::new("in-place");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    // a texture with a bump map of its own, and the bump pair
+    let mut p = TextureParams {
+        material: gz_fmt_tex::TextureMaterial(2),
+        material_weight: 0.25,
+        ..TextureParams::default()
+    };
+    p.bump_mode = gz_fmt_tex::BumpMode::USE;
+    p.bump_name = "wpn\\ak_bump".into();
+    p.width = 4;
+    p.height = 4;
+    let thm = |params: &TextureParams| {
+        gz_fmt_tex::write_texture_thm(&gz_fmt_tex::TextureThm { pixels: None, params: params.clone() })
+            .unwrap()
+    };
+    let main = dds();
+    d.put("gamedata/textures/wpn/ak.dds", &main);
+    d.put("gamedata/textures/wpn/ak.thm", thm(&p));
+    let mut bump =
+        TextureParams { ty: TextureType::BUMP_MAP, width: 4, height: 4, ..TextureParams::default() };
+    bump.apply_type_defaults();
+    d.put("gamedata/textures/wpn/ak_bump.dds", dds());
+    d.put("gamedata/textures/wpn/ak_bump#.dds", b"DDS the error texture");
+    d.put("gamedata/textures/wpn/ak_bump.thm", thm(&bump));
+    // the description of a texture of the game, its picture the game's
+    let mut lens = TextureParams { width: 64, height: 64, ..TextureParams::default() };
+    lens.detail_name = "detail\\detail_glass".into();
+    lens.flags.insert(gz_fmt_tex::TextureFlags::DIFFUSE_DETAIL);
+    d.put("gamedata/textures/wpn/lens.thm", thm(&lens));
+    // a sound with its parameters, a compiled model
+    let params = gz_fmt_sound::OggParams {
+        min_dist: 2.0,
+        max_dist: 45.5,
+        base_volume: 0.7,
+        game_type: 0,
+        max_ai_dist: 45.5,
+    };
+    let wave = gz_fmt_sound::read_wav(&wav()).unwrap();
+    let ogg = gz_fmt_sound::encode_game_sound(&wave, 0.3, &params).unwrap();
+    d.put("gamedata/sounds/weapons/ak_shot.ogg", &ogg);
+    let ogf = compiled_door(&d);
+    d.put("gamedata/meshes/dynamics/weapons/ak.ogf", &ogf);
+
+    let files: Vec<PathBuf> = [
+        "gamedata/textures/wpn/ak.dds",
+        "gamedata/textures/wpn/ak_bump.dds",
+        "gamedata/textures/wpn/lens.thm",
+        "gamedata/sounds/weapons/ak_shot.ogg",
+        "gamedata/meshes/dynamics/weapons/ak.ogf",
+    ]
+    .iter()
+    .map(|f| d.0.join(f.replace('/', "\\")))
+    .collect();
+    let plan = import::plan(&files, None, "bunker", &d.0);
+    assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+    // nothing is copied: every asset lies beside its file, the descriptions it took in go
+    assert!(plan.copied.is_empty(), "{:?}", plan.copied);
+    let removes: Vec<&str> = plan.removes.iter().map(RelPath::as_str).collect();
+    assert_eq!(
+        removes,
+        [
+            "gamedata/textures/wpn/ak.thm",
+            "gamedata/textures/wpn/ak_bump.thm",
+            "gamedata/textures/wpn/lens.thm"
+        ]
+    );
+    for (rel, content) in &plan.writes {
+        if let import::Content::Bytes(b) = content {
+            d.put(rel.as_str(), b);
+        }
+    }
+    for r in &plan.removes {
+        std::fs::remove_file(r.to_fs(&d.0)).unwrap();
+    }
+    let text = |rel: &str| std::fs::read_to_string(d.0.join(rel.replace('/', "\\"))).unwrap();
+    // the texture says its description, and what the game reads of it outright
+    let ak = text("gamedata/textures/wpn/ak.texasset");
+    assert!(!ak.contains("source =") && !ak.contains("name ="), "{ak}");
+    assert!(
+        ak.contains("material = \"phong\"") && ak.contains("weight = 0.25") && ak.contains("detail = false"),
+        "{ak}"
+    );
+    let value = gz_luadata::parse(&ak).unwrap();
+    let back = TextureAsset::from_value(&value).0.to_params("wpn\\ak", (4, 4), p.has_alpha());
+    assert_eq!(back, p, "the asset says what the .thm said");
+    let lens_text = text("gamedata/textures/wpn/lens.texasset");
+    assert!(
+        lens_text.contains("source = \"game:wpn/lens\"") && lens_text.contains("detail_glass"),
+        "{lens_text}"
+    );
+    let shot = text("gamedata/sounds/weapons/ak_shot.sndasset");
+    assert!(
+        shot.contains("min_distance = 2")
+            && shot.contains("max_distance = 45.5")
+            && shot.contains("volume = 0.7"),
+        "{shot}"
+    );
+    assert!(text("gamedata/meshes/dynamics/weapons/ak.meshasset").contains("kind = \"dynamic\""));
+    // a second import changes nothing
+    let again = import::plan(&files, None, "bunker", &d.0);
+    assert!(again.writes.is_empty() && again.kept.len() == 4, "{:?} {:?}", again.writes, again.kept);
+
+    // the names are the game's, and the build ships every file as it is
+    let index = index::scan(&d.0);
+    let name = |rel: &str| index.at(rel).map(|e| e.name.clone()).unwrap_or_default();
+    assert_eq!(name("gamedata/textures/wpn/ak.texasset"), "wpn\\ak");
+    assert_eq!(name("gamedata/textures/wpn/lens.texasset"), "wpn\\lens");
+    assert_eq!(name("gamedata/sounds/weapons/ak_shot.sndasset"), "weapons\\ak_shot");
+    assert_eq!(name("gamedata/meshes/dynamics/weapons/ak.meshasset"), "dynamics\\weapons\\ak");
+    assert!(
+        index.is_source("gamedata/textures/wpn/ak.dds")
+            && index.is_source("gamedata/textures/wpn/ak_bump#.dds")
+    );
+    let mut paths: Vec<String> = Vec::new();
+    let mut files_of: Vec<(String, PathBuf)> = Vec::new();
+    let mut sink = |rel: &str, payload: Payload| -> Result<(), String> {
+        paths.push(rel.to_owned());
+        if let Payload::File(f) = payload {
+            files_of.push((rel.to_owned(), f));
+        }
+        Ok(())
+    };
+    let done = publish(&d.0, &index, &resolve::no_game(), &mut sink);
+    assert!(done.problems.is_empty(), "{:?}", done.problems);
+    let at = |rel: &str| files_of.iter().find(|(r, _)| r == rel).map(|(_, f)| f.clone());
+    let lies = |rel: &str| d.0.join(rel.replace('/', "\\"));
+    // the very files of the project, nothing of the cache
+    assert_eq!(at("gamedata\\textures\\wpn\\ak.dds"), Some(lies("gamedata/textures/wpn/ak.dds")));
+    assert_eq!(at("gamedata\\textures\\wpn\\ak_bump#.dds"), Some(lies("gamedata/textures/wpn/ak_bump#.dds")));
+    assert_eq!(
+        at("gamedata\\sounds\\weapons\\ak_shot.ogg"),
+        Some(lies("gamedata/sounds/weapons/ak_shot.ogg"))
+    );
+    assert_eq!(
+        at("gamedata\\meshes\\dynamics\\weapons\\ak.ogf"),
+        Some(lies("gamedata/meshes/dynamics/weapons/ak.ogf"))
+    );
+    // the game's texture: its description alone
+    assert!(paths.contains(&"gamedata\\textures\\wpn\\lens.texasset".to_owned()));
+    assert!(!paths.iter().any(|p| p.ends_with("lens.dds")));
+    assert!(!d.0.join("temp").join("media").exists(), "nothing was baked");
+    // a sound asset that says another volume is the same sound with its parameters said again
+    d.put("gamedata/sounds/weapons/ak_shot.sndasset", shot.replace("volume = 0.7", "volume = 0.5"));
+    let index = index::scan(&d.0);
+    let got = published(&d, &resolve::no_game());
+    let now = &got.iter().find(|(r, _)| r == "gamedata\\sounds\\weapons\\ak_shot.ogg").unwrap().1;
+    assert_eq!(gz_fmt_sound::read_ogg_params(now).unwrap().map(|o| o.base_volume), Some(0.5));
+    assert!(index.is_source("gamedata/sounds/weapons/ak_shot.ogg"));
+}
+
+/// A file of the module's game data an asset publishes under another name keeps shipping
+/// where it lies; one the asset publishes at its own place is the asset's.
+#[test]
+fn a_game_file_is_the_assets_only_where_the_asset_publishes_it() {
+    let d = Dir::new("takes");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    d.put("gamedata/textures/wpn/ak.dds", dds());
+    d.put("gamedata/textures/wpn/ak.texasset", "return { tex = 1 }\n");
+    d.put(
+        "art/red.texasset",
+        "return { tex = 1, source = \"../gamedata/textures/wpn/ak.dds\", name = \"wpn\\\\ak_red\" }\n",
+    );
+    let index = index::scan(&d.0);
+    let ak = index.at("gamedata/textures/wpn/ak.texasset").unwrap();
+    let red = index.at("art/red.texasset").unwrap();
+    assert!(ak.takes("gamedata/textures/wpn/ak.dds") && !red.takes("gamedata/textures/wpn/ak.dds"));
+    assert!(index.is_source("gamedata/textures/wpn/ak.dds"));
+    // a texture asset there alone, named after the file, and a description of the game's texture
+    // that names another texture is refused
+    d.put(
+        "gamedata/textures/wpn/odd.texasset",
+        "return { tex = 1, source = \"game:wpn/lens\", name = \"wpn\\\\other\" }\n",
+    );
+    let found = issues_of(
+        &d,
+        "gamedata/textures/wpn/odd.texasset",
+        MediaKind::Texture,
+        &index::scan(&d.0),
+        &game(false),
+    );
+    assert!(found.iter().any(|i| i.code == resolve::CANNOT && i.severity == Severity::Error), "{found:?}");
+    // over a .dds the keys that say how a picture is made apply to nothing: a warning at each,
+    // and the file still ships as it is
+    d.put(
+        "gamedata/textures/wpn/ak.texasset",
+        "return { tex = 1, format = \"dxt5\", mips = false, normal_map = \"wpn/nobody_nmap\" }\n",
+    );
+    let found = issues_of(
+        &d,
+        "gamedata/textures/wpn/ak.texasset",
+        MediaKind::Texture,
+        &index::scan(&d.0),
+        &game(true),
+    );
+    let said: Vec<_> = found.iter().map(|i| (i.code, i.severity, i.path.clone())).collect();
+    assert_eq!(
+        said,
+        ["format", "mips", "normal_map"].map(|k| (resolve::CANNOT, Severity::Warning, vec![Seg::key(k)])),
+        "{found:?}"
+    );
+    let got = published(&d, &resolve::no_game());
+    let ak = &got.iter().find(|(r, _)| r == "gamedata\\textures\\wpn\\ak.dds").unwrap().1;
+    assert_eq!(ak, &dds());
+    // a description of a texture the game lacks describes a texture nobody has: a warning, and
+    // it ships all the same
+    d.put("gamedata/textures/wpn/odd.texasset", "return { tex = 1, source = \"game:wpn/lens\" }\n");
+    let found = issues_of(
+        &d,
+        "gamedata/textures/wpn/odd.texasset",
+        MediaKind::Texture,
+        &index::scan(&d.0),
+        &game(true),
+    );
+    assert_eq!(
+        found.iter().map(|i| (i.code, i.severity)).collect::<Vec<_>>(),
+        [(check::NO_TEXTURE, Severity::Warning)],
+        "{found:?}"
+    );
+}
+
+/// A file of the game data the game cannot load as a texture gets no asset: the import leaves
+/// it a file of its own, which the build ships as it is.
+#[test]
+fn a_texture_file_the_game_cannot_load_stays_a_file_of_its_own() {
+    let d = Dir::new("unloadable");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    d.put("gamedata/textures/item/can.dds", dds());
+    // the game drops one `.dds` from a name it is given, and no name ends in a space
+    d.put("gamedata/textures/item/can.dds.dds", dds());
+    d.put("gamedata/textures/item/glass .dds", dds());
+    // and a file that is no DDS at all
+    d.put("gamedata/textures/item/broken.dds", b"DDS \x18\0\0\0 too short");
+    let files: Vec<PathBuf> = ["can.dds", "can.dds.dds", "glass .dds", "broken.dds"]
+        .iter()
+        .map(|f| d.0.join("gamedata\\textures\\item").join(f))
+        .collect();
+    let plan = import::plan(&files, None, "bunker", &d.0);
+    let written: Vec<&str> = plan.writes.iter().map(|(r, _)| r.as_str()).collect();
+    assert_eq!(written, ["gamedata/textures/item/can.texasset"]);
+    assert_eq!(plan.problems.len(), 3, "{:?}", plan.problems);
+    assert!(plan.problems.iter().all(|p| p.contains("stays a file of its own")), "{:?}", plan.problems);
+    assert!(files::texture_name_reached("item\\can") && files::texture_name_reached("wpn\\scope.v2"));
+    assert!(!files::texture_name_reached("item\\can.dds") && !files::texture_name_reached("item\\glass "));
+}
+
+/// A sound may be heard over a whole level: the game takes any distance.
+#[test]
+fn a_sound_may_be_heard_far() {
+    let (asset, issues) = SoundAsset::from_value(
+        &gz_luadata::parse("return { snd = 1, min_distance = 90000, max_distance = 90000 }").unwrap(),
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(asset.max_distance, Some(90_000.0));
+}
+
+/// The checksum of an Ogg page: CRC-32 over the page with its checksum field zero.
+fn ogg_crc(page: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for &b in page {
+        crc ^= u32::from(b) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04c1_1db7 } else { crc << 1 };
+        }
+    }
+    crc
+}
+
+/// An `.ogg` whose first comment is no parameters the game reads: the game's block made into an
+/// encoder's tag, the page's checksum said again.
+fn tagged_ogg() -> Vec<u8> {
+    let params = gz_fmt_sound::OggParams {
+        min_dist: 2.0,
+        max_dist: 45.5,
+        base_volume: 0.7,
+        game_type: 0,
+        max_ai_dist: 45.5,
+    };
+    let wave = gz_fmt_sound::read_wav(&wav()).unwrap();
+    let mut ogg = gz_fmt_sound::encode_game_sound(&wave, 0.3, &params).unwrap();
+    let block = params.to_comment();
+    let at = ogg.windows(block.len()).position(|w| w == block.as_slice()).unwrap();
+    ogg[at..at + 4].copy_from_slice(b"ENC=");
+    let start = ogg[..at].windows(4).rposition(|w| w == b"OggS").unwrap();
+    let segs = usize::from(ogg[start + 26]);
+    let len = 27 + segs + ogg[start + 27..start + 27 + segs].iter().map(|&b| usize::from(b)).sum::<usize>();
+    ogg[start + 22..start + 26].fill(0);
+    let crc = ogg_crc(&ogg[start..start + len]);
+    ogg[start + 22..start + 26].copy_from_slice(&crc.to_le_bytes());
+    ogg
+}
+
+/// A sound whose comment holds no parameters the game reads - an encoder's tag - is played with
+/// the game's defaults: an asset that states nothing ships it as it is. A stream that does not
+/// read at all is baked, and the build says why.
+#[test]
+fn a_sound_without_the_games_parameters_ships_as_it_is() {
+    let d = Dir::new("tagged");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    let tagged = tagged_ogg();
+    assert!(gz_fmt_sound::read_ogg_params(&tagged).is_err() && gz_fmt_sound::ogg_info(&tagged).is_ok());
+    d.put("gamedata/sounds/weapons/tagged.ogg", &tagged);
+    d.put("gamedata/sounds/weapons/tagged.sndasset", "return { snd = 1 }\n");
+    let got = published(&d, &resolve::no_game());
+    let shipped = &got.iter().find(|(r, _)| r == "gamedata\\sounds\\weapons\\tagged.ogg").unwrap().1;
+    assert_eq!(shipped, &tagged);
+    // the importer reads no parameters from it: its asset states none
+    std::fs::remove_file(d.0.join("gamedata\\sounds\\weapons\\tagged.sndasset")).unwrap();
+    let plan = import::plan(&[d.0.join("gamedata\\sounds\\weapons\\tagged.ogg")], None, "bunker", &d.0);
+    assert_eq!(plan.writes.len(), 1, "{:?}", plan.problems);
+    let text = match &plan.writes[0].1 {
+        import::Content::Bytes(b) => String::from_utf8(b.clone()).unwrap(),
+        import::Content::Copy(_) => String::new(),
+    };
+    assert_eq!(
+        text.trim(),
+        "return {\n  snd = 1,\n}".trim(),
+        "a source found by the asset's own name is not named"
+    );
+    // a broken stream
+    d.put("gamedata/sounds/weapons/tagged.ogg", b"OggS but no stream");
+    d.put("gamedata/sounds/weapons/tagged.sndasset", "return { snd = 1 }\n");
+    let index = index::scan(&d.0);
+    let mut sink = |_: &str, _: Payload| -> Result<(), String> { Ok(()) };
+    let done = publish(&d.0, &index, &resolve::no_game(), &mut sink);
+    assert!(!done.problems.is_empty(), "a stream that does not read is not shipped silently");
+}
+
+/// Files of the game's formats brought in from outside any tree of the game's data land where
+/// they are put and take the name of that place: a picture and its description, a description
+/// alone of the game's texture, a picture the game could not load copied in as a file.
+#[test]
+fn game_files_brought_into_the_game_data_take_the_name_of_where_they_land() {
+    let d = Dir::new("brought");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    let away = Dir::new("brought-from");
+    let p = TextureParams {
+        material: gz_fmt_tex::TextureMaterial(2),
+        width: 4,
+        height: 4,
+        ..TextureParams::default()
+    };
+    let thm = gz_fmt_tex::write_texture_thm(&gz_fmt_tex::TextureThm { pixels: None, params: p }).unwrap();
+    away.put("ak.dds", dds());
+    away.put("ak.thm", &thm);
+    away.put("lens.thm", &thm);
+    away.put("twice.dds.dds", dds());
+    let files: Vec<PathBuf> =
+        ["ak.dds", "lens.thm", "twice.dds.dds"].iter().map(|f| away.0.join(f)).collect();
+    let to = RelPath::new("gamedata/textures/wpn").unwrap();
+    let plan = import::plan(&files, Some(&to), "bunker", &d.0);
+    let written: Vec<&str> = plan.writes.iter().map(|(r, _)| r.as_str()).collect();
+    assert_eq!(
+        written,
+        [
+            "gamedata/textures/wpn/ak.dds",
+            "gamedata/textures/wpn/ak.texasset",
+            "gamedata/textures/wpn/lens.texasset",
+            "gamedata/textures/wpn/twice.dds.dds"
+        ],
+        "{:?}",
+        plan.problems
+    );
+    let text = |rel: &str| match &plan.writes.iter().find(|(r, _)| r.as_str() == rel).unwrap().1 {
+        import::Content::Bytes(b) => String::from_utf8(b.clone()).unwrap(),
+        import::Content::Copy(f) => f.display().to_string(),
+    };
+    let ak = text("gamedata/textures/wpn/ak.texasset");
+    assert!(ak.contains("material = \"phong\"") && !ak.contains("name ="), "{ak}");
+    assert!(text("gamedata/textures/wpn/lens.texasset").contains("source = \"game:wpn/lens\""));
+    assert!(plan.removes.is_empty(), "nothing outside the project is removed");
+    assert_eq!(plan.problems.len(), 1, "{:?}", plan.problems);
+    assert!(plan.problems[0].contains("copied in as a file of its own"), "{:?}", plan.problems);
+}
+
+/// Over a game texture published as it is, an asset made from its `.thm` says only what is read
+/// of it: what the game reads, outright, and none of the keys that say how a picture is made. A
+/// file of the project brought into another folder is copied there; one of the game's formats
+/// in the module's game data outside its kind's folder - a level's lightmap - gets no asset.
+#[test]
+fn an_import_says_of_a_game_texture_only_what_is_read_of_it() {
+    let d = Dir::new("read-of-it");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    let mut p = TextureParams {
+        fmt: gz_fmt_tex::TextureFormat::DXT5,
+        width: 4,
+        height: 4,
+        ..TextureParams::default()
+    };
+    p.mip_filter = gz_fmt_tex::MipFilterId(1);
+    p.flags.insert(gz_fmt_tex::TextureFlags::DITHER_COLOR);
+    p.bump_mode = gz_fmt_tex::BumpMode::USE;
+    p.bump_name = "wpn\\scope_bump".into();
+    p.bump_virtual_height = 0.2;
+    let thm = gz_fmt_tex::write_texture_thm(&gz_fmt_tex::TextureThm { pixels: None, params: p }).unwrap();
+    d.put("gamedata/textures/wpn/scope.dds", dds());
+    d.put("gamedata/textures/wpn/scope.thm", &thm);
+    d.put("gamedata/levels/yard/lmap#1_1.dds", dds());
+    d.put("art/crate.png", png(4, 4, [9, 9, 9, 255]));
+    let files =
+        [d.0.join("gamedata\\textures\\wpn\\scope.dds"), d.0.join("gamedata\\levels\\yard\\lmap#1_1.dds")];
+    let plan = import::plan(&files, None, "bunker", &d.0);
+    let written: Vec<&str> = plan.writes.iter().map(|(r, _)| r.as_str()).collect();
+    assert_eq!(written, ["gamedata/textures/wpn/scope.texasset"], "{:?}", plan.problems);
+    assert!(plan.problems.len() == 1 && plan.problems[0].contains("where it lies"), "{:?}", plan.problems);
+    let removes: Vec<&str> = plan.removes.iter().map(RelPath::as_str).collect();
+    assert_eq!(removes, ["gamedata/textures/wpn/scope.thm"]);
+    let text = match &plan.writes[0].1 {
+        import::Content::Bytes(b) => String::from_utf8(b.clone()).unwrap(),
+        import::Content::Copy(_) => String::new(),
+    };
+    for k in crate::texture::MAKING_KEYS {
+        assert!(!text.contains(&format!("{k} =")), "{k} in {text}");
+    }
+    assert!(
+        text.contains("bump = {") && text.contains("material = \"blinn\"") && text.contains("detail = false"),
+        "{text}"
+    );
+    d.put("gamedata/textures/wpn/scope.texasset", &text);
+    let found = issues_of(
+        &d,
+        "gamedata/textures/wpn/scope.texasset",
+        MediaKind::Texture,
+        &index::scan(&d.0),
+        &game(false),
+    );
+    assert!(found.is_empty(), "{found:?}");
+    // a file of the project brought into another folder is copied there, its own place untouched
+    let to = RelPath::new("textures/props").unwrap();
+    let plan = import::plan(&[d.0.join("art\\crate.png")], Some(&to), "bunker", &d.0);
+    let written: Vec<&str> = plan.writes.iter().map(|(r, _)| r.as_str()).collect();
+    assert_eq!(written, ["textures/props/crate.png", "textures/props/crate.texasset"]);
+    assert!(plan.removes.is_empty());
+}
+
+/// A sound whose parameters an asset cannot say the same way - a type bit the game's words do
+/// not name - gets no asset: it stays a file of its own, shipped as it is.
+#[test]
+fn a_sound_an_asset_cannot_say_stays_a_file_of_its_own() {
+    let d = Dir::new("unsaid");
+    d.put("mod.ltx", "[module]\nid = bunker\n");
+    let params = gz_fmt_sound::OggParams {
+        min_dist: 2.0,
+        max_dist: 45.5,
+        base_volume: 0.7,
+        game_type: 0x0000_0001,
+        max_ai_dist: 45.5,
+    };
+    let wave = gz_fmt_sound::read_wav(&wav()).unwrap();
+    d.put("gamedata/sounds/odd.ogg", gz_fmt_sound::encode_game_sound(&wave, 0.3, &params).unwrap());
+    let plan = import::plan(&[d.0.join("gamedata\\sounds\\odd.ogg")], None, "bunker", &d.0);
+    assert!(plan.writes.is_empty(), "{:?}", plan.writes);
+    assert!(
+        plan.problems.len() == 1 && plan.problems[0].contains("stays a file of its own"),
+        "{:?}",
+        plan.problems
+    );
 }

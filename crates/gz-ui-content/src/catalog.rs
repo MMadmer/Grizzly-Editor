@@ -213,6 +213,16 @@ pub fn media_claims(
             names.insert(owner.to_lowercase(), SmolStr::new(&e.name));
             if let Some(src) = &e.source {
                 claim(&src.to_backslash(), &owner, &mut claims);
+                // the description the X-Ray SDK left beside a picture travels with it
+                if e.kind == MediaKind::Texture {
+                    let thm = src.to_backslash();
+                    let stem = thm.rsplit_once('.').map_or(thm.as_str(), |(s, _)| s);
+                    claim(&format!("{stem}.thm"), &owner, &mut claims);
+                }
+            }
+            // the second texture of a bump pair travels with its texture
+            if let Some(c) = &e.companion {
+                claim(&c.to_backslash(), &owner, &mut claims);
             }
         }
         for e in &index.entries {
@@ -883,6 +893,7 @@ mod tests {
             dynamic: false,
             parts: false,
             game: None,
+            companion: None,
             excluded: false,
             error: None,
         }

@@ -317,7 +317,8 @@ pub fn is_texture_asset(name: &str) -> bool {
 }
 
 /// A texture asset of the project baked the way the module build bakes it: the `.dds`, and what
-/// the asset says. Blocking.
+/// the asset says. A game texture of the project (`.dds`) is the file as it is; a description
+/// of a texture of the game (`source = "game:..."`) shows the game's picture. Blocking.
 fn bake_asset(sources: &Sources, rel: &str) -> Result<(Vec<u8>, AssetFacts), String> {
     let root = sources.project.as_ref().ok_or_else(|| "no project is open".to_owned())?;
     let rel = rel.replace('\\', "/");
@@ -327,21 +328,37 @@ fn bake_asset(sources: &Sources, rel: &str) -> Result<(Vec<u8>, AssetFacts), Str
         .and_then(|m| m.latest())
         .and_then(|i| i.at(&rel).map(|e| e.name.clone()))
         .unwrap_or_else(|| gz_media::files::published_name(None, &rel, &gz_media::files::module_id(root)));
-    let t = gz_media::resolve::texture(root, &rel, &published).map_err(|f| f.to_string())?;
-    let made = gz_fmt_tex::make_game_texture(&t.image, &t.params, None).map_err(|e| e.to_string())?;
     let text = std::fs::read(root.join(&rel)).map_err(|e| gz_base::io_reason(&e))?;
     let value = gz_media::kind::load(
         gz_project::asset_kind::MediaKind::Texture,
         &rel,
         &String::from_utf8_lossy(&text),
     )?;
-    let keys = value
-        .fields()
-        .iter()
-        .filter(|(k, _)| k.as_str() != "tex")
-        .map(|(k, v)| (k.to_string(), value_text(v)))
-        .collect();
-    Ok((made.dds, AssetFacts { published, source: Some(t.source), keys }))
+    let keys = || -> Vec<(String, String)> {
+        value
+            .fields()
+            .iter()
+            .filter(|(k, _)| k.as_str() != "tex")
+            .map(|(k, v)| (k.to_string(), value_text(v)))
+            .collect()
+    };
+    let said = value.get("source").and_then(gz_luadata::Value::as_str);
+    if let Some(game) = gz_media::files::game_texture(said) {
+        let files =
+            sources.game.as_ref().ok_or_else(|| "no game is linked: the picture is the game's".to_owned())?;
+        let dds = files
+            .read(&format!("textures\\{game}.dds"))
+            .map_err(|_| format!("the game has no texture '{game}'"))?;
+        return Ok((dds, AssetFacts { published, source: None, keys: keys() }));
+    }
+    let (_, source, _) = gz_media::resolve::texture_source(root, &rel).map_err(|f| f.to_string())?;
+    if gz_media::files::is_game_texture_file(&source) {
+        let dds = std::fs::read(&source).map_err(|e| gz_base::io_reason(&e))?;
+        return Ok((dds, AssetFacts { published, source: Some(source), keys: keys() }));
+    }
+    let t = gz_media::resolve::texture(root, &rel, &published).map_err(|f| f.to_string())?;
+    let made = gz_fmt_tex::make_game_texture(&t.image, &t.params, None).map_err(|e| e.to_string())?;
+    Ok((made.dds, AssetFacts { published, source: Some(t.source), keys: keys() }))
 }
 
 impl TexFile {

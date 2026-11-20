@@ -16,6 +16,14 @@ pub fn source_extensions(kind: MediaKind) -> &'static [&'static str] {
     }
 }
 
+/// The head of a `.dds`: what its header says is all in its first 148 bytes. Blocking.
+pub fn dds_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(148);
+    std::fs::File::open(path)?.take(148).read_to_end(&mut head)?;
+    Ok(head)
+}
+
 /// The kind a source file is of, by its extension.
 #[must_use]
 pub fn kind_of_source(name: &str) -> Option<MediaKind> {
@@ -33,6 +41,76 @@ pub const GAME_PREFIX: &str = "game:";
 pub fn game_model(source: Option<&str>) -> Option<String> {
     let name = source?.trim().strip_prefix(GAME_PREFIX)?.trim().replace('/', "\\").to_ascii_lowercase();
     Some(name.strip_suffix(".ogf").unwrap_or(&name).trim_matches('\\').to_owned())
+}
+
+/// The game name of the texture a `source` names (`game:wpn/wpn_ak74.dds` is `wpn\wpn_ak74`),
+/// back slashes, lower case, without the extension: the asset describes a texture of the game,
+/// whose picture stays the game's. `None` for a source that is a file of the project.
+#[must_use]
+pub fn game_texture(source: Option<&str>) -> Option<String> {
+    let name = source?.trim().strip_prefix(GAME_PREFIX)?.trim().replace('/', "\\").to_ascii_lowercase();
+    let name = name.strip_suffix(".dds").unwrap_or(&name).trim_matches('\\').to_owned();
+    Some(name)
+}
+
+/// Whether a texture's source is a game texture already (`.dds`): it is published as it is,
+/// never decoded and made again.
+#[must_use]
+pub fn is_game_texture_file(source: &Path) -> bool {
+    source.extension().is_some_and(|e| e.eq_ignore_ascii_case("dds"))
+}
+
+/// The `#` companion of a game texture (`<stem>#.dds` beside `<stem>.dds`): the second texture
+/// of a bump pair, published with it. `None` when there is none, and when the companion has a
+/// texture asset of its own beside it (`<stem>#.texasset`): it is published as that asset.
+#[must_use]
+pub fn hash_companion(source: &Path) -> Option<PathBuf> {
+    if !is_game_texture_file(source) {
+        return None;
+    }
+    let stem = source.file_stem()?.to_string_lossy().into_owned();
+    let p = source.with_file_name(format!("{stem}#.dds"));
+    let own = source.with_file_name(format!("{stem}#{}", MediaKind::Texture.extension()));
+    (p.is_file() && !own.is_file()).then_some(p)
+}
+
+/// The folder of the game's data a kind's files lie under (`textures`, `sounds`, `meshes`).
+#[must_use]
+pub fn game_folder(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Model => "meshes",
+        MediaKind::Texture => "textures",
+        MediaKind::Sound => "sounds",
+    }
+}
+
+/// The name the game knows a file by when it lies in a tree of the game's data - any path with
+/// `gamedata\<textures|sounds|meshes>\` in it (`.../gamedata/textures/wpn/ak.dds` is
+/// `wpn\ak`) -, without its extension, back slashes. `None` for a file of no such tree.
+#[must_use]
+pub fn game_name_of(kind: MediaKind, path: &str) -> Option<String> {
+    let p = path.replace('\\', "/");
+    let lower = p.to_ascii_lowercase();
+    let marker = format!("gamedata/{}/", game_folder(kind));
+    let at = if lower.starts_with(&marker) { 0 } else { lower.find(&format!("/{marker}"))? + 1 };
+    let rest = &p[at + marker.len()..];
+    let leaf = rest.rsplit('/').next().unwrap_or(rest);
+    let stem_len = leaf.rfind('.').map_or(rest.len(), |d| rest.len() - leaf.len() + d);
+    let name = rest[..stem_len].trim_matches('/').replace('/', "\\");
+    (!name.is_empty()).then_some(name)
+}
+
+/// Whether the game can ask for a texture by this name: its loader drops one `.dds`, `.tga`,
+/// `.bmp` or `.ogm` from the end of a name it is given, and no config gives a name that starts or
+/// ends with a space. So a file `<name>.dds.dds` or `<name> .dds` is a file nothing loads.
+#[must_use]
+pub fn texture_name_reached(name: &str) -> bool {
+    if name.trim() != name || name.is_empty() {
+        return false;
+    }
+    let leaf = name.rsplit(['\\', '/']).next().unwrap_or(name);
+    let ext = leaf.rfind('.').map(|d| leaf[d + 1..].to_ascii_lowercase());
+    !matches!(ext.as_deref(), Some("dds" | "tga" | "bmp" | "ogm"))
 }
 
 /// Whether an engine name is a plain name under `meshes`: no drive, no root, no step up.
@@ -116,11 +194,22 @@ pub fn module_id(root: &Path) -> String {
     }
 }
 
-/// The name the game knows an asset by: its `name`, else `<module id>\<file name>`.
+/// The name the game knows an asset by: its `name`; else, for an asset that lies in the
+/// module's own `gamedata\<textures|sounds|meshes>\`, the path below that folder (an asset
+/// beside a file of the game's data names what lies there); else `<module id>\<file name>`.
 #[must_use]
 pub fn published_name(name: Option<&str>, asset: &str, module: &str) -> String {
     if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
         return n.replace('/', "\\");
+    }
+    let lower = asset.replace('\\', "/").to_ascii_lowercase();
+    for kind in MediaKind::ALL {
+        if lower.starts_with(&format!("gamedata/{}/", game_folder(kind)))
+            && lower.ends_with(kind.extension())
+            && let Some(n) = game_name_of(kind, asset)
+        {
+            return n;
+        }
     }
     let leaf = asset.rsplit(['/', '\\']).next().unwrap_or(asset);
     let stem = leaf.rfind('.').map_or(leaf, |d| &leaf[..d]);

@@ -18,8 +18,8 @@ both for any classic mod:
 
     python tools/classic_mod/motion_files.py --project <module project> --game <game root> [--dry]
 
-The converter runs it as one of its steps; run by hand it does the same to a project that exists. It only ever
-changes files of the project - a motion file's contents or name, the motion references of the project's own
+The converter runs it as one of its steps; run by hand it does the same to a project that exists, and keeps the
+converter's ledger of the project in step (`ledger.py`). It only ever changes files of the project - a motion file's contents or name, the motion references of the project's own
 models - and a second run changes nothing. Needs python-lzo and the game's tools\\stalker-tools (the converter's
 archive reader).
 """
@@ -32,6 +32,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import archives  # noqa: E402
+import ledger  # noqa: E402
 import omf  # noqa: E402
 
 MOTIONS = 15       # the motion definitions of a motion file, with the bones by name
@@ -232,9 +233,11 @@ def main():
     a = ap.parse_args()
     game = archives.Game(a.game)
     try:
-        process(a.project, game, module_id(a.project), a.dry)
+        done = process(a.project, game, module_id(a.project), a.dry)
     finally:
         game.close()
+    if not a.dry:
+        ledger.follow(a.project, renamed=done.renamed, rewritten=list(done.merged) + done.pointed)
 
 
 if __name__ == "__main__":

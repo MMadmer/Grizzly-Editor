@@ -12,6 +12,11 @@
 //! name and every byte it is made of, so an unchanged asset costs a look at its files. A bake
 //! is deterministic: the same files give the same bytes on every run and machine. The build
 //! itself (`gz-build`) hands the files on through a [`Sink`].
+//!
+//! What is the game's data already is published as it is, never made again: a texture over a
+//! `.dds` (with its `#` companion), a sound whose `.ogg` says the parameters the asset says, a
+//! dynamic model over a compiled one the asset changes nothing of. A texture over a texture of
+//! the game (`source = "game:..."`) publishes its description alone.
 
 use std::path::{Path, PathBuf};
 
@@ -79,7 +84,14 @@ fn data_ext(kind: MediaKind) -> &'static str {
 #[must_use]
 pub fn paths_of(e: &Entry) -> Vec<String> {
     let base = format!("{}\\{}", folder(e.kind), e.name);
+    // a description of a texture of the game: the picture is the game's
+    if e.kind == MediaKind::Texture && e.game.is_some() {
+        return vec![format!("{base}{}", e.kind.extension())];
+    }
     let mut out = vec![format!("{base}.{}", data_ext(e.kind))];
+    if e.kind == MediaKind::Texture && e.companion.is_some() {
+        out.push(format!("{base}#.dds"));
+    }
     if e.kind == MediaKind::Texture && !e.uses.is_empty() {
         out.push(format!("{base}_bump.dds"));
         out.push(format!("{base}_bump#.dds"));
@@ -240,30 +252,64 @@ fn restated(c: &resolve::Compiled, m: &resolve::Model) -> Result<Vec<u8>, String
     gz_fmt_ogf::restate(&c.bytes, &with).map(|(bytes, _)| bytes).map_err(|e| e.to_string())
 }
 
+/// Whether an `.ogg` says the parameters a sound asset publishes it with: the same values in
+/// its comment, or none the game reads - no comment, or one that is no parameters of the game's
+/// (an encoder's tag) in a stream that reads - and an asset that states none of them: the game
+/// then plays both with its defaults. A stream that does not read is baked, and says why.
+fn ogg_says(bytes: &[u8], params: &gz_fmt_sound::OggParams, asset: &crate::sound::SoundAsset) -> bool {
+    let states_none = || {
+        asset.min_distance.is_none()
+            && asset.max_distance.is_none()
+            && asset.volume.is_none()
+            && asset.ai_distance.is_none()
+            && asset.ty.is_none()
+    };
+    match gz_fmt_sound::read_ogg_params(bytes) {
+        Ok(Some(own)) => own == *params,
+        Ok(None) => states_none(),
+        Err(_) => gz_fmt_sound::ogg_info(bytes).is_ok() && states_none(),
+    }
+}
+
 /// The baked files of one asset and, for a model, the text it ships with.
 fn bake(root: &Path, e: &Entry, game: &resolve::GameModel, hits: &mut usize) -> Result<Baked, String> {
     let dir = cache_dir(root);
-    let h = bake_stamp(root, e);
+    // the stamp reads every byte an asset is made of: only a bake that is cached asks for it
+    let stamp = std::cell::OnceCell::new();
+    let stamp = || *stamp.get_or_init(|| bake_stamp(root, e));
     let base = format!("{}\\{}", folder(e.kind), e.name);
     let rel = e.path.as_str();
     let mut out = Vec::new();
     let mut shipped = None;
     match e.kind {
+        // the description alone: the game's picture is the game's
+        MediaKind::Texture if e.game.is_some() => {}
         MediaKind::Texture => {
-            let t = resolve::texture(root, rel, &e.name).map_err(|f| f.to_string())?;
-            let dds = cached(&dir, &format!("{h:016x}.dds"), hits, || {
-                gz_fmt_tex::make_game_texture(&t.image, &t.params, None)
-                    .map(|g| g.dds)
-                    .map_err(|err| err.to_string())
-            })?;
-            out.push((format!("{base}.dds"), dds));
-            if let Some(src) = t.asset.bump.as_ref().and_then(|b| b.source.as_deref()) {
+            let (asset, source, _) = resolve::texture_source(root, rel).map_err(|f| f.to_string())?;
+            if files::is_game_texture_file(&source) {
+                // a game texture already: the very file, and its `#` companion
+                out.push((format!("{base}.dds"), source.clone()));
+                if let Some(c) = files::hash_companion(&source) {
+                    out.push((format!("{base}#.dds"), c));
+                }
+            } else {
+                let t = resolve::texture(root, rel, &e.name).map_err(|f| f.to_string())?;
+                let h = stamp();
+                let dds = cached(&dir, &format!("{h:016x}.dds"), hits, || {
+                    gz_fmt_tex::make_game_texture(&t.image, &t.params, None)
+                        .map(|g| g.dds)
+                        .map_err(|err| err.to_string())
+                })?;
+                out.push((format!("{base}.dds"), dds));
+            }
+            if let Some(src) = asset.bump.as_ref().and_then(|b| b.source.as_deref()) {
+                let h = stamp();
+                let depth = asset.to_params(&e.name, (1, 1), false).bump_virtual_height;
                 let abs = files::beside(&e.path.to_fs(root), src);
                 if !files::inside(root, &abs) {
                     return Err(format!("the bump picture lies outside the project: {src}"));
                 }
-                let from_normal = t.asset.bump.as_ref().and_then(|b| b.from) == Some(1);
-                let depth = t.params.bump_virtual_height;
+                let from_normal = asset.bump.as_ref().and_then(|b| b.from) == Some(1);
                 let pair = std::cell::OnceCell::new();
                 let make = || -> Result<gz_fmt_tex::BumpTextures, String> {
                     let bytes = std::fs::read(&abs)
@@ -294,40 +340,67 @@ fn bake(root: &Path, e: &Entry, game: &resolve::GameModel, hits: &mut usize) -> 
         }
         MediaKind::Sound => {
             let (asset, source, _) = resolve::sound(root, rel).map_err(|f| f.to_string())?;
-            let ogg = cached(&dir, &format!("{h:016x}.ogg"), hits, || {
-                let thm = asset.to_thm();
-                let params = gz_fmt_sound::OggParams::from(&thm);
-                let bytes = std::fs::read(&source)
-                    .map_err(|err| format!("{}: {}", source.display(), gz_base::io_reason(&err)))?;
-                let is_ogg = source.extension().is_some_and(|x| x.eq_ignore_ascii_case("ogg"));
-                if is_ogg {
-                    gz_fmt_sound::write_ogg_params(&bytes, &params).map_err(|err| err.to_string())
-                } else {
-                    let wav = gz_fmt_sound::read_wav(&bytes).map_err(|err| err.to_string())?;
-                    gz_fmt_sound::encode_game_sound(&wav, thm.quality, &params).map_err(|err| err.to_string())
-                }
-            })?;
+            let thm = asset.to_thm();
+            let params = gz_fmt_sound::OggParams::from(&thm);
+            let is_ogg = source.extension().is_some_and(|x| x.eq_ignore_ascii_case("ogg"));
+            // an `.ogg` that says what the asset says is the game's sound already: the very file
+            let says = is_ogg && std::fs::read(&source).is_ok_and(|b| ogg_says(&b, &params, &asset));
+            let ogg = if says {
+                source.clone()
+            } else {
+                let h = stamp();
+                cached(&dir, &format!("{h:016x}.ogg"), hits, || {
+                    let bytes = std::fs::read(&source)
+                        .map_err(|err| format!("{}: {}", source.display(), gz_base::io_reason(&err)))?;
+                    if is_ogg {
+                        gz_fmt_sound::write_ogg_params(&bytes, &params).map_err(|err| err.to_string())
+                    } else {
+                        let wav = gz_fmt_sound::read_wav(&bytes).map_err(|err| err.to_string())?;
+                        gz_fmt_sound::encode_game_sound(&wav, thm.quality, &params)
+                            .map_err(|err| err.to_string())
+                    }
+                })?
+            };
             out.push((format!("{base}.ogg"), ogg));
         }
         MediaKind::Model => {
             let m = resolve::model(root, rel, game).map_err(|f| f.to_string())?;
-            // what its surfaces were resolved to is part of the model: a surface without a row
-            // takes its texture from a texture asset's name and the module's id, which no file
-            // of the stamp says - and a model of the game is no file of the project at all
-            let h = fnv(h, &m.stamp.to_le_bytes());
-            let h = m.object.surfaces.iter().fold(h, |h, s| {
-                [s.name.as_str(), s.texture.as_str(), s.shader.as_str()]
-                    .iter()
-                    .fold(fnv(h, b"\0"), |h, x| fnv(fnv(h, x.to_lowercase().as_bytes()), b"|"))
-            });
-            let opts = ExportOptions { source_file: e.name.as_str().into(), ..ExportOptions::default() };
-            let ogf = cached(&dir, &format!("{h:016x}.ogf"), hits, || match &m.compiled {
-                // a compiled model is published as itself, with what the asset changes said again
-                Some(c) => restated(c, &m),
-                None => gz_fmt_ogf::export_skeleton(&m.object, &opts, 4)
-                    .map(|x| x.bytes)
-                    .map_err(|err| err.to_string()),
-            })?;
+            // a compiled model of the project the asset changes nothing of is the very file
+            // an asset that states nothing to change of a project's compiled model is the file:
+            // no restating needed to know it
+            let bare = m.asset.surfaces.is_empty()
+                && m.asset.userdata.is_none()
+                && m.asset.bones.iter().all(|b| b.mass.is_none());
+            let unchanged = match (&m.compiled, &m.source) {
+                (Some(c), Some(src)) if c.game.is_none() => {
+                    (bare || restated(c, &m).is_ok_and(|bytes| bytes == *c.bytes)).then(|| src.clone())
+                }
+                _ => None,
+            };
+            let ogf = match unchanged {
+                Some(src) => src,
+                None => {
+                    // what its surfaces were resolved to is part of the model: a surface without a
+                    // row takes its texture from a texture asset's name and the module's id, which
+                    // no file of the stamp says - and a model of the game is no file of the
+                    // project at all
+                    let h = fnv(stamp(), &m.stamp.to_le_bytes());
+                    let h = m.object.surfaces.iter().fold(h, |h, s| {
+                        [s.name.as_str(), s.texture.as_str(), s.shader.as_str()]
+                            .iter()
+                            .fold(fnv(h, b"\0"), |h, x| fnv(fnv(h, x.to_lowercase().as_bytes()), b"|"))
+                    });
+                    let opts =
+                        ExportOptions { source_file: e.name.as_str().into(), ..ExportOptions::default() };
+                    cached(&dir, &format!("{h:016x}.ogf"), hits, || match &m.compiled {
+                        // a compiled model is published as itself, with what the asset changes said again
+                        Some(c) => restated(c, &m),
+                        None => gz_fmt_ogf::export_skeleton(&m.object, &opts, 4)
+                            .map(|x| x.bytes)
+                            .map_err(|err| err.to_string()),
+                    })?
+                }
+            };
             let baked = std::fs::read(&ogf)
                 .map_err(|err| format!("{}: {}", ogf.display(), gz_base::io_reason(&err)))?;
             let text = std::fs::read(e.path.to_fs(root))
@@ -335,6 +408,7 @@ fn bake(root: &Path, e: &Entry, game: &resolve::GameModel, hits: &mut usize) -> 
             shipped = shipped_model_text(&text, &baked, &m)?;
             out.push((format!("{base}.ogf"), ogf));
             if m.compiled.is_none() && !m.object.motions.is_empty() {
+                let h = fnv(stamp(), &m.stamp.to_le_bytes());
                 let omf = cached(&dir, &format!("{h:016x}.omf"), hits, || {
                     gz_fmt_ogf::export_omf(&m.object).map(|x| x.bytes).map_err(|err| err.to_string())
                 })?;

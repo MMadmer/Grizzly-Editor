@@ -195,13 +195,27 @@ pub struct DdsRequest {
     pub filter: MipFilter,
 }
 
+/// Where the game reads a chunk of a texture's description from: the first place, byte by byte
+/// from the file's start, that holds the chunk's id and a length that fits in what follows -
+/// some shipped descriptions give a chunk a wrong length, overlapping the next one - and from
+/// there on to the end of the file, never only the chunk's declared length: a string whose
+/// chunk was written a few bytes short runs on to its terminator. The game's rule, ported.
+fn texture_chunk<'a>(file: &Reader<'a>, id: u32) -> Option<Reader<'a>> {
+    let data = file.data();
+    let len = data.len();
+    let word = |at: usize| u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+    (0..len.saturating_sub(7))
+        .find(|&at| word(at) == id && word(at + 4) as usize <= len - (at + 8))
+        .map(|at| Reader::new(&data[at + 8..]))
+}
+
 impl TextureParams {
     /// Reads the description's chunks from a thumbnail file.
     pub fn read(file: &Reader<'_>) -> Result<Self> {
         let mut p = Self::default();
 
-        let main = file.need_chunk(THM_CHUNK_TEXTUREPARAM)?;
-        let mut r = main.reader();
+        let mut r = texture_chunk(file, THM_CHUNK_TEXTUREPARAM)
+            .ok_or(gz_chunk::ChunkError::Missing(THM_CHUNK_TEXTUREPARAM))?;
         p.fmt = TextureFormat(r.r_u32()?);
         p.flags = TextureFlags::from_bits_retain(r.r_u32()?);
         p.border_color = r.r_u32()?;
@@ -211,21 +225,18 @@ impl TextureParams {
         p.width = r.r_i32()?;
         p.height = r.r_i32()?;
 
-        if let Some(c) = file.open_chunk(THM_CHUNK_TEXTURE_TYPE)? {
-            p.ty = TextureType(c.reader().r_u32()?);
+        if let Some(mut r) = texture_chunk(file, THM_CHUNK_TEXTURE_TYPE) {
+            p.ty = TextureType(r.r_u32()?);
         }
-        if let Some(c) = file.open_chunk(THM_CHUNK_DETAIL_EXT)? {
-            let mut r = c.reader();
+        if let Some(mut r) = texture_chunk(file, THM_CHUNK_DETAIL_EXT) {
             p.detail_name = r.r_stringz()?.into();
-            p.detail_scale = r.r_f32()?;
+            p.detail_scale = r.r_f32().unwrap_or(1.0);
         }
-        if let Some(c) = file.open_chunk(THM_CHUNK_MATERIAL)? {
-            let mut r = c.reader();
+        if let Some(mut r) = texture_chunk(file, THM_CHUNK_MATERIAL) {
             p.material = TextureMaterial(r.r_u32()?);
             p.material_weight = r.r_f32()?;
         }
-        if let Some(c) = file.open_chunk(THM_CHUNK_BUMP)? {
-            let mut r = c.reader();
+        if let Some(mut r) = texture_chunk(file, THM_CHUNK_BUMP) {
             p.bump_virtual_height = r.r_f32()?;
             p.bump_mode = BumpMode(r.r_u32()?);
             // the retired "autogen" mode reads as no bump
@@ -234,11 +245,11 @@ impl TextureParams {
             }
             p.bump_name = r.r_stringz()?.into();
         }
-        if let Some(c) = file.open_chunk(THM_CHUNK_EXT_NORMALMAP)? {
-            p.ext_normal_map_name = c.reader().r_stringz()?.into();
+        if let Some(mut r) = texture_chunk(file, THM_CHUNK_EXT_NORMALMAP) {
+            p.ext_normal_map_name = r.r_stringz()?.into();
         }
-        if let Some(c) = file.open_chunk(THM_CHUNK_FADE_DELAY)? {
-            p.fade_delay = c.reader().r_u8()?;
+        if let Some(mut r) = texture_chunk(file, THM_CHUNK_FADE_DELAY) {
+            p.fade_delay = r.r_u8()?;
         }
         Ok(p)
     }

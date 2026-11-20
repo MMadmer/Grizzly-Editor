@@ -415,10 +415,27 @@ A change of plan is a change of its document first.
   text beside it (a model's with `surfaces` written one row per child of the baked model, in the children's
   order: the game reads them by position, the author writes them by name), cached in the project's
   `temp\media` and deterministic. An asset where it lies and its
-  source are sources: never shipped as they are. **The game reads the description** over the data (a texture's
+  source are sources: never shipped as they are - but a source that is the game's container already (below).
+  **The game reads the description** over the data (a texture's
   in place of a `.thm`, a sound's parameters, a model's surfaces, bones, user data and its own motions' flags):
   what a key means lives in the game, and a key the game reads means the same in the editor. A static model is
   compiled into the level and ships nothing.
+- **A file in the game's container already is published as it is** (`gz-media`'s `publish.rs`): a `.dds` and its
+  `#` companion, an `.ogg` whose parameters are the asset's (or a stream that reads with none the game reads,
+  under an asset that states none), a project's `.ogf` the asset changes nothing of - byte for byte, nothing
+  baked. Over such a picture the keys that say how a picture is made (`texture::MAKING_KEYS`) apply to nothing and
+  are a warning at each. Under the module's own `gamedata\textures\`, `sounds\`, `meshes\` such a file has its asset
+  beside it, named by its path below that folder (`Entry::takes`: the file is the asset's only where the asset
+  publishes it). `asset.import` makes those assets in place from what the game reads of the file - a `.thm` beside
+  a picture (every key the game reads stated, none only the SDK reads), a `.thm` alone (`source =
+  "game:<name>"`, a description of the game's texture), an `.ogg`'s comment, a `.ogf` there (dynamic) - each read
+  back from the text it writes, else no asset and the file stays as it is. The `.thm` stays and ships unless the
+  caller says `remove_descriptions` (the destroy door: what only the SDK read of it goes with it). A picture the
+  game cannot load by its name (`files::texture_name_reached`) or that is no DDS, and a file of the game's formats
+  in `gamedata` outside its kind's folder (a level's lightmap), get no asset. A file of the project brought into
+  another folder is copied there; one from outside takes the name of where it lands. A `.thm` is read the way the
+  game reads one (`gz-fmt-tex`'s `texture_chunk`: the game's byte-by-byte chunk search, read on in the file);
+  change both or neither.
 - **What a thing is lives in its asset and nowhere else.** A sound says in its `.sndasset` whether it is
   copyrighted and what plays instead (`copyrighted`, `streamer`: a sound that is not copyrighted; `M114`-`M116`),
   and the Sound tab (`sound`, `gz-ui-previews`' `sound.rs`: Play / Stop and the asset's keys as a grid made from
@@ -908,6 +925,11 @@ A change of plan is a change of its document first.
   it took the motions from every model that names that path and the mod does not replace, and the first scene
   that played one stopped the game. What a conversion needs is a step of the converter, never a script kept
   in the converted project.
+- `tools/classic_mod/media_assets.py` is the step after it (the editor's own `asset.import`, run through
+  `Grizzly-Cmd.exe`): every texture, sound and model of the module's game data gets its asset in place, the
+  `.thm` files they say all of go, and the build ships every file byte for byte. Either step run by hand keeps the
+  converter's ledger (`temp\classic_import.files`, `ledger.py`) in step, so a rerun still removes exactly what the
+  conversion wrote.
 - `mod.ltx` of such a module says `mode = *` and `target = any`: it mounts in every game, like the classic install did,
   and keeps `target = any` when the manifest is saved.
 - Nothing leaves a module for merely looking unused: a `.ogf` names its `_lod` model from inside, and a list made by reading files had five

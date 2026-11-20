@@ -287,12 +287,12 @@ pub const MODEL: &[Field] = &[
         "source",
         Ty::File,
         "the file with the asset's own name and `.glb`, `.gltf`, `.obj`, `.object` or `.ogf`",
-        "The model's geometry: glTF 2.0, Wavefront OBJ, an X-Ray SDK `.object`, or a compiled model - an `.ogf` of the project, or a model of the game by its engine name (`\"game:dynamics/box/box_wood_01.ogf\"`: the project's own `gamedata\\meshes` first, then the linked game). Over a compiled model the asset says what changes: `surfaces` by the name of the texture a part wears, `userdata`, a bone's `mass` and `material`; a dynamic one is published as the same file with that said again - its skeleton, its motions and its levels of detail stay its own. Not together with `parts`.",
+        "The model's geometry: glTF 2.0, Wavefront OBJ, an X-Ray SDK `.object`, or a compiled model - an `.ogf` of the project, or a model of the game by its engine name (`\"game:dynamics/box/box_wood_01.ogf\"`: the project's own `gamedata\\meshes` first, then the linked game). Over a compiled model the asset says what changes: `surfaces` by the name of the texture a part wears, `userdata`, a bone's `mass` and `material`; a dynamic one is published as the same file with that said again - its skeleton, its motions and its levels of detail stay its own -, and as the very file when the asset changes nothing of it. Not together with `parts`.",
     ),
     f(
         "name",
         Ty::GameName,
-        "`<module id>\\<file name>`",
+        "the path below `gamedata\\meshes` for an asset that lies there, else `<module id>\\<file name>`",
         "The name the game knows the model by: a dynamic model is published as `meshes\\<name>.ogf`. A static one is compiled into the level and needs none.",
     ),
     f(
@@ -440,19 +440,19 @@ pub const TEXTURE: &[Field] = &[
         "source",
         Ty::File,
         "the file with the asset's own name and `.png`, `.jpg`, `.tga`, `.bmp` or `.dds`",
-        "The picture.",
+        "The picture. A `.dds` is a game texture already: it is published as it is - with its `#` companion beside it, `<stem>#.dds`, the second texture of a bump pair -, and the keys that say how a picture is made (`format`, `mips`, the dithers, the borders, the fades, a bump map's `normal_map` and `depth`) apply to nothing - a warning at each. `\"game:<name>\"` names a texture of the game: the asset is its description alone, published under that name over the game's picture (`name` is that texture's).",
     ),
     f(
         "name",
         Ty::GameName,
-        "`<module id>\\<file name>`",
+        "the path below `gamedata\\textures` for an asset that lies there, else `<module id>\\<file name>`",
         "The name the game knows the texture by: it is published as `textures\\<name>.dds`.",
     ),
     f(
         "use",
         Ty::Words(USES),
         "\"surface\"",
-        "What the texture is: a surface's picture, a picture of the interface (no mip levels), a cube map, a bump map, a normal map or a terrain's picture. Picking one sets what that use needs; the keys below set the rest.",
+        "What the texture is: a surface's picture, a picture of the interface (no mip levels), a cube map, a bump map, a normal map or a terrain's picture. Picking one sets what that use needs; the keys below set the rest. The game reads the description of a surface, a normal map and a terrain's picture; of `ui`, `cube` and `bump` nothing, as of such a `.thm`.",
     ),
     f(
         "format",
@@ -528,6 +528,12 @@ pub const TEXTURE: &[Field] = &[
         "0",
         "Flag bits of a texture description no key names, kept as they are.",
     ),
+    f(
+        "depth",
+        Ty::Number { min: 0.0, max: 1.0 },
+        "0.05",
+        "How deep the relief of a bump map made from a height map is, metres, for a texture that has no `bump` of its own - a bump map itself (`use = \"bump\"`) says it here; a texture with a `bump` says it there.",
+    ),
 ];
 
 pub const BUMP: &[Field] = &[
@@ -535,7 +541,7 @@ pub const BUMP: &[Field] = &[
         "texture",
         Ty::GameName,
         "`<name>_bump`",
-        "The bump map by its game name, when it is a texture of its own.",
+        "The bump map by its game name, when it is a texture of its own. Said empty (`\"\"`), the texture uses a bump map of no name: the game draws none.",
     ),
     f(
         "source",
@@ -554,13 +560,18 @@ pub const BUMP: &[Field] = &[
 ];
 
 pub const DETAIL: &[Field] = &[
-    f("texture", Ty::GameName, "", "The detail texture by its game name."),
+    f(
+        "texture",
+        Ty::GameName,
+        "",
+        "The detail texture by its game name. Without it the game lays no detail texture.",
+    ),
     f("scale", Ty::Number { min: 0.0, max: 10_000.0 }, "1", "How many times it repeats over this texture."),
     f(
         "on",
         Ty::Words(DETAIL_ON),
         "\"diffuse\"",
-        "What it is laid over: the colour, the bump map, both, or neither.",
+        "What it is laid over: the colour, the bump map, both, or neither (`none`: the game lays no detail texture).",
     ),
 ];
 
@@ -573,12 +584,17 @@ pub const SOUND: &[Field] = &[
         "",
         "The header: the format version (1). A file of a newer version is refused by name.",
     ),
-    f("source", Ty::File, "the file with the asset's own name and `.wav` or `.ogg`", "The sound.")
-        .titled("Source"),
+    f(
+        "source",
+        Ty::File,
+        "the file with the asset's own name and `.wav` or `.ogg`",
+        "The sound. An `.ogg` whose own parameters are the asset's - or one with none the game reads (no comment, an encoder's tag) under an asset that states none - is published as it is; otherwise with the asset's parameters said again in it, its sound untouched.",
+    )
+    .titled("Source"),
     f(
         "name",
         Ty::GameName,
-        "`<module id>\\<file name>`",
+        "the path below `gamedata\\sounds` for an asset that lies there, else `<module id>\\<file name>`",
         "The name the game knows the sound by: it is published as `sounds\\<name>.ogg`.",
     )
     .titled("Game Name"),
@@ -587,7 +603,7 @@ pub const SOUND: &[Field] = &[
         .on_surface(),
     f(
         "min_distance",
-        Ty::Number { min: 0.0, max: 10_000.0 },
+        Ty::Number { min: 0.0, max: 1_000_000.0 },
         "1",
         "Up to this distance the sound plays at its full volume, metres.",
     )
@@ -596,7 +612,7 @@ pub const SOUND: &[Field] = &[
     .on_surface(),
     f(
         "max_distance",
-        Ty::Number { min: 0.1, max: 10_000.0 },
+        Ty::Number { min: 0.1, max: 1_000_000.0 },
         "300",
         "Beyond this distance it is not heard, metres.",
     )
@@ -606,7 +622,7 @@ pub const SOUND: &[Field] = &[
     f("volume", Ty::Number { min: 0.0, max: 10.0 }, "1", "Its base volume.").titled("Volume").on_surface(),
     f(
         "ai_distance",
-        Ty::Number { min: 0.1, max: 10_000.0 },
+        Ty::Number { min: 0.1, max: 1_000_000.0 },
         "`max_distance`",
         "How far NPCs hear it, metres.",
     )

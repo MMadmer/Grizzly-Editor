@@ -154,7 +154,26 @@ it over the data - a texture's description in place of a `.thm`, a sound's param
 surfaces, bones and motions over its `.ogf`. The data is binary by nature and is **baked** into the game's own
 containers beside it (`.dds` and the bump pair, `.ogg`, `.ogf` and `.omf`; a static model is compiled into the
 level instead), cached in the project's `temp\media\`; the asset where it lies and its source never ship as they
-are. Binary by nature, and staying so: the X-Ray SDK library as it is (`rawdata\objects\*.object`, `.thm`,
+are - but a source that is the game's container already (below).
+
+**A file already in the game's container is published as it is.** A `.dds` (with its `#` companion), an `.ogg`
+whose own parameters are the asset's - or that has none the game reads and an asset that states none -, a compiled
+`.ogf` of the project that the asset changes nothing of: the build ships the file itself, byte for byte, and bakes
+nothing; over such a picture the keys that say how a picture is made (`format`, `mips`, the fades, ...) apply to
+nothing and are a warning. Such a file under the module's own `gamedata\textures\`, `sounds\` or `meshes\` has its
+asset beside it, named by its path below that folder (`gamedata\textures\wpn\ak.texasset` describes `wpn\ak`): a
+module that ships the game's formats - a classic mod made into one - keeps every file where the game looks for it
+and says what the game reads of a `.thm` or an `.ogg`'s comment in the asset's text. `asset.import` makes those
+assets in place, each read back from the text it writes before it is trusted: a `.thm` beside a picture becomes
+its asset's keys (every key the game reads stated, so the game's own `.thm` under that name says nothing more;
+none only the SDK reads) and stays beside it, shipped, unless the caller says `remove_descriptions` - the destroy
+door, since what only the SDK read of it goes too; a `.thm` alone becomes `source = "game:<name>"`, a description
+of the game's texture; an `.ogg`'s comment becomes the sound's keys; a `.ogf` there is a dynamic model. A picture
+the game cannot load by its name (`<name>.dds.dds`, a name ending in a space) or that is no DDS, a file an asset
+cannot say the same way, and a file of the game's formats in `gamedata` outside its kind's folder (a level's
+lightmap, which the game reads where it lies) stay files of their own, shipped as they are, with no asset.
+
+Binary by nature, and staying so: the X-Ray SDK library as it is (`rawdata\objects\*.object`, `.thm`,
 `.wav`, read as before; an asset may wrap an `.object` to restate its surfaces), the painted layers of a scene
 (AI map, detail objects, wallmarks - sidecar files the scene names), and everything the level build produces for
 the game.

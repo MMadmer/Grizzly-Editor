@@ -236,6 +236,7 @@ mod tests {
                 dynamic: false,
                 parts: false,
                 game: None,
+                companion: None,
                 excluded: false,
                 error: None,
             }],

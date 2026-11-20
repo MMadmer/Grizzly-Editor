@@ -72,7 +72,7 @@ pub struct Failure {
 }
 
 impl Failure {
-    fn new(code: &'static str, key: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, key: &str, message: impl Into<String>) -> Self {
         let path = if key.is_empty() { Vec::new() } else { vec![Seg::key(key)] };
         Self { issue: Issue::new(code, Severity::Error, path, message) }
     }
@@ -587,6 +587,13 @@ pub fn texture_source(root: &Path, rel: &str) -> Result<(TextureAsset, PathBuf, 
     let abs = root.join(rel.replace('/', "\\"));
     let text = read_text(&abs, rel)?;
     let (asset, issues) = loaded(MediaKind::Texture, rel, &text, TextureAsset::from_value)?;
+    if let Some(g) = files::game_texture(asset.source.as_deref()) {
+        return Err(Failure::new(
+            UNREADABLE,
+            "source",
+            format!("the asset describes the game's texture '{g}': its picture is the game's"),
+        ));
+    }
     let has_source = asset.source.as_deref().is_some_and(|s| !s.trim().is_empty());
     let source = files::source_of(MediaKind::Texture, &abs, asset.source.as_deref()).ok_or_else(|| {
         Failure::new(

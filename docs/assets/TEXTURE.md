@@ -21,9 +21,9 @@ return {
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `tex` | integer | - | The header: the format version (1). A file of a newer version is refused by name. |
-| `source` | string (a file beside the asset) | the file with the asset's own name and `.png`, `.jpg`, `.tga`, `.bmp` or `.dds` | The picture. |
-| `name` | string (a game name) | `<module id>\<file name>` | The name the game knows the texture by: it is published as `textures\<name>.dds`. |
-| `use` | `"surface"` `"ui"` `"cube"` `"bump"` `"normal"` `"terrain"` | "surface" | What the texture is: a surface's picture, a picture of the interface (no mip levels), a cube map, a bump map, a normal map or a terrain's picture. Picking one sets what that use needs; the keys below set the rest. |
+| `source` | string (a file beside the asset) | the file with the asset's own name and `.png`, `.jpg`, `.tga`, `.bmp` or `.dds` | The picture. A `.dds` is a game texture already: it is published as it is - with its `#` companion beside it, `<stem>#.dds`, the second texture of a bump pair -, and the keys that say how a picture is made (`format`, `mips`, the dithers, the borders, the fades, a bump map's `normal_map` and `depth`) apply to nothing - a warning at each. `"game:<name>"` names a texture of the game: the asset is its description alone, published under that name over the game's picture (`name` is that texture's). |
+| `name` | string (a game name) | the path below `gamedata\textures` for an asset that lies there, else `<module id>\<file name>` | The name the game knows the texture by: it is published as `textures\<name>.dds`. |
+| `use` | `"surface"` `"ui"` `"cube"` `"bump"` `"normal"` `"terrain"` | "surface" | What the texture is: a surface's picture, a picture of the interface (no mip levels), a cube map, a bump map, a normal map or a terrain's picture. Picking one sets what that use needs; the keys below set the rest. The game reads the description of a surface, a normal map and a terrain's picture; of `ui`, `cube` and `bump` nothing, as of such a `.thm`. |
 | `format` | `"auto"` `"dxt1"` `"dxt1_alpha"` `"dxt3"` `"dxt5"` `"rgba4444"` `"rgba1555"` `"rgb565"` `"rgb"` `"rgba"` `"nvhs"` `"nvhu"` `"a8"` `"l8"` `"a8l8"` `"bc4"` `"bc5"` `"bc6"` `"bc7"` | "auto" | How the game texture is stored; `auto`: DXT1, or DXT5 when the picture has alpha (what `use` needs otherwise). |
 | `mips` | boolean | true (false for `ui`, `cube`, `bump`, `terrain`) | The texture keeps its mip levels. |
 | `mip_filter` | `"box"` `"cubic"` `"point"` `"triangle"` `"quadratic"` `"advanced"` `"catrom"` `"mitchell"` `"gaussian"` `"sinc"` `"bessel"` `"hanning"` `"hamming"` `"blackman"` `"kaiser"` | "box" (`kaiser` for `normal`) | How the mip levels are made. |
@@ -46,12 +46,13 @@ return {
 | `bump` | the bump map (below), `true` for one under the texture's name with `_bump`, `false` for none | none | The texture has a bump map: the game draws the surface's relief with it. |
 | `detail` | the detail texture (below), or `false` for none | none | A finer texture laid over this one close up. |
 | `extra_flags` | integer, 0 to 4294967295 | 0 | Flag bits of a texture description no key names, kept as they are. |
+| `depth` | number, 0 to 1 | 0.05 | How deep the relief of a bump map made from a height map is, metres, for a texture that has no `bump` of its own - a bump map itself (`use = "bump"`) says it here; a texture with a `bump` says it there. |
 
 ## `bump`
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `texture` | string (a game name) | `<name>_bump` | The bump map by its game name, when it is a texture of its own. |
+| `texture` | string (a game name) | `<name>_bump` | The bump map by its game name, when it is a texture of its own. Said empty (`""`), the texture uses a bump map of no name: the game draws none. |
 | `source` | string (a file beside the asset) | none | A picture the bump map is made of: the build publishes it as `textures\<name>_bump.dds` with its `<name>_bump#.dds`. |
 | `from` | `"height"` `"normal"` | "height" | What `source` holds: a height map (gloss in alpha) or a normal map. |
 | `depth` | number, 0 to 1 | 0.05 | How deep the relief is, metres. |
@@ -61,9 +62,9 @@ return {
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `texture` | string (a game name) | - | The detail texture by its game name. |
+| `texture` | string (a game name) | - | The detail texture by its game name. Without it the game lays no detail texture. |
 | `scale` | number, 0 to 10000 | 1 | How many times it repeats over this texture. |
-| `on` | `"none"` `"diffuse"` `"bump"` `"both"` | "diffuse" | What it is laid over: the colour, the bump map, both, or neither. |
+| `on` | `"none"` `"diffuse"` `"bump"` `"both"` | "diffuse" | What it is laid over: the colour, the bump map, both, or neither (`none`: the game lays no detail texture). |
 
 ## Problems
 

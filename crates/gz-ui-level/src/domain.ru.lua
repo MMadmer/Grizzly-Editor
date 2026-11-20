@@ -702,6 +702,8 @@ return {
 
   -- the scene's jobs and their stages (gz-scene, gz-mcp)
   { "Loading the scene", "Загрузка сцены" },
+  -- the game library's job (gz-gamelib)
+  { "Reading the Game", "Чтение игры" },
   { "Reading the game's configs", "Чтение конфигов игры" },
   { "Reading the scene", "Чтение сцены" },
   { "Laying the slots on the ground", "Размещение слотов на земле" },

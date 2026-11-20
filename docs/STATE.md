@@ -183,7 +183,26 @@ What the suites hold, beyond what their names say:
   resolved keys of the system config and every key of 33 configs opened by name as the real engine composes
   them with the module and without it (`-DumpConfigs`, `-WithoutModule`), 1287 icons, 9046 texts, 1182
   particle effects, every use scene and the skinning; what it found is fixed in the converter, the game or
-  the project.
+  the project. Its media then became assets in place (the converter's media step, `asset.import
+  remove_descriptions=true`, 8 seconds): 1793 textures, 888 sounds and 425 models, the 946 `.thm` said by them
+  and gone. The built module ships every other file of its game data byte for byte (7305) and bakes nothing (a
+  build of 11 218 files in 16 seconds); every `.thm` of the original mod (1048) read by the game's chunk rule
+  gives the game what the module's asset gives it over today's game, but one bump companion's that the game
+  never asks for; the check over 3900 files takes 5 seconds and has 0 errors; in a new game the game reads the
+  module's 3106 descriptions, refuses nothing, plays all 8639 first-person motions and logs nothing it did not
+  log before.
+- **Media in the game's containers published as they are** (`gz-media`'s tests: in place assets of a `.dds`
+  with its `#` companion and its `.thm`, a `.thm` alone, an `.ogg` with and without the game's comment, a
+  compiled `.ogf`; a second import changes nothing; a picture the game cannot load by its name or that is no
+  DDS, a sound or a description an asset cannot say the same way and a file of the game's formats outside its
+  kind's folder left files of their own; a file of the project brought into another folder copied there; files
+  from outside named by where they land; a broken `.ogg` baked and refused; `gz-fmt-tex`'s tests of the game's
+  chunk rule: a chunk written short, one longer than its file; `gz-ui-content`'s tests of a drop into the game's
+  folders and of a bump pair's rename; `test_previews` T: such an asset over a `.dds` and a `game:` description
+  open in the texture tab, the file as it is and the game's picture). What is not proven: the in-place assets of
+  a module made in the editor from scratch (no suite builds one), a fresh conversion of a classic mod through the
+  converter since its media step was added (the step ran by hand on Weapons Evolution 2026), and a drop of the
+  game's formats from Explorer in a window (the split is a unit test; `asset.import` under it is the command's).
 - **A module's content in the extension save** (the game's `tools/qa/saves/Run-ModuleSavesQa.ps1`, its Lua tests
   `test_examples.lua` (z30)): a module's objects, state and data out of the world save, back with their ids on a
   load, kept through a game without the module and through `-no_xms`, dropped by `xms_forget`; an older

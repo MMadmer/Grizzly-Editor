@@ -67,6 +67,7 @@ const TEXTURE_TOP: &[&str] = &[
     "bump",
     "detail",
     "extra_flags",
+    "depth",
 ];
 const TEXTURE_BUMP: &[&str] = &["texture", "source", "from", "depth", "parallax"];
 const TEXTURE_DETAIL: &[&str] = &["texture", "scale", "on"];

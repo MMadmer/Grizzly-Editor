@@ -150,6 +150,9 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line(
         "a `.lootasset` and a `.recipeasset`, never keys of the item (`reference trader`, `loot`, `recipes`).",
     );
+    line(
+        "Game-format textures, sounds and models under `gamedata\\` ship as they are, an asset beside each (`asset.import`).",
+    );
     line("");
     line(
         "`mod.ltx` is LTX, not Lua: `Grizzly-Cmd.exe reference manifest` lists every section and key. A module",
@@ -236,7 +239,7 @@ mod tests {
         }
         let text = text(root, "Night.grizzly", "7c1e6c1e-5c0f-4f6e-9f43-2d5b1c9a0e11");
         let lines = text.lines().count();
-        assert!((20..=49).contains(&lines), "{lines} lines:\n{text}");
+        assert!((20..=50).contains(&lines), "{lines} lines:\n{text}");
         assert!(text.contains(".tradeasset") && text.contains("reference trader"), "{text}");
         assert!(text.starts_with("# Night Watch\n"), "{text}");
         assert!(text.contains("module `night`"), "{text}");

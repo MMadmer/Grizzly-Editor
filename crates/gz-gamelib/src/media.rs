@@ -7,7 +7,7 @@ use gz_media::texture::TextureAsset;
 use serde_json::{Map, Value, json};
 
 /// The version of what a texture's row states.
-pub const TEXTURE_VERSION: u32 = 2;
+pub const TEXTURE_VERSION: u32 = 3;
 /// The version of what a sound's row states.
 pub const SOUND_VERSION: u32 = 2;
 
@@ -86,10 +86,13 @@ pub fn describe_texture(name: &str, dds: &[u8], thm: Option<&[u8]>) -> Result<Va
         let said = gz_luadata::to_json(&gz_luadata::Value::Table(asset.to_table()));
         if let Some(m) = said.as_object() {
             for (k, v) in m {
-                // a table with nothing in it says nothing
+                // a table with nothing in it says nothing - but a bump map's: the pair under the
+                // texture's own name
                 let empty =
                     v.as_object().is_some_and(Map::is_empty) || v.as_array().is_some_and(Vec::is_empty);
-                if !empty && !matches!(k.as_str(), "tex" | "source" | "name" | "alpha") {
+                if k == "bump" && empty {
+                    row.insert(k.clone(), json!(true));
+                } else if !empty && !matches!(k.as_str(), "tex" | "source" | "name" | "alpha") {
                     row.insert(k.clone(), v.clone());
                 }
             }

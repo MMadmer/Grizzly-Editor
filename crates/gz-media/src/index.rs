@@ -32,8 +32,11 @@ pub struct Entry {
     pub dynamic: bool,
     /// A model of `parts`: no source.
     pub parts: bool,
-    /// A model over a model of the game (`source = "game:..."`): its engine name.
+    /// A model or a texture over one of the game (`source = "game:..."`): its game name. A
+    /// texture of the game publishes its description alone - the picture stays the game's.
     pub game: Option<String>,
+    /// A game texture's `#` companion (`<stem>#.dds` beside its `.dds` source), published with it.
+    pub companion: Option<RelPath>,
     /// Left out of the build by `[exclude]`.
     pub excluded: bool,
     /// Why the file does not read.
@@ -45,6 +48,28 @@ impl Entry {
     #[must_use]
     pub fn ships(&self) -> bool {
         !self.excluded && self.error.is_none() && (self.kind != MediaKind::Model || self.dynamic)
+    }
+
+    /// Whether the asset takes this project file in (its source, a file the source names, a
+    /// bump picture, a `#` companion), so the build never ships the file as it is. A file of the
+    /// module's `gamedata` is the game's data where it lies: it is the asset's only when the
+    /// asset publishes it at that very path - an asset beside a file of the game's data - and
+    /// ships by its own name when the asset publishes another one.
+    #[must_use]
+    pub fn takes(&self, rel: &str) -> bool {
+        let key = rel.replace('\\', "/").to_lowercase();
+        let same = |p: &RelPath| p.as_str().to_lowercase() == key;
+        let named = self.source.as_ref().is_some_and(same)
+            || self.uses.iter().any(same)
+            || self.companion.as_ref().is_some_and(same);
+        if !named {
+            return false;
+        }
+        if !ships_where_it_lies(&key) {
+            return true;
+        }
+        self.ships()
+            && crate::publish::paths_of(self).iter().any(|p| p.replace('\\', "/").to_lowercase() == key)
     }
 }
 
@@ -110,26 +135,17 @@ impl Index {
             .filter(|e| {
                 e.source.as_ref().is_some_and(same)
                     || e.uses.iter().any(same)
-                    || (e.game.is_some() && e.game == game_model)
+                    || e.companion.as_ref().is_some_and(same)
+                    || (e.kind == MediaKind::Model && e.game.is_some() && e.game == game_model)
             })
             .collect()
     }
 
     /// A file the build never ships as it is: a media asset where it lies, or a file an asset
-    /// takes its data from - unless that file lies in the module's `gamedata`, where the game
-    /// reads it by its own name: an asset made over it changes nothing of the file's own way
-    /// into the game.
+    /// takes its data from ([`Entry::takes`]).
     #[must_use]
     pub fn is_source(&self, rel: &str) -> bool {
-        if gz_project::rules::is_media_asset_name(rel) {
-            return true;
-        }
-        !ships_where_it_lies(rel)
-            && self.users_of(rel).iter().any(|e| {
-                let key = rel.replace('\\', "/").to_lowercase();
-                e.source.as_ref().is_some_and(|p| p.as_str().to_lowercase() == key)
-                    || e.uses.iter().any(|p| p.as_str().to_lowercase() == key)
-            })
+        gz_project::rules::is_media_asset_name(rel) || self.entries.iter().any(|e| e.takes(rel))
     }
 
     /// The paths the build writes for the assets that ship, relative to the module's root,
@@ -159,6 +175,7 @@ pub fn entry(root: &Path, rel: &RelPath, module: &str, excluded: bool) -> Entry 
         dynamic: false,
         parts: false,
         game: None,
+        companion: None,
         excluded,
         error: None,
     };
@@ -191,7 +208,12 @@ pub fn entry(root: &Path, rel: &RelPath, module: &str, excluded: bool) -> Entry 
                     e.uses.push(r);
                 }
             }
-            (t.name, t.source)
+            // a description of a texture of the game is that texture's: it publishes under its name
+            e.game = files::game_texture(t.source.as_deref());
+            match &e.game {
+                Some(g) => (Some(t.name.clone().unwrap_or_else(|| g.clone())), None),
+                None => (t.name, t.source),
+            }
         }
         MediaKind::Sound => {
             let s = SoundAsset::from_value(&value).0;
@@ -205,6 +227,9 @@ pub fn entry(root: &Path, rel: &RelPath, module: &str, excluded: bool) -> Entry 
         && let Some(src) = files::source_of(kind, &abs, source.as_deref())
     {
         e.uses.extend(files::dependencies(&src).iter().filter_map(|d| rel_of(d)));
+        if kind == MediaKind::Texture {
+            e.companion = files::hash_companion(&src).and_then(|c| rel_of(&c));
+        }
         e.source = rel_of(&src);
     }
     e
