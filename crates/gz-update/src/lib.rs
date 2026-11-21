@@ -26,6 +26,7 @@ pub mod delta;
 pub mod hashes;
 pub mod manifest;
 pub mod net;
+pub mod notes;
 pub mod prepare;
 pub mod record;
 pub mod schedule;

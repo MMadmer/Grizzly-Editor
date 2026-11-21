@@ -12,11 +12,13 @@ version behind or twenty, the download is what actually differs, and nobody publ
 A version is one GitHub release of `MMadmer/Grizzly-Editor` whose tag is a strict Semantic Version,
 `MAJOR.MINOR.PATCH` (no `v`). It carries:
 
-- `Grizzly-Editor-MAJOR.MINOR.PATCH.zip` - the complete installation (section 2) and the source of every update. The
-  name is fixed: it is the one asset every client looks for.
+- `Grizzly-Editor-MAJOR.MINOR.PATCH-Setup.exe` - the installer: the archive's files installed for the current user
+  (section 2). Over an installed editor it is the update.
+- `Grizzly-Editor-MAJOR.MINOR.PATCH.zip` - the complete installation (section 2), the portable edition and the source
+  of every update. The name is fixed: it is the one asset every client looks for.
 - `Grizzly-Editor-MAJOR.MINOR.PATCH-symbols.zip` - the PDBs of the three programs. Optional for a user (a crash
   report without them carries addresses instead of names); never read by the updater.
-- The release notes are the release's body (Markdown). The update dialog shows them.
+- The release notes are the release's body (Markdown). The update dialog shows them (below, "The notes").
 
 The archive: entries stored or deflated, nothing encrypted, UTF-8 names with forward slashes, ZIP64 when needed. Its
 root is the installation's root. It holds every managed file exactly once and `update-manifest.txt`:
@@ -32,9 +34,51 @@ an installed editor keeps it beside its programs, and the files it names are the
 update ever replaces or removes. Everything else in the folder (the settings, the project list, logs, local game
 data, a file the author put there) is not the updater's.
 
-`pwsh -NoProfile -File .\Build.ps1 -Package` makes both archives and the manifest in `Bin\x64\Package` from the
-release build and the tracked runtime data (`tools/rust/package.py` holds the file list). Nothing is published by
-any tool of this repository: a release goes out by the author's hand.
+`pwsh -NoProfile -File .\Build.ps1 -Package` makes both archives, the manifest and the installer in `Bin\x64\Package`
+from the release build and the tracked runtime data (`tools/rust/package.py` holds the file list,
+`tools/rust/installer.ps1` compiles `tools/installer/grizzly_installer.iss` over the archive unpacked, with Inno Setup
+6.7.3 pinned by its hash and signature). The build publishes nothing: a release goes out on the author's word, by
+the game's release rules (its PROJECT_RULES.md section 11) with this text and these assets.
+
+### The notes
+
+The notes are written by a person and **nothing in them is required** (`gz_update::notes`): the reader takes what is
+there, and no line out of place hides the rest. A body may speak several languages; a language starts at any line
+that only names one - a heading of any level, a bold line, `EN:`, `English`, `Русский`, `RU`, with a flag or without
+- and runs to the next such line, and the dialog keeps the window's language (English when it is missing, else the
+first one). A body that names no language is shown whole. A section whose heading names installing (`Installation`,
+`Установка`, `Setup`) is left out - the updater installs the release - unless it is all there is. HTML comments are
+notes to the next author and never shown. The dialog draws headings, list items (`-`, `*`, `+`, `1.`, nested ones
+indented), quotes and paragraphs, with emphasis and a link's address set aside; any other line is shown as text. So a
+later release may write its notes in any shape, and every editor since this one shows them.
+
+The text of a release, the way this repository writes it (any other shape still reads):
+
+```markdown
+# English
+
+## Changes
+
+- A short user-visible change.
+
+## Installation
+
+- **Setup** - installs for your Windows user, no administrator rights; over an installed editor it updates it
+  and keeps your projects and settings.
+- **Portable ZIP** - unpack anywhere and start `Grizzly.exe`; it keeps its settings in its own folder.
+
+The editor updates itself after that (Help > Check for Updates).
+
+# Русский
+
+## Изменения
+
+- Короткое заметное пользователю изменение.
+
+## Установка
+
+- ...
+```
 
 The schema is frozen once the first release is out: the updater that applies an archive is the one already
 installed. A client that meets a schema it does not know offers the release page instead of an update.
@@ -50,9 +94,20 @@ installed. A client that meets a schema it does not know offers the release page
   .update\                                           the updater's work (section 5), absent when idle
 ```
 
-The data root is the folder of the programs (`find_root` meets `fs.ltx` there). An editor without
-`update-manifest.txt` beside its programs is a development build - the repository's own `Bin\x64\Release` - and has
-no updater: it checks nothing and offers nothing.
+The data root is the folder of the programs (`find_root` meets `fs.ltx` there), and so is the home: the project
+list, the settings, the logs and the game library live beside the programs. That is why the archive is a **portable
+edition** as it is - unpacked anywhere it runs, and carried to another machine it keeps its settings -, and why
+**Setup installs for the current user** (`%LOCALAPPDATA%\Programs\Grizzly Editor` unless the author picks another
+folder; no administrator rights, never Program Files): the folder must stay the editor's to write. Setup installs
+exactly the archive's files, with shortcuts and an uninstaller. Over an installed editor it is the update: the
+folder offered is the one installed, an editor running there is asked to close, the managed files are replaced,
+those the new manifest no longer names are deleted, a download of the editor's own updater waiting in `.update\` is
+dropped, and an older version over a newer one is asked about first. The uninstaller takes the managed files - the
+ones the editor's own updater brought too - and nothing else: the home stays. Either way the editor updates itself
+afterwards (sections 3 to 5), and Setup over an installation the updater brought further is an update as well.
+
+An editor without `update-manifest.txt` beside its programs is a development build - the repository's own
+`Bin\x64\Release` - and has no updater: it checks nothing and offers nothing.
 
 ## 3. The check
 
@@ -154,3 +209,9 @@ handshake reports the new start. Its window phase, on a copy of a project and an
 holds what the author sees: the chip in each state (available, downloading, waiting, ready, failed, manual), the
 startup toast, Help > Check for Updates..., the Update dialog's buttons per state and the Updates group of
 Preferences > General. Nothing is ever fetched from, or published to, GitHub itself.
+
+`tools/qa/test_installer.ps1` holds Setup (section 2) on the release's own installer, in a folder under the system
+temp folder: every managed file installed and the editor answering from a shell; Setup over it replacing the
+manifest, deleting a file the new version no longer ships, dropping a waiting download of the updater and keeping the
+author's files; the uninstaller taking the managed files and keeping the rest. `gz-update`'s tests hold the notes
+reader to bodies of every shape (section 1, "The notes").

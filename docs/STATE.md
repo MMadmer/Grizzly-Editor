@@ -222,6 +222,11 @@ What the suites hold, beyond what their names say:
   the browser's Export... are not driven by a suite.
 - **A module build builds a stale piece first** (`test_game_library` E): Build Mod over a level of the game
   writes `levels\<level>\pieces\main` and ships it, and the piece is fresh after.
+- **The editor's release assets** (`tools/qa/test_installer.ps1`, `gz-update`'s notes tests, 21.11.2026 on 0.7.0):
+  Setup installs the portable archive's 53 managed files for the user, the installed editor answers from a shell, a
+  second Setup over it deletes the file an older manifest named, drops a staged download and keeps `_projects.ini`,
+  the uninstaller leaves only the author's files; the portable archive unpacked anywhere answers `help`; the notes
+  reader keeps the window's language however a body names it and never hides a line for being out of place.
 
 ## 2. Not proven by a run
 
@@ -280,7 +285,10 @@ What the suites hold, beyond what their names say:
 - A drag with the real mouse - from Explorer onto the Start page, a project folder or the Texture Library, a tile
   into the viewport or onto a layer of a screen: the suites land drops through `viewport.gesture` and the kit's
   zones (`simulate_drop`), never through the system's drag.
-- The editor's update against GitHub: by rule it only ever meets the mock.
+- The editor's update against GitHub: by rule it only ever meets the mock - until the first published release
+  updates itself to the next one.
+- Setup's questions answered by a person (the folder page, a downgrade, closing a running editor): the suite runs
+  it silently.
 - The card's lighter on any card but this machine's (an NVIDIA RTX 3070 Laptop, on Vulkan): an AMD or Intel
   adapter, DX12 alone, a software adapter. What holds there is the design - a check against the CPU on a sample of
   every scene, and the CPU taking over on a difference, a lost device or a limit - and `gz-lc-gpu`'s tests of that

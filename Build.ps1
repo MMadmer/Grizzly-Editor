@@ -8,8 +8,9 @@
 #   .\Build.ps1 -Debug      - the debug build, into Bin\x64\Debug
 #   .\Build.ps1 -Out <dir>  - put the files there instead of Bin\x64\<config>
 #   .\Build.ps1 -Package    - the release, then its archives in Bin\x64\Package (tools/rust/package.py):
-#                             Grizzly-Editor-<version>.zip, its -symbols.zip and update-manifest.txt.
-#                             Nothing is published; a release goes out by the author's hand.
+#                             Grizzly-Editor-<version>.zip (the portable edition and the updater's source),
+#                             its -symbols.zip, update-manifest.txt and Grizzly-Editor-<version>-Setup.exe
+#                             (tools/rust/installer.ps1). Nothing is published by the build.
 #   .\Build.ps1 -Preview -Out <dir> - a preview build: the editor with nothing that reaches players (no Package
 #                             Release, Publish Release, Releases, Submit to Mod Browser, no release.* command)
 #                             and no updater, for trying a module out before the editor's release
@@ -93,8 +94,16 @@ if ($Package) {
     $python = (Get-Command python -ErrorAction SilentlyContinue).Source
     if (-not $python) { Fail "python 3 not found: tools/rust/package.py makes the archives" }
     Write-Host ''
-    & $python (Join-Path $root 'tools\rust\package.py') --bin $bin --out (Join-Path $root 'Bin\x64\Package')
+    $packageDir = Join-Path $root 'Bin\x64\Package'
+    & $python (Join-Path $root 'tools\rust\package.py') --bin $bin --out $packageDir
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    # the installer of the same files: the archive is the portable edition, Setup installs it for the user
+    $cargo = Get-Content -LiteralPath (Join-Path $root 'Cargo.toml') -Raw
+    $section = ($cargo -split '\[workspace\.package\]', 2)[1]
+    if ($section -notmatch '(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"') { Fail 'Cargo.toml names no workspace version' }
+    $version = $Matches[1]
+    & (Join-Path $root 'tools\rust\installer.ps1') -Version $version -Archive (Join-Path $packageDir "Grizzly-Editor-$version.zip") -Out $packageDir
+    if (-not $?) { exit 1 }
 }
 Write-Host ("  {0} s" -f $clock.Elapsed.TotalSeconds.ToString('F1', [Globalization.CultureInfo]::InvariantCulture))
 exit 0

@@ -57,28 +57,62 @@ fn check_now(editor: &Arc<Editor>) {
     }
 }
 
-/// The release notes as plain paragraphs: `#` lines as headings, `-` and `*` lines as bullets,
-/// the rest as text.
+/// A line of the notes with its Markdown set aside: emphasis, code marks, a link's address.
+fn plain(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    // `[text](address)` reads as its text
+    while let Some(open) = rest.find('[') {
+        let Some(close) = rest[open..].find("](").map(|c| open + c) else { break };
+        let Some(end) = rest[close..].find(')').map(|e| close + e) else { break };
+        out.push_str(&rest[..open]);
+        out.push_str(&rest[open + 1..close]);
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace("__", "").replace("~~", "").replace('`', "")
+}
+
+/// The release notes in the window's language (`gz_update::notes`), as plain paragraphs: a `#` line
+/// as a heading, a list item (`-`, `*`, `+`, `1.`) as a bullet or its number, the rest as text. A
+/// line written any other way is still shown, as text.
 fn notes(ui: &mut Ui, body: &str) {
     let p = palette(ui.ctx());
-    let clean = |s: &str| s.replace("**", "").replace('`', "");
-    for raw in body.lines() {
+    let lang = match gz_ui::i18n::lang(ui.ctx()) {
+        gz_ui::Lang::Ru => "ru",
+        _ => "en",
+    };
+    let shown = gz_update::notes::for_language(body, lang);
+    for raw in shown.lines() {
         let line = raw.trim();
+        let nested = raw.len() - raw.trim_start().len() >= 2;
+        let indent = if nested { "      " } else { "" };
+        let numbered = line
+            .find(['.', ')'])
+            .filter(|&at| at > 0 && at <= 3 && line[..at].chars().all(|c| c.is_ascii_digit()))
+            .filter(|&at| line[at + 1..].starts_with(' '));
         if line.is_empty() {
             ui.add_space(4.0);
         } else if line.starts_with('#') {
             ui.add_space(2.0);
             text::label(
                 ui,
-                Tx::raw(clean(line.trim_start_matches('#').trim())),
+                Tx::raw(plain(line.trim_start_matches('#').trim())),
                 Font::Strong,
                 p.text,
                 Clip::End,
             );
-        } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            text::prose(ui, Tx::raw(format!("\u{2022}  {}", clean(item))));
+        } else if let Some(item) =
+            line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).or_else(|| line.strip_prefix("+ "))
+        {
+            let mark = if nested { "\u{25E6}" } else { "\u{2022}" };
+            text::prose(ui, Tx::raw(format!("{indent}{mark}  {}", plain(item.trim()))));
+        } else if let Some(at) = numbered {
+            text::prose(ui, Tx::raw(format!("{indent}{}  {}", &line[..=at], plain(line[at + 1..].trim()))));
+        } else if let Some(quote) = line.strip_prefix('>') {
+            text::prose(ui, Tx::raw(format!("\u{201C}{}\u{201D}", plain(quote.trim()))));
         } else {
-            text::prose(ui, Tx::raw(clean(line)));
+            text::prose(ui, Tx::raw(plain(line)));
         }
     }
 }

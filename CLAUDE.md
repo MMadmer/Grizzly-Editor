@@ -7,12 +7,13 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 ## Compatibility
 
-- **The editor has not shipped yet.** Until the first public release the
-  editor architecture and the "game ↔ new (XMS) mods" protocol may be rebuilt
-  freely: no fallbacks to earlier revisions of the editor, no migrations of its old
-  export formats, no deprecation scaffolding. If the manifest or delta format
-  changes tomorrow, the old one simply ceases to exist.
-- **What an author writes is versioned from 0.7** and that is the exception: a quest, a behaviour graph, a
+- **The editor is released: 0.7.0 is the first public version** (GitHub `MMadmer/Grizzly-Editor`, with Dead
+  Air: Refined 1.6.4). From it on, what a module ships is a frozen contract: a module built by any released
+  editor keeps working on every later game, and the game guarantees it (its PROJECT_RULES.md, the XMS
+  contract). A change of a shipped format is a new version with its step on both sides, an addition of an
+  optional key, section or record, or nothing: never a silent break, never a format removed. The editor's own
+  architecture stays the editor's to change.
+- **What an author writes is versioned from 0.7**: a quest, a behaviour graph, a
   character, a PDA interface, a scene, a group and the project file carry a header key with the format version, a
   newer editor reads every older version (a chain of small migration steps in the kind's crate) and refuses a newer
   one by name (`docs/ASSETS.md` section 2). A change of such a format is a new version with its step, never a
@@ -29,11 +30,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   under each id, so the original game still loads it. A module that is disabled or removed is kept as it was and
   comes back with it. The editor builds nothing for this - but what it makes must stay tellable: a module's
   things are made by its own sections, and a quest names its tasks `nq.<module>.*`.
-- **After the editor's release** the rule flips: the export format contract
-  freezes and the game starts guaranteeing that mods built by any past release
-  of the editor keep working (already written into the game's
-  PROJECT_RULES.md). Do not delete this reminder — rewrite this section at
-  release. **Every release of the editor freezes its reference module** into the game's archive of old
+- **Every release of the editor freezes its reference module** into the game's archive of old
   modules (`python tools/qa/freeze_reference_module.py --archive <game>/tools/qa/module/old`: one asset of every
   kind, built by that release; an entry that is there is never replaced), and the game's
   `tools/qa/module/Run-OldModulesQa.ps1` loads every frozen module into a new game. Every format a module ships
@@ -41,8 +38,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `version`, the binary overlays' own): the game reads every version up to its own and refuses a newer one by
   name.
 - **Nothing leaves this computer without the author's word**: no push, no release of the editor, no module
-  release, no catalog submission. The editor's version is the workspace's (`Cargo.toml`, 0.7.0; `ping` and the
-  About note say it).
+  release, no catalog submission. The editor's version is the workspace's (`Cargo.toml`; `ping` and the
+  About note say it). A release of the editor is the game's release rules (the game's PROJECT_RULES.md
+  section 11: a clean HEAD, a clean build, the packages verified, the text checked against them) with the
+  editor's own assets and text (`docs/UPDATES.md` section 1): the portable archive, its symbols and Setup.
 
 ## The contracts
 
@@ -611,9 +610,12 @@ A change of plan is a change of its document first.
 
 ## The editor's own updates (`docs/UPDATES.md`, `gz-update`)
 
-- **A release is one zip** that is also the manual install, with `update-manifest.txt` inside it naming every file's
-  size and SHA-256 (`Build.ps1 -Package`, `tools/rust/package.py`: two packs of one input are byte-identical). The
-  installed version is the installation manifest's. A build without one - every developer build - has no updater
+- **A release is one zip** that is also the portable edition (its home is its own folder), with `update-manifest.txt`
+  inside it naming every file's size and SHA-256, and **Setup** (`tools/installer/grizzly_installer.iss`, Inno Setup
+  through `tools/rust/installer.ps1`) installs exactly its files for the current user - over an installed editor it is
+  the update: the managed files replaced, the dropped ones deleted, the home kept; the release notes are free
+  Markdown read tolerantly (`gz_update::notes`: the window's language by any line naming one, nothing required). `Build.ps1 -Package` makes
+  them (`tools/rust/package.py`: two packs of one input are byte-identical). The installed version is the installation manifest's. A build without one - every developer build - has no updater
   and says so.
 - **The update downloads what differs, whatever the gap between the versions**: the check reads the archive's end
   and its manifest by byte ranges, the download asks for the records of the files that differ (ranges merged under
@@ -1066,8 +1068,8 @@ A change of plan is a change of its document first.
 - The descriptor and index names and formats, the package names and the package
   layout (every entry `modules/<id>/` + its index path, UTF-8 names, no path
   twice) are a **FROZEN contract shared with the game**. The normative text is the game
-  repo's `docs/dead-air/MOD_UPDATES.md`. This is the one exception to the
-  pre-release freedom above: a published release lives on GitHub, outside both
+  repo's `docs/dead-air/MOD_UPDATES.md`. It was frozen before the rest
+  of what a module ships: a published release lives on GitHub, outside both
   repositories, and has to install forever. Change it ONLY by adding optional
   keys, sections or index records; anything else is a paired change that
   starts in that document.
