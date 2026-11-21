@@ -244,9 +244,22 @@ fn arg_list(args: &Args, key: &str) -> Option<Vec<String>> {
 
 // ---- the answer -----------------------------------------------------------------------------
 
-/// The mode the module targets: the first one it brings, or the one it is limited to.
-fn mode_of(m: &Manifest) -> &str {
-    m.provides_modes.first().map_or(m.mode.as_str(), |p| p.id.as_str())
+/// The mode the module targets: the first one it brings, or its `mode` as written (`plain, metro`, `*`).
+fn mode_of(m: &Manifest) -> String {
+    m.provides_modes.first().map_or_else(|| m.mode.trim().to_owned(), |p| p.id.clone())
+}
+
+/// Every game the world rules apply in, one id each: the modes the module brings, then the ones its
+/// `mode` names (`plain` the ordinary game, `*` every game).
+fn modes_of(m: &Manifest) -> Vec<String> {
+    let mut out: Vec<String> =
+        m.provides_modes.iter().map(|p| p.id.clone()).filter(|i| !i.is_empty()).collect();
+    for id in gz_mod::mode_list(&m.mode) {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
 }
 
 fn game_json(g: &GameWorld) -> Value {
@@ -262,6 +275,7 @@ pub async fn world_answer(editor: &Editor, svc: &WorldService, m: &Manifest, doc
     json!({
         "module": m.id,
         "mode": mode_of(m),
+        "modes": modes_of(m),
         "target": m.target,
         "world": w.json(),
         "start_kit": k.json(),

@@ -432,12 +432,27 @@ impl ScreensDoc {
                     .exec
                     .cpu(move || {
                         let s = snap.doc().map(Screens::parse).unwrap_or_default();
+                        // the modes the module is for, its own first; one for every game or for the plain
+                        // game too is no mode's alone, and its screens show everywhere
                         let mode = snap
                             .manifest()
-                            .map(|mf| match mf.provides_modes.first() {
-                                Some(pm) => pm.id.clone(),
-                                None if mf.mode == "*" => String::new(),
-                                None => mf.mode.clone(),
+                            .map(|mf| {
+                                let named = gz_mod::mode_list(&mf.mode);
+                                if named.iter().any(|m| m == "*" || m == gz_mod::PLAIN_MODE) {
+                                    return String::new();
+                                }
+                                let mut ids: Vec<String> = mf
+                                    .provides_modes
+                                    .iter()
+                                    .map(|p| p.id.clone())
+                                    .filter(|i| !i.is_empty())
+                                    .collect();
+                                for m in named {
+                                    if !ids.contains(&m) {
+                                        ids.push(m);
+                                    }
+                                }
+                                ids.join(", ")
                             })
                             .unwrap_or_default();
                         Local { rev, have: snap.exists(), s, mode }
@@ -1531,8 +1546,11 @@ impl Frame<'_> {
                 g.row("Levels", "Only while these levels load or run. Empty: everywhere.", PropFlags::NONE, 0, |ui| {
                     ui.vertical(|ui| self.levels_row(ui, d));
                 });
-                if !mode.is_empty() && d.show & (LOADING | PAUSE) != 0 {
-                    let help = tr!("Shown only in games of this module's mode, {mode}. The main menu belongs to no game.", mode = mode.as_str());
+                // a module for every game or for the plain game too has no modes of its own to limit a screen
+                // to, but a screen the file limits already is shown, so the limit can be taken off
+                if (!mode.is_empty() || !d.modes.is_empty()) && d.show & (LOADING | PAUSE) != 0 {
+                    let named = if mode.is_empty() { d.modes.join(", ") } else { mode.clone() };
+                    let help = tr!("Shown only in games of this module's modes ({mode}). The main menu belongs to no game.", mode = named.as_str());
                     g.row("Only In Its Mode", help, PropFlags::INLINE, 0, |ui| {
                         let mut only = !d.modes.is_empty();
                         if switch(ui, &mut only).changed() {
@@ -1540,7 +1558,7 @@ impl Frame<'_> {
                             self.out.changes.push(set_screen(&id, move |d| {
                                 d.modes.clear();
                                 if only {
-                                    d.modes.push(m.clone());
+                                    d.modes.extend(gz_mod::mode_list(&m));
                                 }
                             }));
                         }

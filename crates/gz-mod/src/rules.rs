@@ -29,17 +29,54 @@ pub fn validate_mode_id(id: &str) -> bool {
     id.is_empty() || validate_id(id)
 }
 
-/// `mode = <id>`: a mode id, or `*` (every mode, a classic module's); empty is no mode.
+/// The word of a mode list that names the ordinary game - a game started with no mode (the game's
+/// `XMS::PlainMode`).
+pub const PLAIN_MODE: &str = "plain";
+
+/// The engine's word for a game that reads a list of modes (`mode = a, b`, `plain` among them).
+pub const MODE_LISTS: &str = "mode-lists";
+
+/// The entries of `mode`, trimmed, in order: `["*"]` for every game, none for no mode.
 #[must_use]
-pub fn validate_mode_ref(id: &str) -> bool {
-    id == "*" || validate_mode_id(id)
+pub fn mode_list(mode: &str) -> Vec<String> {
+    split_list(trim(mode), ',')
 }
 
-/// The id of a mode the module adds: the id charset, 64 characters at most, never `*`; empty
-/// is no mode.
+/// `mode`: `*` (every game), or one mode id or several joined by commas - `plain` among them is the
+/// ordinary game; empty is no mode. No id twice, no empty place between two commas, and `*` stands
+/// alone.
+#[must_use]
+pub fn validate_mode_ref(mode: &str) -> bool {
+    let mode = trim(mode);
+    if mode == "*" || mode.is_empty() {
+        return true;
+    }
+    let list = mode_list(mode);
+    mode.split(',').all(|m| !trim(m).is_empty())
+        && list.iter().all(|m| validate_id(m))
+        && list.iter().enumerate().all(|(i, m)| !list[..i].contains(m))
+}
+
+/// Whether a module's `mode` asks for a game that reads lists ([`MODE_LISTS`]): two modes or more,
+/// `plain`, a mode named beside the ones the module brings (`provided`), or a line that leaves one of them
+/// out - a game before that reads the whole value as one id, the only mode the module is for.
+#[must_use]
+pub fn mode_needs_lists(mode: &str, provided: &[&str]) -> bool {
+    let list = mode_list(mode);
+    if list.iter().any(|m| m == "*") {
+        return false;
+    }
+    list.len() > 1
+        || list.iter().any(|m| m == PLAIN_MODE)
+        || (!provided.is_empty() && list.iter().any(|m| !provided.contains(&m.as_str())))
+        || (!list.is_empty() && provided.iter().any(|p| !list.iter().any(|m| m == p)))
+}
+
+/// The id of a mode the module adds: the id charset, 64 characters at most, never `*` or `plain` (words
+/// of the mode line, which the game ignores as a mode's id); empty is no mode.
 #[must_use]
 pub fn validate_own_mode_id(id: &str) -> bool {
-    validate_mode_id(id) && id.len() <= 64
+    validate_mode_id(id) && id.len() <= 64 && !id.eq_ignore_ascii_case(PLAIN_MODE)
 }
 
 /// `min_parts`..`max_parts` dot-separated decimal numbers, 9 digits each at most.
@@ -388,8 +425,9 @@ pub fn global_twice(name: &str) -> String {
 /// command), then the window.
 const NO_TARGET: &str = concat!(
     "no target game mode: write `target = default` under [module] in mod.ltx for the ordinary game, ",
-    "`mode = <id>` with `target = existing` for a mode of the linked game, or a [provides_mode] section ",
-    "with `id = <id>` and `target = new` for a mode this module adds. ",
+    "`mode = <id>` with `target = existing` for a mode of the linked game (several joined by commas, `plain` ",
+    "among them for the ordinary game too), a [provides_mode] section with `id = <id>` and `target = new` for a ",
+    "mode this module adds, or `mode = *` with `target = any` for every game. ",
     "The command: mod.set set={\"module\":{\"target\":\"default\"}}; `reference manifest` lists the modes ",
     "and every key. In the window: Mod > Mod Settings, Game Mode"
 );
@@ -411,8 +449,9 @@ pub struct Pairing {
 }
 
 /// Whether the target and the mode a manifest states go together, as the reference pairs them:
-/// `default` takes no mode, `existing` a mode id (not `*`), `new` a `[provides_mode]` (its mode
-/// may be named too), `any` the mode `*`. `provides`: the module declares a mode of its own.
+/// `default` takes no mode, `existing` one mode id or several (not `*`, and not `plain` alone - that
+/// is `default`), `new` a `[provides_mode]` (other modes may be named beside it, not `*`), `any` the
+/// mode `*`. `provides`: the module declares a mode of its own.
 /// A target that is none of the four, or none written, has nothing to pair (`mod.target_value`
 /// and `mod.target` say what is wrong there).
 #[must_use]
@@ -420,6 +459,8 @@ pub fn target_pairing(target: &str, mode: &str, provides: bool) -> Option<Pairin
     let (target, mode) = (trim(target), trim(mode));
     let kind = target.to_ascii_lowercase();
     let star = mode == "*";
+    let list = mode_list(mode);
+    let plain_only = !list.is_empty() && list.iter().all(|m| m == PLAIN_MODE);
     let lines = if mode.is_empty() {
         format!("[module] target = {target} with no mode")
     } else {
@@ -429,22 +470,38 @@ pub fn target_pairing(target: &str, mode: &str, provides: bool) -> Option<Pairin
         "default" if !mode.is_empty() => (
             "mod.target_default",
             format!(
-                "target = default is the ordinary game and goes with no mode. Remove the mode, or write {}.",
-                if star { "target = any for every game" } else { "target = existing for that mode" }
+                "target = default is the ordinary game and goes with no mode. Remove the mode{}.",
+                if star {
+                    ", or write target = any for every game"
+                } else if plain_only {
+                    ": plain is the ordinary game already"
+                } else {
+                    ", or write target = existing for those modes"
+                }
             ),
-            if star { "target = any" } else { "target = existing" },
+            if star { "target = any" } else if plain_only { "mode =" } else { "target = existing" },
         ),
-        "existing" if mode.is_empty() || star => (
+        "existing" if mode.is_empty() || star || plain_only => (
             "mod.target_existing",
             format!(
-                "target = existing is a mode of the linked game and goes with that mode's id. Write {}.",
+                "target = existing is one mode of the linked game or several and goes with their ids. Write {}.",
                 if star {
-                    "the mode's id, or target = any for every game"
+                    "the modes' ids, or target = any for every game"
+                } else if plain_only {
+                    "the modes beside plain, or target = default for the ordinary game alone"
                 } else {
-                    "mode = <id>, or target = default for the ordinary game"
+                    "mode = <id> (several joined by commas, plain among them for the ordinary game too), or \
+                     target = default for the ordinary game"
                 }
             ),
             if star { "target = any" } else { "target = default" },
+        ),
+        "new" if star => (
+            "mod.target_new",
+            "target = new is a mode the module adds, and mode = * is every game: write target = any, or name \
+             the modes it is for beside its own."
+                .to_owned(),
+            "target = any",
         ),
         "new" if !provides => (
             "mod.target_new",
@@ -461,7 +518,10 @@ pub fn target_pairing(target: &str, mode: &str, provides: bool) -> Option<Pairin
         ),
         _ => return None,
     };
-    let unfinished = (kind == "existing" && mode.is_empty()) || kind == "new";
+    // the choice made and its detail still to come: no mode ticked yet, or only the plain game so far; a
+    // new mode not declared yet - but `*` beside `new` is a contradiction, never a detail to come
+    let unfinished =
+        (kind == "existing" && (mode.is_empty() || plain_only)) || (kind == "new" && !provides && !star);
     Some(Pairing { code, text: format!("{lines}: {rule}"), fix: fix.to_owned(), unfinished })
 }
 
@@ -1334,6 +1394,10 @@ mod tests {
             ("any", "*", false),
             ("any", "*", true),
             ("Default", "", false),
+            // several games at once: modes of the game, the plain game among them, beside its own mode
+            ("existing", "night, metro", false),
+            ("existing", "plain, night", false),
+            ("new", "plain, metro", true),
         ] {
             let p = pair(target, mode, own);
             assert!(p.is_empty(), "{target} {mode} {own}: {p:?}");
@@ -1361,7 +1425,7 @@ mod tests {
                 "",
                 false,
                 "mod.target_existing",
-                "[module] target = existing with no mode: target = existing is a mode of the linked game and goes with that mode's id.",
+                "[module] target = existing with no mode: target = existing is one mode of the linked game or several and goes with their ids.",
                 "target = default",
             ),
             (
@@ -1405,6 +1469,24 @@ mod tests {
                 "mode = *",
             ),
             ("any", "", true, "mod.target_any", "[module] target = any with no mode:", "mode = *"),
+            // the plain game alone is target = default, and every game is target = any
+            (
+                "existing",
+                "plain",
+                false,
+                "mod.target_existing",
+                "[module] target = existing with mode = plain:",
+                "target = default",
+            ),
+            (
+                "default",
+                "plain",
+                false,
+                "mod.target_default",
+                "[module] target = default with mode = plain:",
+                "mode =",
+            ),
+            ("new", "*", true, "mod.target_new", "[module] target = new with mode = *:", "target = any"),
         ];
         for (target, mode, own, code, says, fix) in cases {
             let p = pair(target, mode, own);
@@ -1422,11 +1504,52 @@ mod tests {
     }
 
     #[test]
+    fn a_mode_list_names_each_game_once_and_star_alone() {
+        for good in ["", "*", "night", "night, metro", "plain,night", "plain, metro, od.mode-2"] {
+            assert!(validate_mode_ref(good), "{good}");
+        }
+        for bad in [
+            "night, night",
+            "night, *",
+            "*, night",
+            "Night",
+            "night,, metro x",
+            "a b",
+            "night,,metro",
+            "night,",
+        ] {
+            assert!(!validate_mode_ref(bad), "{bad}");
+        }
+        // plain and * are words of the mode line, never a mode a module brings
+        assert!(
+            !validate_own_mode_id("plain") && !validate_own_mode_id("*") && validate_own_mode_id("plains")
+        );
+        assert!(refusal("provides_mode", "id", "plain").is_some());
+        assert_eq!(mode_list(" plain , metro "), ["plain", "metro"]);
+        // what an older game would read as one id that is never active
+        assert!(!mode_needs_lists("night", &[]));
+        assert!(!mode_needs_lists("*", &[]));
+        assert!(!mode_needs_lists("night", &["night"]));
+        assert!(mode_needs_lists("night, metro", &[]));
+        assert!(mode_needs_lists("plain", &[]));
+        assert!(mode_needs_lists("metro", &["night"]));
+        // a line naming one of two modes it brings: an older game applies it in that one alone
+        assert!(mode_needs_lists("night", &["night", "day"]));
+        assert!(!mode_needs_lists("", &["night", "day"]));
+    }
+
+    #[test]
     fn the_pairing_is_the_one_sentence_the_check_and_mod_set_say() {
         let p = target_pairing("default", "night", false).unwrap();
         let checked = pair("default", "night", false);
         assert_eq!(checked[0].message, p.text);
         assert!(target_pairing("existing", "night", false).is_none());
+        // the plain game ticked first is a choice whose detail is to come; * beside new never is
+        assert!(target_pairing("existing", "plain", false).unwrap().unfinished);
+        assert!(target_pairing("existing", "", false).unwrap().unfinished);
+        assert!(!target_pairing("new", "*", false).unwrap().unfinished);
+        assert!(target_pairing("new", "", false).unwrap().unfinished);
+        assert!(target_pairing("new", "metro, plain", true).is_none());
         assert!(
             target_pairing("", "night", false).is_none() && target_pairing("sideways", "", false).is_none()
         );

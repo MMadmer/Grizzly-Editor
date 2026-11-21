@@ -439,7 +439,10 @@ pub fn flat_report(tree: &FileTree, m: &Manifest) -> String {
         rep.push_str(&format!("graphs: {c_quests} .nqasset/.behasset - NOT usable flat (the NQ runtime only scans <game>\\modules\\<id>)\r\n"));
     }
     if !m.mode.is_empty() {
-        rep.push_str(&format!("target mode: {} - engine gating is XMS-only (NOT exported flat)\r\n", m.mode));
+        rep.push_str(&format!(
+            "target modes: {} - engine gating is XMS-only (NOT exported flat)\r\n",
+            m.mode.trim()
+        ));
     }
     rep
 }
@@ -618,7 +621,7 @@ mod tests {
         let rep = flat_report(&tree, &m);
         assert!(rep.contains("patch: 1 file(s) - NOT exported (XMS-only)\r\n"));
         assert!(rep.contains("graphs: 1 .nqasset/.behasset"));
-        assert!(rep.ends_with("target mode: night - engine gating is XMS-only (NOT exported flat)\r\n"));
+        assert!(rep.ends_with("target modes: night - engine gating is XMS-only (NOT exported flat)\r\n"));
 
         let exec = fx.rt.exec();
         let (ctx, _gate) = fx.ctx();

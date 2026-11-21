@@ -157,7 +157,9 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line(
         "`mod.ltx` is LTX, not Lua: `Grizzly-Cmd.exe reference manifest` lists every section and key. A module",
     );
-    line("targets ONE game mode: set `[module] target = default` (the ordinary game) or `mode = <id>`.");
+    line(
+        "states its games: `[module] target = default`, `mode = <id>, <id>` (`plain`: the ordinary game) or `mode = *`.",
+    );
     line("");
     line(
         "A level of the game is worked on as a scene over it (`base = \"<level>\"`: the files hold only what the",

@@ -82,6 +82,7 @@ pub use rules::{
     validate_version, validate_website,
 };
 pub use rules::{LINK_KINDS, LinkKind, github_link, validate_link, website_kind};
+pub use rules::{MODE_LISTS, PLAIN_MODE, mode_list, mode_needs_lists};
 pub use sections::{OwnSections, SectionSet, SectionSource, SectionSources, own_sections};
 pub use service::{
     ArgCx, ArgHook, FieldHook, ManifestArgs, ManifestCmd, ManifestFields, ManifestService, ManifestState,

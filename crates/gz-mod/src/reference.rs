@@ -199,18 +199,20 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "default | existing | new | any",
                 "empty: the build refuses a module with no target, no mode and no [provides_mode]",
                 "Which game the module is for, stated outright. default: the ordinary game (no mode key). \
-                 existing: a mode of the linked game (mode = <id>). new: a mode the module adds \
-                 ([provides_mode]). any: every game, for a classic mod (mode = *). A mode or a \
-                 [provides_mode] section also answers the question; target = default is how the ordinary \
-                 game is chosen on purpose.",
+                 existing: one mode of the linked game or several (mode = <id>, <id>, plain among them for \
+                 the ordinary game too). new: a mode the module adds ([provides_mode]), with the modes \
+                 named in mode beside it. any: every game (mode = *). A mode or a [provides_mode] section \
+                 also answers the question; target = default is how the ordinary game is chosen on purpose.",
             ).judged(Check::Target),
             key(
                 "mode",
-                "a game mode id (a-z 0-9 _ . -), or *",
+                "a game mode id (a-z 0-9 _ . -), several joined by commas (plain: the ordinary game), or *",
                 "empty: the ordinary game only",
                 "Limits the module's work on levels (spawns, level overlays, the AI map, the game graph) \
-                 to one game mode; * lifts the limit. Files, configs and scripts mount in every game \
-                 whatever the mode. The ids the linked game has are listed at the end of this page.",
+                 to the game modes it names - any of them active, plain being a game started with no mode; \
+                 * lifts the limit. Files, configs and scripts mount in every game whatever the mode. A list \
+                 needs a game that states mode-lists (Dead Air: Refined 1.6.5 or newer). The ids the linked \
+                 game has are listed at the end of this page.",
             ).judged(Check::Mode),
             key(
                 "disable_game_updates",
@@ -229,10 +231,11 @@ pub const SECTIONS: &[SectionDoc] = &[
         keys: &[
             key(
                 "id",
-                "a-z 0-9 _ . -, 64 characters at most",
+                "a-z 0-9 _ . -, 64 characters at most, not plain",
                 "required",
                 "The mode's id. The game turns new_game_<id>_mode back into it, and mode = <id> and the \
-                 quests' mode checks compare against it.",
+                 quests' mode checks compare against it. plain and * are words of the mode line: the game \
+                 ignores a mode of either name.",
             ).judged(Check::OwnModeId),
             key(
                 "title",
@@ -701,14 +704,18 @@ Writing it
     ignores them. What is written in a section the editor keeps ([budget], [redirects], any other)
     is left as it is and never reported.
 
-First, the target: a module is for ONE game
-  A finished module states which game it is for, and the build refuses one that does not. Pick one:
+First, the target: which games a module is for
+  A finished module states which games it is for, and the build refuses one that does not. Pick one:
     ordinary game        [module] target = default
-    a mode of the game   [module] target = existing   and   mode = <id>   (ids at the end of this page)
+    modes of the game    [module] target = existing   and   mode = <id>, <id>   (ids at the end of this page;
+                                                            plain among them is the ordinary game too)
     a mode of its own    [module] target = new        and a [provides_mode] section with id = <id>
-    every game, classic  [module] target = any        and   mode = *
+                                                      (mode = <id>, ... names the other modes it is for)
+    every game           [module] target = any        and   mode = *
   The two lines go together, and the check and mod.set refuse a pair that does not: default takes no
-  mode; existing takes a mode id (not *); new takes a [provides_mode]; any takes mode = *.
+  mode; existing takes one mode id or several (not *, not plain alone); new takes a [provides_mode] and
+  no *; any takes mode = *. A list of modes needs a game that reads one (mode-lists: Dead Air: Refined
+  1.6.5 or newer).
   mod.set sets them: mod.set set={\"module\":{\"target\":\"default\"}} (setting mode also sets target
   to existing, and a [provides_mode] to new, unless target is given).
 ";
@@ -786,7 +793,8 @@ async fn modes_text(ed: &Arc<Editor>) -> String {
     let reply = ed.call("game.lookup", args, Origin::Mcp).await;
     let known = reply.get("ok").and_then(Value::as_bool) == Some(true)
         && reply.get("available").and_then(Value::as_bool) == Some(true);
-    let mut out = String::from("\nModes of the linked game (mode = <id>)\n");
+    let mut out =
+        String::from("\nModes of the linked game (mode = <id>, <id>; plain is the ordinary game)\n");
     if !known {
         wrapped(
             &mut out,

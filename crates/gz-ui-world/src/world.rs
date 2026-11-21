@@ -92,28 +92,40 @@ pub fn problem_line(problem: &str) -> String {
     text_
 }
 
-/// What the rules shape, in one sentence.
+/// What the rules shape, in one sentence: every game they apply in - the modes the module brings, then
+/// the ones its `mode` names (the world rules follow the same gate as the level work).
 #[must_use]
 pub fn mode_text(m: &Manifest, modes: Option<&ModeScan>) -> String {
-    if let Some(p) = m.provides_modes.first() {
-        return format!(
-            "These rules shape the module's own mode '{}'.",
-            if p.title.is_empty() { &p.id } else { &p.title }
-        );
-    }
-    if !m.mode.is_empty() && m.mode != "*" {
-        let caption = modes
-            .and_then(|s| s.modes.iter().find(|x| x.id == m.mode))
-            .map_or(m.mode.as_str(), |x| x.caption.as_str());
-        return format!("These rules shape the mode '{caption}'.");
-    }
-    if m.target.eq_ignore_ascii_case("default") {
-        return "These rules shape every new game: the module targets the plain game.".to_owned();
-    }
-    if m.mode == "*" {
+    let named = gz_mod::mode_list(&m.mode);
+    if named.iter().any(|id| id == "*") {
         return "These rules shape every new game: the module targets every mode.".to_owned();
     }
-    "No game mode is chosen yet: pick one in Mod Settings, Game Mode.".to_owned()
+    let own: Vec<&gz_mod::ProvidesMode> = m.provides_modes.iter().filter(|p| !p.id.is_empty()).collect();
+    let plain = named.iter().any(|id| id == gz_mod::PLAIN_MODE);
+    let mut games: Vec<String> =
+        own.iter().map(|p| format!("'{}'", if p.title.is_empty() { &p.id } else { &p.title })).collect();
+    for id in named.iter().filter(|id| *id != gz_mod::PLAIN_MODE && !own.iter().any(|p| p.id == **id)) {
+        games.push(
+            modes
+                .and_then(|s| s.modes.iter().find(|x| x.id == *id))
+                .map_or_else(|| format!("'{id}'"), |x| format!("'{}'", x.caption)),
+        );
+    }
+    match (games.as_slice(), plain) {
+        ([], true) => "These rules shape every new game: the module targets the plain game.".to_owned(),
+        ([], false) if m.target.eq_ignore_ascii_case("default") => {
+            "These rules shape every new game: the module targets the plain game.".to_owned()
+        }
+        ([], false) => "No game mode is chosen yet: pick one in Mod Settings, Game Mode.".to_owned(),
+        ([one], false) if own.len() == 1 => {
+            format!("These rules shape the module's own mode {one}.")
+        }
+        ([one], false) => format!("These rules shape the mode {one}."),
+        (all, false) => format!("These rules shape new games of the modes {}.", all.join(", ")),
+        (all, true) => {
+            format!("These rules shape the plain game and new games of the modes {}.", all.join(", "))
+        }
+    }
 }
 
 /// A kit's items as `world.set start_kit=` takes them: `section` or `section=N`.
@@ -1540,8 +1552,25 @@ mod tests {
         );
         m.mode = "metro".into();
         assert_eq!(mode_text(&m, None), "These rules shape the mode 'metro'.");
+        m.mode.clear();
         m.provides_modes.push(gz_mod::ProvidesMode { id: "mine".into(), title: "Mine".into() });
         assert_eq!(mode_text(&m, None), "These rules shape the module's own mode 'Mine'.");
+        // the games named beside its own are shaped too, the plain game among them
+        m.mode = "plain, metro".into();
+        assert_eq!(
+            mode_text(&m, None),
+            "These rules shape the plain game and new games of the modes 'Mine', 'metro'."
+        );
+        m.provides_modes.clear();
+        m.mode = "metro, rev".into();
+        assert_eq!(mode_text(&m, None), "These rules shape new games of the modes 'metro', 'rev'.");
+        m.mode = "plain".into();
+        assert_eq!(
+            mode_text(&m, None),
+            "These rules shape every new game: the module targets the plain game."
+        );
+        m.mode = "*".into();
+        assert_eq!(mode_text(&m, None), "These rules shape every new game: the module targets every mode.");
     }
 
     #[test]

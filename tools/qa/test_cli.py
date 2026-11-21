@@ -442,6 +442,19 @@ def phase_j(work: str) -> None:
     check(code == 0 and answer.get("ok") and answer.get("manifest", {}).get("target") == "default"
           and "target      = default" in qa.read(os.path.join(project, "mod.ltx")),
           "J mod.set writes target = default into mod.ltx", (code, out[:300], err[:200]))
+    # several games at once: an array is the list, the plain game among them, and target follows the mode
+    code, out, err = cli("run", "mod.set", 'set={"module":{"mode":["plain","night"]}}', "-project",
+                         project, "-json", home=home)
+    answer = (jsons(out) or [{}])[0]
+    text = qa.read(os.path.join(project, "mod.ltx"))
+    check(code == 0 and answer.get("ok") and "mode        = plain, night" in text and "target      = existing" in text,
+          "J mod.set writes a list of modes and target = existing", (code, out[:300], err[:200], text[:300]))
+    code, out, err = cli("run", "mod.set", 'set={"module":{"mode":"night, night"}}', "-project", project, home=home)
+    check(code == 1 and "night, night" in err, "J a mode named twice is refused", (code, err[:300]))
+    code, out, err = cli("run", "mod.set", 'set={"module":{"target":"default","mode":""}}', "-project", project,
+                         home=home)
+    check(code == 0 and "mode        =" not in qa.read(os.path.join(project, "mod.ltx")),
+          "J target = default takes the mode away again", (code, err[:300]))
     code, out, err = cli("run", "mod.set", 'set={"module":{"target":"sometimes"}}', "-project", project, home=home)
     check(code == 1 and all(w in err for w in ("default", "existing", "new", "any")),
           "J a wrong target is refused with every value", (code, err[:300]))

@@ -60,8 +60,10 @@ reg.cmd(
 - `mod.set` turns a value away in the manifest's own sentence (`<key> takes <values>, not '<value>'`), the
   one the file's check gives; `mod.build` and `mod.package` refuse with every error of the manifest, one a
   line, and report its warnings; `mod.info` lists both. A target and a mode that contradict each other
-  (`target = default` with a mode, `any` without `mode = *`) are refused by `mod.set` in the check's sentence
-  when the request touches them; a choice still without its detail (`existing` with no mode yet) is written.
+  (`target = default` with a mode, `any` without `mode = *`, `existing` with `plain` alone) are refused by
+  `mod.set` in the check's sentence when the request touches them; a choice still without its detail
+  (`existing` with no mode yet) is written. `mode` takes one id, a list (`"plain, metro"` or an array) or `*`,
+  and a mode set without a target sets it (but `*`, which needs `target = any`).
 - `screens.set` takes a layer's `rect` in per cent of the screen and a track as an `.ogg`; a word the game
   would drop (`fit`, `show`, `play`, `hide`, `end`) is refused by name, before anything is written.
 

@@ -20,16 +20,32 @@ use crate::play::PlayStart;
 pub const PARAMS: &str = "-start server(all/single/alife/new) client(localhost) -nointro -noprefetch";
 
 /// The mode a new game of the module is played in: none for one that targets the plain game
-/// (`default`) or every mode (`any`, `mode = *`), the module's mode for `existing` and `new`; the
-/// sentence that says what is missing when such a module names none yet.
-pub fn new_game_mode(target: &str, mode: &str) -> Result<Option<String>, String> {
-    let (target, mode) = (target.trim().to_ascii_lowercase(), mode.trim());
+/// (`default`) or every mode (`any`, `mode = *`); for `new` the mode it brings (`provided`, the first),
+/// for `existing` the first mode it names - `plain` is no mode, so a list that starts with it plays the
+/// next one, and `plain` alone plays the plain game. The sentence says what is missing when such a
+/// module names none yet.
+pub fn new_game_mode(target: &str, mode: &str, provided: Option<&str>) -> Result<Option<String>, String> {
+    let target = target.trim().to_ascii_lowercase();
+    let first = gz_mod::mode_list(mode)
+        .into_iter()
+        .find(|m| m != "*" && m != gz_mod::PLAIN_MODE)
+        .map(|m| m.to_ascii_lowercase());
+    let named = !mode.trim().is_empty() && mode.trim() != "*";
     match target.as_str() {
-        "existing" | "new" if mode.is_empty() || mode == "*" => Err(format!(
-            "The module targets {} mode and names none yet: pick it in Mod Settings, and Play plays the module in it.",
-            if target == "new" { "a new" } else { "an existing" }
-        )),
-        "existing" | "new" => Ok(Some(mode.to_ascii_lowercase())),
+        "new" => match provided.filter(|p| !p.is_empty()).map(str::to_ascii_lowercase).or(first) {
+            Some(m) => Ok(Some(m)),
+            None => Err(
+                "The module targets a new mode and names none yet: pick it in Mod Settings, and Play plays \
+                         the module in it."
+                    .to_owned(),
+            ),
+        },
+        "existing" if !named => {
+            Err("The module targets an existing mode and names none yet: pick it in Mod \
+                                     Settings, and Play plays the module in it."
+                .to_owned())
+        }
+        "existing" => Ok(first),
         _ => Ok(None),
     }
 }
@@ -78,13 +94,17 @@ mod tests {
 
     #[test]
     fn a_module_plays_in_its_mode_or_in_the_plain_game() {
-        assert_eq!(new_game_mode("default", ""), Ok(None));
-        assert_eq!(new_game_mode("any", "*"), Ok(None));
-        assert_eq!(new_game_mode("existing", "Metro"), Ok(Some("metro".to_owned())));
-        assert_eq!(new_game_mode("new", "my_story"), Ok(Some("my_story".to_owned())));
-        let why = new_game_mode("existing", "").unwrap_err();
+        assert_eq!(new_game_mode("default", "", None), Ok(None));
+        assert_eq!(new_game_mode("any", "*", None), Ok(None));
+        assert_eq!(new_game_mode("existing", "Metro", None), Ok(Some("metro".to_owned())));
+        assert_eq!(new_game_mode("new", "my_story", None), Ok(Some("my_story".to_owned())));
+        let why = new_game_mode("existing", "", None).unwrap_err();
         assert!(why.contains("an existing mode and names none yet"), "{why}");
-        assert!(new_game_mode("new", "*").unwrap_err().contains("a new mode"));
+        assert!(new_game_mode("new", "*", None).unwrap_err().contains("a new mode"));
+        // a list plays its first mode; plain is no mode; a module's own mode goes first
+        assert_eq!(new_game_mode("existing", "plain, Metro, azazel", None), Ok(Some("metro".to_owned())));
+        assert_eq!(new_game_mode("existing", "plain", None), Ok(None));
+        assert_eq!(new_game_mode("new", "plain, metro", Some("od_mode")), Ok(Some("od_mode".to_owned())));
     }
 
     #[test]

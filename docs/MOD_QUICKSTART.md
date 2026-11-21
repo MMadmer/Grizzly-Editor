@@ -26,7 +26,7 @@ writes `mod.ltx` as you edit (MCP: `mod.info`, `mod.set`).
 | `author`, `description` | Optional. Shown in the Mods menu; the description may span lines. Both (and `name`) may be a string table id the module ships in its own `gamedata\configs\text\<language>\*.xml`. |
 | Links (AP-PRO, ModDB, Telegram, Discord, Boosty, Patreon) | Optional. Where the mod's card leads: the game shows a small round picture for each. Written as `[links]` (`ap_pro`, `moddb`, `telegram`, `discord`, `boosty`, `patreon`); each takes a page of its own service and nothing else — the game ignores anything else, so the editor refuses to save it. The GitHub link is the repository below. A manifest written before `[links]` keeps its `website` key: it is read as the AP-PRO or the ModDB link. |
 | `GitHub Repository` | Optional, `owner/repo` (a pasted repository URL is reduced to it). Written as `[update] github`; the game checks that repository's latest release for updates — see §4. |
-| **Target** (Game Mode page) | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
+| **Target** (Game Mode page) | **Required.** Who gets the module's level work: **Plain Game** = only when no campaign mode is active (Revolution II won't see it); **Game Modes** = the games you tick - the plain game and any modes of the linked game, several at once (`mode = plain, metro`); **New Mode** = the campaign this module itself adds, and under Also In the games it is for beside it; **Every Game** = no gate at all — use it for what belongs everywhere. Without a choice the build refuses. Several games at once need Dead Air: Refined 1.6.5 or newer. |
 
 If you declare a **new mode**, that declaration is all it takes: Dead Air: Refined
 lists the mode among the module modes of the new-game screen by its title.
@@ -38,7 +38,7 @@ A mod made to be copied over `gamedata` can become a module. The mod changes for
 1. Create a project and copy the mod's `gamedata` folder into it.
 2. Run `python tools/classic_mod/classic_to_module.py --project <project> --game <game>`, once. It removes what must not ship (the player's options, sources, files identical to the game's)
    and turns the mod's whole-file configs and string tables into a list of what it really changes, so the game's newer sections stay.
-3. In Mod Settings, Game Mode, pick **Every game and mode**.
+3. In Mod Settings, Game Mode, pick **Every Game**.
 4. Build. Turn the module off in the game's Mods menu or delete its folder under `modules`, and the game is as it was.
 
 A mod that changes the class of an existing item needs a new game while it is on.
@@ -891,10 +891,11 @@ command of the game (`E406`) stop the build; a name of one of the game's own fam
 
 | Message | Fix |
 |---|---|
-| `no target game mode` | Write `target = default` under `[module]` in `mod.ltx` (or `mode = <id>`, or a `[provides_mode]` section), or run `mod.set`; in the window, Mod → Mod Settings, Game Mode. |
+| `no target game mode` | Write `target = default` under `[module]` in `mod.ltx` (or `mode = <id>, <id>`, `mode = *`, or a `[provides_mode]` section), or run `mod.set`; in the window, Mod → Mod Settings, Game Mode. |
+| `E209 module: mode = a, b names a list of games, and the linked game reads one mode id` | The linked game is older than Dead Air: Refined 1.6.5: update it, or name one mode (a module that brings its own mode: leave the mode line out). |
 | `Module id is missing or invalid` | Mod → Mod Settings, General: **Module ID** must be `a-z 0-9 _ . -`. |
 | `[module] version = ...: version takes 1 to 4 numbers ...` and the like (`mod.version`, `mod.website`, `mod.tags`, `mod.target_value`, `mod.mode`, `mod.mode_id`, `mod.github`, `mod.description`, `mod.var_name`, `mod.var_twice`) | A value `mod.ltx` holds is one the editor would not save. The line is in the message; `Grizzly-Cmd.exe reference manifest` says what the key takes, and where the fix is mechanical the problem carries it (`fix`). |
-| `[module] target = default with mode = night: ...` (`mod.target_default`, `mod.target_existing`, `mod.target_new`, `mod.target_any`) | The target and the mode do not go together: `default` takes no mode, `existing` a mode id, `new` a `[provides_mode]` section, `any` the mode `*`. The message says which line to change; the problem carries the line to write. |
+| `[module] target = default with mode = night: ...` (`mod.target_default`, `mod.target_existing`, `mod.target_new`, `mod.target_any`) | The target and the mode do not go together: `default` takes no mode, `existing` one mode id or several (`plain` alone is `default`), `new` a `[provides_mode]` section, `any` the mode `*`. The message says which line to change; the problem carries the line to write. |
 | a warning `mod.key` / `mod.value` / `mod.tags_case` / `mod.section_id` | The build goes on: the game does not read that key or value of `[world]` / `[screens]` as written (a typo), or a tag is not in lower case. |
 | `No linked game` | Link a game — the build target is that install. |
 | `target already holds a module: N file(s) there are not in this project` | Something else owns that folder. The question names up to ten of those files; confirm only if you're sure they are yours. |

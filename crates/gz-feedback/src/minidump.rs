@@ -417,9 +417,9 @@ mod tests {
         assert!(sanitize(&mut d).is_ok());
         assert_eq!(&d[0..4], &SIGNATURE.to_le_bytes(), "the header is kept");
         let len = u32::from_le_bytes([d[name], d[name + 1], d[name + 2], d[name + 3]]) as usize;
-        // program-files: in memory
         assert_eq!(
             &d[name + 4..name + 4 + len],
+            // program-files: in memory
             utf16("Grizzly.exe").as_slice(),
             "the module list was still cut"
         );

@@ -225,7 +225,7 @@ return {
   { "Pause Menu", "Меню паузы" },
   { "Levels", "Уровни" },
   { "Only while these levels load or run. Empty: everywhere.", "Только пока эти уровни загружаются или идут. Пусто — везде." },
-  { "Shown only in games of this module's mode, {mode}. The main menu belongs to no game.", "Показывается только в играх режима этого модуля, {mode}. Главное меню не принадлежит ни одной игре." },
+  { "Shown only in games of this module's modes ({mode}). The main menu belongs to no game.", "Показывается только в играх режимов этого модуля ({mode}). Главное меню не принадлежит ни одной игре." },
   { "Only In Its Mode", "Только в его режиме" },
   { "Show Over It", "Показывать поверх" },
   { "What of the loading screen's interface stays on top of this screen.", "Какие элементы интерфейса экрана загрузки остаются поверх этого экрана." },

@@ -923,8 +923,12 @@ async fn play_module(
     let m = manifest.snapshot().manifest().cloned().ok_or_else(|| {
         CmdError::new("refused", "The project has no mod.ltx: Play builds the module from it.")
     })?;
-    let mode =
-        crate::module_play::new_game_mode(&m.target, &m.mode).map_err(|e| CmdError::new("refused", e))?;
+    let mode = crate::module_play::new_game_mode(
+        &m.target,
+        &m.mode,
+        m.provides_modes.first().map(|p| p.id.as_str()),
+    )
+    .map_err(|e| CmdError::new("refused", e))?;
     // the module's own piece of the level is built below, when the scene has one that is not fresh
     let note = match scene {
         Some((_, level)) => format!("Playing the module over {level}: the game's level is not compiled."),

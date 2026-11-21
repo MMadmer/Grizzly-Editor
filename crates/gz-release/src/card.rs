@@ -157,6 +157,45 @@ fn card_text(out: &mut String, key: &str, tables: &StringTables, value: &str) {
     }
 }
 
+/// The card's `mode` and its title in both languages: `any`, `plain`, `new <id>`, `mode <id>` or
+/// `modes <id>, <id>...` (MOD_CATALOG 6). A title is the mode's own (a mode the module brings, by its
+/// string tables), the plain game's words for `plain`, the id for another's mode.
+fn mode_line(m: &Manifest, tables: &StringTables) -> (String, String, String) {
+    if m.mode.trim() == "*" {
+        return ("any".to_owned(), String::new(), String::new());
+    }
+    // (id, own, rus, eng)
+    let mut names: Vec<(String, bool, String, String)> = Vec::new();
+    for p in m.provides_modes.iter().filter(|p| !p.id.is_empty()) {
+        let (rus, eng) =
+            if p.title.is_empty() { (p.id.clone(), String::new()) } else { resolve(tables, &p.title) };
+        names.push((p.id.clone(), true, rus, eng));
+    }
+    for id in gz_mod::mode_list(&m.mode) {
+        if names.iter().any(|(n, ..)| *n == id) {
+            continue;
+        }
+        // the plain game has no title of the card's: the game says it in its own words
+        let rus = if id == gz_mod::PLAIN_MODE { String::new() } else { id.clone() };
+        names.push((id, false, rus, String::new()));
+    }
+    match names.as_slice() {
+        [] => ("plain".to_owned(), String::new(), String::new()),
+        [(id, ..)] if id == gz_mod::PLAIN_MODE => ("plain".to_owned(), String::new(), String::new()),
+        [(id, own, rus, eng)] => {
+            (format!("{}{id}", if *own { "new " } else { "mode " }), rus.clone(), eng.clone())
+        }
+        all => {
+            let ids: Vec<&str> = all.iter().map(|(id, ..)| id.as_str()).collect();
+            let titled = all.iter().filter(|(_, _, r, _)| !r.is_empty());
+            let rus: Vec<&str> = titled.clone().map(|(_, _, r, _)| r.as_str()).collect();
+            let eng: Vec<&str> =
+                titled.map(|(_, _, r, e)| if e.is_empty() { r.as_str() } else { e.as_str() }).collect();
+            (format!("modes {}", ids.join(", ")), rus.join(", "), eng.join(", "))
+        }
+    }
+}
+
 /// The `[card]` section, starting with its blank line.
 #[must_use]
 pub fn card_section(
@@ -185,21 +224,16 @@ pub fn card_section(
         key_line(&mut out, "network", "1");
     }
 
-    // the mode: the plain game, one the module brings, or one somebody else's
-    let (mut mode, mut title) = ("plain".to_owned(), String::new());
-    if !m.mode.is_empty() && m.mode != "*" {
-        let mut own = false;
-        for p in m.provides_modes.iter().filter(|p| p.id == m.mode) {
-            own = true;
-            title.clone_from(&p.title);
-        }
-        mode = format!("{}{}", if own { "new " } else { "mode " }, m.mode);
-        if title.is_empty() {
-            title.clone_from(&m.mode);
+    // the games it is for (MOD_CATALOG 6): every game, the plain game, the mode it brings, another's, or
+    // several of them - the modes it brings first, then the ones it names
+    let (mode, rus, eng) = mode_line(m, tables);
+    key_line(&mut out, "mode", &mode);
+    if !rus.is_empty() {
+        key_line(&mut out, "mode_title", &quote_text(&rus));
+        if !eng.is_empty() && eng != rus {
+            key_line(&mut out, "mode_title@eng", &quote_text(&eng));
         }
     }
-    key_line(&mut out, "mode", &mode);
-    card_text(&mut out, "mode_title", tables, &title);
 
     if !m.tags.is_empty() {
         key_line(&mut out, "tags", &m.tags.join(", "));
@@ -257,12 +291,36 @@ mod tests {
             card_section(&m, &tables, &mf, None, false),
             "\r\n[card]\r\nname        = \"od\"\r\nmode        = plain\r\nmanifest    = mod.ltx, 1, 00\r\n"
         );
+        // every game is said as such, with no title
         m.mode = "*".into();
+        let any = card_section(&m, &tables, &mf, None, false);
+        assert!(any.contains("mode        = any\r\n") && !any.contains("mode_title"), "{any}");
+        // several games: the ids, the titles but the plain game's (the game says that one itself)
+        m.mode = "plain, da_story, metro".into();
+        let several = card_section(&m, &tables, &mf, None, false);
+        assert!(
+            several.contains(
+                "mode        = modes plain, da_story, metro\r\nmode_title  = \"da_story, metro\"\r\n"
+            ),
+            "{several}"
+        );
+        m.mode = "plain".into();
         assert!(card_section(&m, &tables, &mf, None, false).contains("mode        = plain\r\n"));
         m.mode = "da_story".into();
         let other = card_section(&m, &tables, &mf, None, false);
         assert!(other.contains("mode        = mode da_story\r\nmode_title  = \"da_story\"\r\n"), "{other}");
         m.provides_modes = vec![ProvidesMode { id: "da_story".into(), title: String::new() }];
+        assert!(card_section(&m, &tables, &mf, None, false).contains("mode        = new da_story\r\n"));
+        // its own mode first, then the games it names beside it
+        m.mode = "plain, metro".into();
+        let own = card_section(&m, &tables, &mf, None, false);
+        assert!(
+            own.contains(
+                "mode        = modes da_story, plain, metro\r\nmode_title  = \"da_story, metro\"\r\n"
+            ),
+            "{own}"
+        );
+        m.mode = String::new();
         assert!(card_section(&m, &tables, &mf, None, false).contains("mode        = new da_story\r\n"));
         // the links by their kinds - the older website as the kind it is, a link that is no page
         // of its service left out - and the network mark, in the card's fixed order

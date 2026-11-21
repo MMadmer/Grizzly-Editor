@@ -416,6 +416,15 @@ What the suites hold, beyond what their names say:
   `[provides_mode]` is not refused (the page pairs `default` with no mode key only). `mod.set` refuses a
   contradiction and writes a choice whose detail is still to come: the form's choice sticks before its
   detail is picked, and the check says what is missing.
+- **A module for several games** (21.11.2026): `mode = plain, survival` and the like - `gz-mod`'s rules
+  (one id at most once, `*` alone, `plain` alone is `target = default`, `new` never with `*`), `test_cli` J
+  (`mod.set` writes an array as the list and infers `existing`, refuses a mode named twice), the card's
+  `any` / `modes` lines (`gz-release`'s tests), Play's first mode of a list, the Game Mode page's checks in a
+  window over the linked game's eight modes and one the file names that the game does not, `E209` under them
+  while the linked game (1.6.4) lacks `mode-lists`. The engine's gate in the real game (1.6.5 build, a probe
+  module `mode = plain, survival` bringing `probe_own`): applies in the plain game, in survival, in
+  metro+survival and in its own mode, not in metro. Not run: a new game of each mode with level work of
+  such a module.
 - A value the game clamps or reads as another (`opacity = 7`, `cheat = maybe`, `api`) is a warning, an empty
   `version` an error; a section id the game would drop (`[screen.Bad Id]`) is a warning with the header to
   write. A key of `[module]` / `[provides_mode]` that is a known key in another case, or one edit from one

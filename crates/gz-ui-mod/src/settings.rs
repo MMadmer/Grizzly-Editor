@@ -87,7 +87,8 @@ pub struct Installed {
 /// What tasks leave for the tab; taken at the start of its next frame.
 #[derive(Default)]
 struct Inbox {
-    modes: Option<Arc<ModeScan>>,
+    /// The linked game's modes, and whether it reads a list of them (`mode-lists`).
+    modes: Option<(Arc<ModeScan>, bool)>,
     installed: Option<Vec<Installed>>,
     commands: Option<CommandsRead>,
     tree: Option<(Vec<String>, usize, usize)>,
@@ -278,8 +279,10 @@ impl ModSettingsDoc {
     /// What tasks left: the data of the checks and the pickers, the picture, a save's answer.
     fn take_inbox(&mut self, ctx: Option<&egui::Context>) {
         let mut inbox = self.inbox.lock();
-        if let Some(modes) = inbox.modes.take() {
+        if let Some((modes, lists)) = inbox.modes.take() {
             self.modes = Some(modes);
+            self.aux.mode_lists = Some(lists);
+            self.aux_gen += 1;
         }
         if let Some(list) = inbox.installed.take() {
             self.installed = Some(list);
@@ -360,16 +363,30 @@ impl ModSettingsDoc {
     fn load_modes(&self, refresh: bool) {
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let _task = self.editor.exec.spawn(async move {
-            let scan = match GameLink::of(&ed) {
+            let (scan, root) = match GameLink::of(&ed) {
                 Ok(link) => {
                     if refresh {
                         let _ = link.refresh().await;
                     }
-                    link.modes().await
+                    (link.modes().await, link.root())
                 }
-                Err(e) => Arc::new(ModeScan { modes: Vec::new(), error: Some(e.to_string()) }),
+                Err(e) => {
+                    (Arc::new(ModeScan { modes: Vec::new(), error: Some(e.to_string()) }), String::new())
+                }
             };
-            inbox.lock().modes = Some(scan);
+            // whether the game reads several modes at once: an older one never applies a list
+            let lists = root.is_empty()
+                || ed
+                    .exec
+                    .io(move || {
+                        gz_game::version::game_states(
+                            Path::new(&root),
+                            &gz_game::version::LINKED_GAME,
+                            gz_mod::MODE_LISTS,
+                        )
+                    })
+                    .await;
+            inbox.lock().modes = Some((scan, lists));
             call::wake_ui(&ed);
         });
     }
@@ -945,7 +962,6 @@ impl ModSettingsDoc {
     }
 
     fn mode_page(&mut self, ui: &mut Ui) {
-        let classic = self.base.kind() == Some(TargetKind::Any);
         let Self { form, problems, modes, gated, actions, .. } = self;
         let scan = modes.clone();
         let list: &[gz_game::GameMode] = scan.as_deref().map_or(&[], |m| m.modes.as_slice());
@@ -957,12 +973,7 @@ impl ModSettingsDoc {
                 flags(problems, "target", PropFlags::REQUIRED),
                 0,
                 |ui| {
-                    // a classic module (every mode) keeps its choice on show; it is made by
-                    // tools/classic_mod, not picked here
-                    let mut offered: Vec<TargetKind> = TargetKind::OFFERED.to_vec();
-                    if classic {
-                        offered.push(TargetKind::Any);
-                    }
+                    let offered = TargetKind::OFFERED;
                     let labels: Vec<&str> = offered.iter().map(|k| k.label()).collect();
                     let mut pick = kind.and_then(|k| offered.iter().position(|o| *o == k)).unwrap_or(usize::MAX);
                     if segmented(ui, &mut pick, &labels, None)
@@ -988,35 +999,15 @@ impl ModSettingsDoc {
             }
             match kind {
                 Some(TargetKind::Existing) => {
-                    let mut options: Vec<Tx<'_>> = list.iter().map(|m| Tx::raw(m.caption.as_str())).collect();
-                    let mut current = list.iter().position(|m| m.id.eq_ignore_ascii_case(&form.mode));
-                    if current.is_none() && !form.mode.is_empty() {
-                        options.push(Tx::raw(form.mode.as_str()));
-                        current = Some(options.len() - 1);
-                    }
-                    let picked = g
-                        .row("Mode", "A mode of the linked game, by the name its new-game screen shows.", flags(problems, "mode", PropFlags::REQUIRED), 0, |ui| {
-                            let mut i = current.unwrap_or(usize::MAX);
-                            if options.is_empty() {
-                                read_only(ui, "None", Clip::End);
-                                return None;
-                            }
-                            combo(ui, "mod_settings.mode", &mut i, &options).then_some(i)
-                        })
-                        .flatten();
+                    g.row(
+                        "Modes",
+                        "The games the module is for: the plain game, modes of the linked game by the names its new-game screen shows.",
+                        flags(problems, "mode", PropFlags::REQUIRED),
+                        0,
+                        |ui| mode_checks(ui, form, list, ""),
+                    );
                     if g.trailing(Icon::Refresh, "Scan the linked game's modes again") {
                         actions.push(Action::RescanModes);
-                    }
-                    if let Some(m) = picked.and_then(|i| list.get(i)) {
-                        m.id.clone_into(&mut form.mode);
-                    }
-                    if let Some(m) = list.iter().find(|m| m.id.eq_ignore_ascii_case(&form.mode)) {
-                        let whose = if m.source == "game" {
-                            tr!("{id} - the linked game's", id = &m.id)
-                        } else {
-                            tr!("{id} - module {module}", id = &m.id, module = &m.source)
-                        };
-                        g.message(Tone::Muted, whose);
                     }
                     if list.is_empty() && scan.is_some() {
                         let why = scan.as_ref().and_then(|s| s.error.clone()).map_or(Tx::from("The linked game declares no modes, only options."), Tx::ui);
@@ -1041,6 +1032,15 @@ impl ModSettingsDoc {
                         |ui| gz_ui::form::row_field(ui, ("gz-ui-mod.text", "pmode_title"), &mut form.pmode_title, ""),
                     );
                     messages(g, problems, "pmode_title");
+                    let own = form.pmode_id.clone();
+                    g.row(
+                        "Also In",
+                        "The games the module is for beside its own mode.",
+                        flags(problems, "mode", PropFlags::NONE),
+                        0,
+                        |ui| mode_checks(ui, form, list, &own),
+                    );
+                    messages(g, problems, "mode");
                 }
                 _ => {}
             }
@@ -1687,6 +1687,47 @@ fn module_label(installed: &[Installed], id: &str) -> String {
     match installed.iter().find(|m| m.id == id) {
         Some(m) if !m.name.is_empty() && m.name != id => format!("{}  ({id})", m.name),
         _ => id.to_owned(),
+    }
+}
+
+/// The checks of the games a module is for: Plain Game (`plain`) first, then every mode of the linked
+/// game by its caption (its id and whose it is in the tip), then what the file names that the game does
+/// not, by its id. `skip` is the module's own mode (New Mode names it apart). Ticking writes the list.
+fn mode_checks(ui: &mut Ui, form: &mut Form, list: &[gz_game::GameMode], skip: &str) {
+    let mut order: Vec<&str> = vec![gz_mod::PLAIN_MODE];
+    order.extend(list.iter().map(|m| m.id.as_str()).filter(|id| *id != skip));
+    let ticked = form.ticked();
+    let unknown: Vec<String> =
+        ticked.iter().filter(|t| !order.contains(&t.as_str()) && t.as_str() != skip).cloned().collect();
+    let mut toggles: Vec<(String, bool)> = Vec::new();
+    local_value_column(ui, "modes", |ui| {
+        let width = ui.available_width();
+        let mut row = |ui: &mut Ui, id: &str, label: Tx<'_>, tip: Tx<'_>| {
+            let mut on = ticked.iter().any(|t| t == id);
+            let changed = ui
+                .push_id(("gz-ui-mod.mode", id), |ui| {
+                    gz_ui::Check::new(&mut on, label).width(width).tip(tip).show(ui).changed()
+                })
+                .inner;
+            if changed {
+                toggles.push((id.to_owned(), on));
+            }
+        };
+        row(ui, gz_mod::PLAIN_MODE, "Plain Game".into(), "A game started with no mode (plain).".into());
+        for m in list.iter().filter(|m| m.id != skip) {
+            let tip = if m.source == "game" {
+                tr!("{id} - the linked game's", id = &m.id)
+            } else {
+                tr!("{id} - module {module}", id = &m.id, module = &m.source)
+            };
+            row(ui, &m.id, Tx::raw(m.caption.as_str()), tip);
+        }
+        for id in &unknown {
+            row(ui, id, Tx::raw(id.as_str()), "Not known to the linked game.".into());
+        }
+    });
+    for (id, on) in toggles {
+        form.set_mode(&order, &id, on);
     }
 }
 

@@ -8,7 +8,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 ## Compatibility
 
 - **The editor is released: 0.7.0 is the first public version** (GitHub `MMadmer/Grizzly-Editor`, with Dead
-  Air: Refined 1.6.4). From it on, what a module ships is a frozen contract: a module built by any released
+  Air: Refined 1.6.6). From it on, what a module ships is a frozen contract: a module built by any released
   editor keeps working on every later game, and the game guarantees it (its PROJECT_RULES.md, the XMS
   contract). A change of a shipped format is a new version with its step on both sides, an addition of an
   optional key, section or record, or nothing: never a silent break, never a format removed. The editor's own
@@ -904,9 +904,12 @@ A change of plan is a change of its document first.
   to the module id or to the project folder, which only SEED it. `mode id` /
   `mode title` belong to the entry the new-game screen lists. Keep the two
   apart in every label and hint - they were confused in the field once already.
-- A mod always targets ONE mode: the plain game, a mode that already exists
-  in the linked game, or a new mode the mod itself brings. "Not selected" is
-  not a third option: exporting a module without a target is forbidden.
+- A mod states the games it is for: the plain game, one mode of the linked game or several
+  (`mode = a, b`, the word `plain` among them for the plain game too), a new mode the mod itself
+  brings (and the games it names beside it), or every game (`mode = *`). "Not selected" is not an
+  option: exporting a module without a target is forbidden. A list is read by a game that states
+  `mode-lists` (Dead Air: Refined 1.6.5): an older one reads it as one id that is never active, so
+  `E209` at the `mode` line refuses a list when the linked game lacks it.
 - Do NOT hardcode the mode list: it is scanned from the linked game
   (`gz-game`'s `modes.rs`), because a global mod (Revolution II and the like)
   replaces both the `ui_mm_faction_select.script` script and the whole
@@ -919,9 +922,12 @@ A change of plan is a change of its document first.
   start on the original Dead Air, and that is fine. Only what worked on the
   original must never break.
 - A mode a module brings is its `[provides_mode]` lines and nothing else: the game offers it in the
-  new-game screen's list of module modes (`xms.offer_modes`) and the build writes no file for it.
+  new-game screen's list of module modes (`xms.offer_modes`) and the build writes no file for it. Its id is
+  never `plain` or `*` - words of the `mode` line, which the game ignores as a mode's id.
 - **The target and the mode go together** (`gz_mod::target_pairing`, one rule for the file's check and
-  `mod.set`): `default` takes no mode, `existing` a mode id, `new` a `[provides_mode]`, `any` the mode `*`. A
+  `mod.set`): `default` takes no mode, `existing` one mode id or several (not `*`, not `plain` alone), `new` a
+  `[provides_mode]` (other games beside it, never `*`), `any` the mode `*`. Mod Settings, Game Mode, ticks
+  the games (Plain Game, the linked game's modes by their names) instead of typing them. A
   pair that contradicts itself is an error at the `target` line and `mod.set` refuses it in the same sentence;
   a choice whose detail is still to come (`existing` with no mode yet, `new` with no declared mode) is an
   error of the check - the module cannot be built - that `mod.set` writes: the window's form saves the choice

@@ -45,7 +45,7 @@ pub const PAGES: [PageInfo; 7] = [
     PageInfo {
         id: "game_mode",
         label: "Game Mode",
-        about: "A module targets one mode: the plain game, a mode the linked game has, or a new mode it brings. A mode is not the mod: the mod's name is on General.",
+        about: "The games the module is for: the plain game, modes the linked game has, a new mode it brings, or every game. A mode is not the mod: the mod's name is on General.",
     },
     PageInfo {
         id: "relations",
@@ -208,8 +208,31 @@ impl Form {
         }
     }
 
+    /// The games `mode` names, as the form ticks them (`plain` among them; never `*`).
+    #[must_use]
+    pub fn ticked(&self) -> Vec<String> {
+        gz_mod::mode_list(&self.mode).into_iter().filter(|m| m != "*").collect()
+    }
+
+    /// Ticks or unticks a game in `mode`: the list keeps `order` (plain, then the linked game's modes),
+    /// then what the file names that neither knows, as it was.
+    pub fn set_mode(&mut self, order: &[&str], id: &str, on: bool) {
+        let mut now = self.ticked();
+        if on {
+            if !now.iter().any(|m| m == id) {
+                now.push(id.to_owned());
+            }
+        } else {
+            now.retain(|m| m != id);
+        }
+        let mut out: Vec<String> =
+            order.iter().filter(|o| now.iter().any(|m| m == *o)).map(|o| (*o).to_owned()).collect();
+        out.extend(now.into_iter().filter(|m| !order.contains(&m.as_str())));
+        self.mode = out.join(", ");
+    }
+
     /// Picks a kind: the fields of the others go. `first_mode` is the first
-    /// mode of the linked game, which an Existing Mode starts on.
+    /// mode of the linked game, which Game Modes start on.
     pub fn set_kind(&mut self, kind: Kind, first_mode: Option<&str>) {
         match kind {
             Kind::Plain => {
@@ -230,7 +253,10 @@ impl Form {
                 }
             }
             Kind::New => {
-                self.mode.clear();
+                // the games it is for beside its own stay ticked; every game is no list
+                if self.mode == "*" {
+                    self.mode.clear();
+                }
                 "new".clone_into(&mut self.target);
             }
             Kind::Any => {
@@ -259,25 +285,25 @@ impl Form {
 pub enum Kind {
     /// `target = default`: only while no campaign mode is active.
     Plain,
-    /// `target = existing`: a mode of the linked game.
+    /// `target = existing`: modes of the linked game, the plain game among them when ticked.
     Existing,
-    /// `target = new`: a mode the module brings.
+    /// `target = new`: a mode the module brings, and the games it names beside it.
     New,
-    /// `target = any`, `mode = *`: a classic mod, in every game.
+    /// `target = any`, `mode = *`: every game.
     Any,
 }
 
 impl Kind {
     /// The kinds the Target row offers, in its order.
-    pub const OFFERED: [Kind; 3] = [Kind::Plain, Kind::Existing, Kind::New];
+    pub const OFFERED: [Kind; 4] = [Kind::Plain, Kind::Existing, Kind::New, Kind::Any];
 
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Kind::Plain => "Plain Game",
-            Kind::Existing => "Existing Mode",
+            Kind::Existing => "Game Modes",
             Kind::New => "New Mode",
-            Kind::Any => "Every Mode",
+            Kind::Any => "Every Game",
         }
     }
 
@@ -288,9 +314,9 @@ impl Kind {
             Kind::Plain => {
                 "Applies only while no campaign mode is active: Revolution II and the like do not see this module's level work."
             }
-            Kind::Existing => "The level work applies only in that mode.",
+            Kind::Existing => "The level work applies in the games ticked below: in any of them.",
             Kind::New => {
-                "A new mode is a new game of its own: the player picks it on the new-game screen, by its title."
+                "A new mode is a new game of its own: the player picks it on the new-game screen, by its title. The level work applies in it and in the games ticked under Also In."
             }
             Kind::Any => {
                 "No gate: the level work lands in the plain game and in every campaign. Use it only for what belongs everywhere."
@@ -312,6 +338,8 @@ pub struct Aux {
     pub pda_files: Vec<String>,
     /// The last picture that did not become a thumbnail.
     pub picture_error: String,
+    /// Whether the linked game reads several modes at once (`mode-lists`); `None` before it was read.
+    pub mode_lists: Option<bool>,
 }
 
 /// A problem of the form, shown under its field, as a dot on its page and in `mod.view`.
@@ -555,7 +583,14 @@ pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
             "mode",
             Tone::Required,
             false,
-            "Pick the mode: the module cannot be built until then.",
+            "Tick the modes: the module cannot be built until then.",
+        )),
+        Some(Kind::Existing) if f.ticked().iter().all(|m| m == gz_mod::PLAIN_MODE) => out.push(problem(
+            MODE,
+            "mode",
+            Tone::Required,
+            false,
+            "Tick a mode of the game too: the plain game alone is the Plain Game target.",
         )),
         Some(Kind::New) if f.pmode_id.is_empty() => {
             out.push(problem(
@@ -570,7 +605,23 @@ pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
     }
     // "*" is the engine's no-gate wildcard: legal for mode=, never for a mode of the module's own
     if !validate_mode_ref(&f.mode) {
-        out.push(problem(MODE, "mode", Tone::Error, true, "Use a-z, 0-9, _ . and - only."));
+        out.push(problem(MODE, "mode", Tone::Error, true, "Use a-z, 0-9, _ . and - only, each mode once."));
+    }
+    // the file's own check says it too (E209); here it is said where the games are ticked
+    let provided: Vec<&str> = [f.pmode_id.as_str()].into_iter().filter(|p| !p.is_empty()).collect();
+    if aux.mode_lists == Some(false) && gz_mod::mode_needs_lists(&f.mode, &provided) {
+        out.push(problem(
+            MODE,
+            "mode",
+            Tone::Error,
+            false,
+            // there a list is never active, and one mode beside the new one takes the new one's place
+            match (provided.is_empty(), f.ticked().as_slice()) {
+                (true, _) => "The linked game reads one mode: it would apply the module's level work in none of these. Dead Air: Refined 1.6.5 or newer reads several - update the game, or tick one mode.",
+                (false, [one]) if one != gz_mod::PLAIN_MODE => "The linked game reads one mode: it would apply the module's level work in the game ticked here instead of the new mode. Dead Air: Refined 1.6.5 or newer reads both - update the game, or untick it.",
+                (false, _) => "The linked game reads one mode: it would apply the module's level work in none of these, not even the new mode. Dead Air: Refined 1.6.5 or newer reads several - update the game, or untick them.",
+            },
+        ));
     }
     if !validate_own_mode_id(&f.pmode_id) {
         out.push(problem(
@@ -782,7 +833,7 @@ pub fn plan(base: &Form, form: &Form) -> Plan {
         p.key("pda", "layout", s(&form.pda));
     }
     // the targeting choice is always stated: left out, the command would read it off the mode
-    let stated = ["default", "existing", "new"].iter().any(|t| t.eq_ignore_ascii_case(&form.target));
+    let stated = ["default", "existing", "new", "any"].iter().any(|t| t.eq_ignore_ascii_case(&form.target));
     if stated && (form.target != base.target || !p.is_empty()) {
         p.key("module", "target", s(&form.target.to_ascii_lowercase()));
     }
@@ -943,8 +994,9 @@ mod tests {
         assert_eq!(check(&f, &Aux::default())[0].field, "mode");
         f.set_kind(Kind::Existing, Some("metro"));
         assert_eq!(f.mode, "metro");
+        // the games ticked stay ticked under Also In
         f.set_kind(Kind::New, None);
-        assert_eq!(f.mode, "");
+        assert_eq!(f.mode, "metro");
         assert_eq!(check(&f, &Aux::default())[0].field, "pmode_id");
         f.pmode_id = "night".into();
         f.pmode_title = "Ночь".into();
@@ -1050,13 +1102,44 @@ mod tests {
     fn a_classic_module_stays_classic() {
         let base = Form { target: "any".into(), mode: "*".into(), ..form() };
         assert_eq!(base.kind(), Some(Kind::Any));
+        // every game is a target the page offers: the plan states it like the others
         let f = Form { name: "Weapons".into(), ..base.clone() };
         let p = plan(&base, &f);
-        assert!(p.set["module"].get("target").is_none() && p.set["module"].get("mode").is_none());
+        assert!(
+            p.set["module"]["target"] == s("any") && p.set["module"].get("mode").is_none(),
+            "{:?}",
+            p.set
+        );
         let mut back = base.clone();
         back.set_kind(Kind::Plain, None);
         back.set_kind(Kind::Any, None);
         assert!(plan(&base, &back).is_empty());
+    }
+
+    #[test]
+    fn modes_are_ticked_into_one_list_in_the_games_order() {
+        let mut f = Form { target: "existing".into(), ..form() };
+        let order = ["plain", "story", "metro"];
+        f.set_mode(&order, "metro", true);
+        f.set_mode(&order, "plain", true);
+        assert_eq!(f.mode, "plain, metro");
+        f.set_mode(&order, "story", true);
+        assert_eq!(f.mode, "plain, story, metro");
+        f.set_mode(&order, "plain", false);
+        assert_eq!(f.ticked(), ["story", "metro"]);
+        // a mode the game does not know stays where the file had it, after the known ones
+        f.mode = "zone_x, metro".into();
+        f.set_mode(&order, "story", true);
+        assert_eq!(f.mode, "story, metro, zone_x");
+        // the plain game alone is no Game Modes target
+        f.mode = "plain".into();
+        assert!(check(&f, &Aux::default()).iter().any(|p| p.field == "mode"));
+        // a new mode keeps the games it names beside its own; every game clears them
+        f.set_kind(Kind::New, None);
+        assert_eq!(f.mode, "plain");
+        f.set_kind(Kind::Any, None);
+        f.set_kind(Kind::New, None);
+        assert!(f.mode.is_empty());
     }
 
     #[test]

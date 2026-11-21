@@ -172,10 +172,11 @@ struct SetParams {
     /// a key. `module`: id (a-z 0-9 _ . -), name, version (1 to 4 numbers, 1.2.0), author,
     /// description, website (https, ap-pro.ru or moddb.com), tags (a list from the Mod Browser's
     /// words), disable_game_updates (true | false), and the target: `target` is `default` (the
-    /// ordinary game), `existing` (a mode of the linked game, with `mode`: its id), `new` (a mode
-    /// the module adds, with `provides_mode`) or `any` (every game, with `mode` = `*`). Setting
-    /// a mode id or `provides_mode` also sets `target` unless it is given; `mode` = `*` needs `target` = `any`,
-    /// and a target and a mode that do not go together as above are refused. `update`: github
+    /// ordinary game), `existing` (modes of the linked game, with `mode`: one id or several - a list
+    /// or an array, `plain` among them for the ordinary game too), `new` (a mode the module adds,
+    /// with `provides_mode`, and `mode` the other modes it is for) or `any` (every game, with `mode`
+    /// = `*`). Setting a mode id or `provides_mode` also sets `target` unless it is given (`*` needs
+    /// `target` = `any`), and a target and a mode that do not go together as above are refused. `update`: github
     /// (owner/repo). `order`: after, before (module ids, a list). `requires`, `conflicts`,
     /// `exclude`: the whole list, one entry per line or an array. `vars`: {name: default}.
     /// `provides_mode`: {id, title} (an empty id drops it). `pda`: {layout} (a project-relative
@@ -601,7 +602,7 @@ async fn mod_set(ed: Arc<Editor>, p: SetParams, origin: Origin) -> Reply {
         let after = Manifest::parse(&after);
         if !after.provides_modes.is_empty() {
             edits.push(Edit::set("module", "target", "new"));
-        } else if after.mode != "*" && !after.mode.is_empty() {
+        } else if after.mode.trim() != "*" && !after.mode.is_empty() {
             edits.push(Edit::set("module", "target", "existing"));
         }
     }

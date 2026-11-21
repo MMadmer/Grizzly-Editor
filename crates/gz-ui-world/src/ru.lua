@@ -178,6 +178,8 @@ return {
   { "Everything is kept already", "Всё уже оставлено" },
   { "These rules shape the module's own mode '{mode}'.", "Эти правила задают собственный режим модуля «{mode}»." },
   { "These rules shape the mode '{caption}'.", "Эти правила задают режим «{caption}»." },
+  { "These rules shape new games of the modes {list}.", "Эти правила задают новые игры режимов {list}." },
+  { "These rules shape the plain game and new games of the modes {list}.", "Эти правила задают обычную игру и новые игры режимов {list}." },
   { "These rules shape every new game: the module targets the plain game.", "Эти правила действуют в каждой новой игре: модуль рассчитан на обычную игру." },
   { "These rules shape every new game: the module targets every mode.", "Эти правила действуют в каждой новой игре: модуль рассчитан на любой режим." },
   { "No game mode is chosen yet: pick one in Mod Settings, Game Mode.", "Игровой режим ещё не выбран: выберите его в «Настройках мода», «Игровой режим»." },
@@ -270,6 +272,9 @@ return {
 
   -- the world's problems (gz-world), after their place
   { "{n} Player Starts - a module has one: {list}.", "Точек старта игрока: {n}, а у модуля она одна: {list}." },
+  { "Mode = {mode} names a list of games, and the linked game reads one mode id: it would apply the module's work on levels in no game. Dead Air: Refined 1.6.5 or newer reads lists (it states mode-lists) - update the game, or name one mode.", "mode = {mode} перечисляет несколько игр, а связанная игра читает только один ID режима: работа модуля с уровнями не применится ни в одной игре. Dead Air: Refined 1.6.5 и новее читает списки (заявляет mode-lists) — обновите игру или укажите один режим." },
+  { "Mode = {mode} names a list of games, and the linked game reads one mode id: it would apply the module's work on levels in no game. Dead Air: Refined 1.6.5 or newer reads lists (it states mode-lists) - update the game, or leave the mode line out.", "mode = {mode} перечисляет несколько игр, а связанная игра читает только один ID режима: работа модуля с уровнями не применится ни в одной игре. Dead Air: Refined 1.6.5 и новее читает списки (заявляет mode-lists) — обновите игру или уберите строку mode." },
+  { "Mode = {mode} with the modes the module brings needs a game that reads both, and the linked game reads the mode line alone: it would apply the module's work on levels in {mode} only. Dead Air: Refined 1.6.5 or newer reads both (it states mode-lists) - update the game, or leave the mode line out.", "mode = {mode} вместе с режимами, которые добавляет модуль, требует игру, читающую и то и другое, а связанная игра читает только строку mode: работа модуля с уровнями применится только в {mode}. Dead Air: Refined 1.6.5 и новее читает и то и другое (заявляет mode-lists) — обновите игру или уберите строку mode." },
   { "{n} rules offered to the player - the new-game screen has room for {max}.", "Игроку предложено правил: {n}, а на экране новой игры место для {max}." },
   { "{key} names '{level}', a level the linked game does not have.", "{key} указывает «{level}» — уровень, которого нет в связанной игре." },
   { "Locked names '{name}', a transition the linked game does not have.", "Locked указывает «{name}» — переход, которого нет в связанной игре." },

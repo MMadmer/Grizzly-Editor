@@ -291,7 +291,92 @@ impl WorldService {
         let known = pickers.as_ref().map(|p| {
             move |id: &str| p.known(PickerType::Item, id) || own.as_ref().is_some_and(|o| o.has(id))
         });
-        let problems = issues(w, k, &starts, Some(&game), known.as_ref().map(|f| f as &dyn Fn(&str) -> bool));
+        let mut problems =
+            issues(w, k, &starts, Some(&game), known.as_ref().map(|f| f as &dyn Fn(&str) -> bool));
+        problems.extend(self.mode_lists_issue(editor).await);
         (starts, problems)
+    }
+
+    /// `E209`: the manifest names several modes (or `plain`, or modes beside its own) and the linked
+    /// game does not state that it reads a list (`mode-lists`): such a game reads the whole value as one
+    /// mode, which is never active, and applies the module's level work in no game at all.
+    async fn mode_lists_issue(&self, editor: &Editor) -> Option<Issue> {
+        let snap = self.manifest.snapshot();
+        let m = snap.manifest()?;
+        let provided: Vec<&str> =
+            m.provides_modes.iter().map(|p| p.id.as_str()).filter(|i| !i.is_empty()).collect();
+        if !gz_mod::mode_needs_lists(&m.mode, &provided) {
+            return None;
+        }
+        let game = self.project.game_root();
+        if game.is_empty() {
+            return None;
+        }
+        let reads = editor
+            .exec
+            .io(move || {
+                gz_game::version::game_states(
+                    std::path::Path::new(&game),
+                    &gz_game::version::LINKED_GAME,
+                    gz_mod::MODE_LISTS,
+                )
+            })
+            .await;
+        if reads {
+            return None;
+        }
+        Some(Issue::new(
+            "E209",
+            mode_lists_text(&m.mode, !provided.is_empty()),
+            gz_mod::Spot::key("module", "mode"),
+        ))
+    }
+}
+
+/// The sentence of `E209`, one per shape of the line, as an older game (no `mode-lists`) reads it: the
+/// whole value as one id. A list - or `plain` - is then never active; one mode beside the module's own
+/// takes the own one's place.
+#[must_use]
+pub fn mode_lists_text(mode: &str, provides: bool) -> String {
+    let mode = mode.trim();
+    let list = gz_mod::mode_list(mode);
+    let one = list.len() == 1 && list[0] != gz_mod::PLAIN_MODE;
+    if provides && one {
+        format!(
+            "module: mode = {mode} with the modes the module brings needs a game that reads both, and the linked \
+             game reads the mode line alone: it would apply the module's work on levels in {mode} only. Dead Air: \
+             Refined 1.6.5 or newer reads both (it states mode-lists) - update the game, or leave the mode line out."
+        )
+    } else if provides {
+        format!(
+            "module: mode = {mode} names a list of games, and the linked game reads one mode id: it would apply the \
+             module's work on levels in no game. Dead Air: Refined 1.6.5 or newer reads lists (it states \
+             mode-lists) - update the game, or leave the mode line out."
+        )
+    } else {
+        format!(
+            "module: mode = {mode} names a list of games, and the linked game reads one mode id: it would apply the \
+             module's work on levels in no game. Dead Air: Refined 1.6.5 or newer reads lists (it states \
+             mode-lists) - update the game, or name one mode."
+        )
+    }
+}
+
+#[cfg(test)]
+mod mode_lists_tests {
+    use super::mode_lists_text;
+
+    #[test]
+    fn an_older_game_is_told_what_it_would_make_of_the_line() {
+        let list = mode_lists_text("plain, metro", false);
+        assert!(
+            list.starts_with("module: mode = plain, metro names a list") && list.ends_with("name one mode.")
+        );
+        assert!(mode_lists_text("plain", false).contains("in no game"));
+        let beside = mode_lists_text("metro", true);
+        assert!(beside.contains("levels in metro only."), "{beside}");
+        assert!(mode_lists_text("metro, plain", true).ends_with("leave the mode line out."));
+        // the line after its place, as the World Rules tab shows it, keeps the whole sentence
+        assert!(mode_lists_text("a, b", false).split_once(": ").unwrap().1.starts_with("mode = a, b"));
     }
 }
