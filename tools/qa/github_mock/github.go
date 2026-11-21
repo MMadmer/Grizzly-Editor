@@ -118,6 +118,7 @@ type asset struct {
 	name, contentType string
 	data              []byte
 	sha256, state     string
+	createdAt         string
 }
 
 type release struct {
@@ -182,6 +183,9 @@ type mock struct {
 
 	// The report hub of the editor's feedback (reports.go).
 	reportDesk *reportDesk
+
+	// The catalog's Git Data API and workflow runs (gitdata.go), made on first use.
+	gitData *gitState
 }
 
 func newMock(cfg *config) *mock {
@@ -264,6 +268,8 @@ func (m *mock) assetJSON(r *release, a *asset, withSHA256 bool) object {
 		{"size", len(a.data)},
 		{"state", a.state},
 		{"content_type", a.contentType},
+		{"created_at", a.createdAt},
+		{"updated_at", a.createdAt},
 	}
 	if !m.cfg.noDigest {
 		result = append(result, member{"digest", m.reportedDigest(a)})
@@ -351,7 +357,7 @@ func (m *mock) newAsset(r *release, name, contentType string, data []byte, diges
 	if digest == "" {
 		digest = sha256Hex(data)
 	}
-	a := &asset{m.nextAssetID, name, contentType, data, digest, state}
+	a := &asset{m.nextAssetID, name, contentType, data, digest, state, timestamp()}
 	m.nextAssetID++
 	r.assets = append(r.assets, a)
 	return a

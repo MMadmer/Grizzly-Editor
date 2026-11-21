@@ -402,6 +402,14 @@ func (x *exchange) routeLocked(raw []byte) (*answer, error) {
 		return ok(m.catalogStateJSON(), nil)
 	case post && match(seg, "__catalog", "file"):
 		return ok(m.harnessWrite(strings.Trim(query["path"], "/"), cmp.Or(query["branch"], defaultBranch), raw))
+	case get && match(seg, "__catalog", "log"):
+		return ok(m.catalogLog(cmp.Or(query["branch"], defaultBranch)))
+	case get && match(seg, "__catalog", "runs"):
+		return ok(m.catalogRunsJSON(), nil)
+	case post && match(seg, "__catalog", "race"):
+		return ok(m.armRace(strings.Trim(query["path"], "/"), raw))
+	case post && match(seg, "__release", "age"):
+		return ok(m.ageRelease(query["id"], query["minutes"]))
 	case post && match(seg, "__catalog", "issue"):
 		return ok(m.plantIssue(query["creator"], query["title"], raw, query["pull"]))
 	case post && match(seg, "__catalog", "comment"):
@@ -588,6 +596,9 @@ func (x *exchange) releaseFrom(text string) (*release, error) {
 // routeCatalog: the Mod Browser catalog, its repository, its files, its issues and their comments.
 func (x *exchange) routeCatalog(rest []string, raw []byte) (*answer, error) {
 	m, method := x.mock, x.r.Method
+	if result, handled, err := x.routeCatalogGit(rest, raw); handled {
+		return result, err
+	}
 	switch {
 	case method == "GET" && len(rest) == 0:
 		return ok(m.catalogJSON(), nil)

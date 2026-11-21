@@ -970,12 +970,16 @@ def flow_catalog_repo(checks: Checks, options) -> None:
         checks.equal("R no User-Agent: 403", mock.api("POST", ISSUES_API, {"title": SUBMISSION_TITLE}, user_agent=None).status, 403)
         checks.equal("R the refused requests opened nothing", mock.catalog()["issues"], [])
 
+        # The catalog's Git Data API is its maintainer's (Catalog Desk, gitdata.go): a branch reads, a stranger
+        # moves none - and a submission still opens no branch of its own.
+        checks.equal("R the catalog's branch reads; moving it is the maintainer's: 200, 403",
+                     [mock.api("GET", f"{CATALOG_API}/git/ref/heads/main").status,
+                      mock.api("PATCH", f"{CATALOG_API}/git/refs/heads/main", {"sha": "0" * 40, "force": True}).status],
+                     [200, 403])
         gone = [
             ("POST", f"{CATALOG_API}/forks", {}),
             ("GET", f"/repos/{LOGIN}/darf-mods", None),
-            ("GET", f"{CATALOG_API}/git/ref/heads/main", None),
             ("POST", f"{CATALOG_API}/git/refs", {"ref": "refs/heads/submit-qa_mod", "sha": "0" * 40}),
-            ("PATCH", f"{CATALOG_API}/git/refs/heads/main", {"sha": "0" * 40, "force": True}),
             ("PUT", f"{CATALOG_API}/contents/{MOD_FILE}", {"message": "Add qa_mod", "content": "eA=="}),
             ("GET", f"{CATALOG_API}/pulls", None),
             ("POST", f"{CATALOG_API}/pulls", {"title": "Add QA Mod", "head": f"{LOGIN}:submit-qa_mod", "base": "main"}),
@@ -984,7 +988,7 @@ def flow_catalog_repo(checks: Checks, options) -> None:
         ]
         statuses = [mock.api(method, path, body).status for method, path, body in gone]
         checks.equal(
-            "R forks, git refs, content writes, pull requests and /__catalog/merge are gone, --repo has no issues: 404 each",
+            "R forks, new branches, content writes, pull requests and /__catalog/merge are gone, --repo has no issues: 404 each",
             statuses + [mock.harness("/__catalog/merge?number=1").status],
             [404] * (len(gone) + 1),
         )

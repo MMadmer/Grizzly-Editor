@@ -51,6 +51,9 @@ type commit struct {
 	files   map[string][]byte
 	parents []string
 	message string
+	// What the Git Data API keeps of a commit (gitdata.go): who made it and when.
+	author object
+	date   string
 }
 
 type comment struct {
@@ -169,7 +172,7 @@ func (m *mock) newCommit(files map[string][]byte, parents []string, message stri
 		fmt.Fprintf(digest, "%s\x00%s\n", path, gitBlobSHA(files[path]))
 	}
 	io.WriteString(digest, message)
-	result := &commit{hex.EncodeToString(digest.Sum(nil)), files, parents, message}
+	result := &commit{sha: hex.EncodeToString(digest.Sum(nil)), files: files, parents: parents, message: message, date: timestamp()}
 	m.commits[result.sha] = result
 	return result
 }

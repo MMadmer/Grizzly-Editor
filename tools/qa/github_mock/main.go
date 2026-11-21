@@ -8,6 +8,8 @@
 // open, read, edit) with their comments - and the catalog's public files on the
 // web (/catalog/public/..). For the package checks: VirusTotal's v3 file API
 // under /vt/api/v3 (files, files/upload_url, analyses) with the author's own key.
+// For the catalog maintainer's client (Catalog Desk): the catalog's Git Data API,
+// its file history and workflow runs, with harness routes of their own (gitdata.go).
 // A set of fault switches comes with them (see --help). All state lives in
 // memory. Self-test: ../test_github_mock.py.
 //
