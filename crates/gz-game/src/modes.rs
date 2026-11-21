@@ -2,9 +2,11 @@
 //!
 //! Dead Air has no config listing its modes: a mode is a checkbox the new-game script creates
 //! (`scripts\ui_mm_faction_select.script`), laid out in `configs\ui\ui_mm_faction_select_16.xml`
-//! and stored as a `[character_creation]` key. The layout's columns tell the two kinds apart:
-//! `<dar2_mode>` holds campaigns, `<dar2_option>` rule toggles. A global mod replaces both
-//! files, so the list is scanned, never hardcoded. Modules add theirs with `[provides_mode]`.
+//! and stored as a `[character_creation]` key ending with `_mode`. What is no mode the game says
+//! itself: the checkboxes `[modifiers]` of `configs\dead_air_x64_mode_exclusive.ltx` names (hardcore,
+//! easy, ...) are modifiers, the rule the engine applies when a new game starts. A global mod replaces
+//! the screen and that file, so the list is scanned, never hardcoded. Modules add theirs with
+//! `[provides_mode]`.
 //!
 //! The reading is a text scan, byte for byte, quirks included.
 
@@ -34,6 +36,8 @@ pub struct ModeScan {
 pub const LAYOUT_16: &str = "configs/ui/ui_mm_faction_select_16.xml";
 pub const LAYOUT: &str = "configs/ui/ui_mm_faction_select.xml";
 pub const SCRIPT: &str = "scripts/ui_mm_faction_select.script";
+/// The game's word about its new-game screen: `[modifiers]` are no modes.
+pub const MODIFIERS: &str = "configs/dead_air_x64_mode_exclusive.ltx";
 pub const NO_LAYOUT: &str =
     "the linked game has no ui_mm_faction_select xml - cannot tell modes from options";
 
@@ -58,46 +62,30 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     find(hay, needle, 0).is_some()
 }
 
-/// The CRT's `atoi`: blanks, a sign, digits; 0 when there are none.
-fn atoi(s: &[u8]) -> i32 {
-    let mut i = 0;
-    while s.get(i).is_some_and(|c| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)) {
-        i += 1;
-    }
-    let neg = match s.get(i) {
-        Some(b'-') => {
-            i += 1;
-            true
+/// The checkboxes `[modifiers]` of the game's screen config names, lower case: `check_hardcore`.
+#[must_use]
+pub fn modifiers(config: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in config.split(|c| *c == b'\n') {
+        let line = line.split(|c| *c == b';').next().unwrap_or(&[]);
+        let line = String::from_utf8_lossy(line);
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
-        Some(b'+') => {
-            i += 1;
-            false
+        if line.starts_with('[') {
+            inside = line.eq_ignore_ascii_case("[modifiers]");
+            continue;
         }
-        _ => false,
-    };
-    let mut v: i64 = 0;
-    while let Some(d) = s.get(i).filter(|c| c.is_ascii_digit()) {
-        v = (v * 10 + i64::from(d - b'0')).min(i64::from(i32::MAX) + 1);
-        i += 1;
-    }
-    let v = if neg { -v } else { v };
-    i32::try_from(v).unwrap_or(if neg { i32::MIN } else { i32::MAX })
-}
-
-/// The number of `attr="` inside the tag that starts at `tag_at`. The name has to
-/// START where it is found - `x=` also lives inside `max=`.
-fn attr_int(text: &[u8], tag_at: usize, attr: &str, def: i32) -> i32 {
-    let Some(close) = find_byte(text, b'>', tag_at) else { return def };
-    let pat = format!("{attr}=\"");
-    let mut from = tag_at;
-    while let Some(at) = find(text, pat.as_bytes(), from).filter(|&a| a < close) {
-        let before = if at > 0 { text.get(at - 1).copied().unwrap_or(b' ') } else { b' ' };
-        if matches!(before, b' ' | b'\t' | b'\r' | b'\n') {
-            return atoi(text.get(at + pat.len()..).unwrap_or(&[]));
+        if inside {
+            let name = line.split(|c: char| c == '=' || c.is_whitespace()).next().unwrap_or("");
+            if !name.is_empty() {
+                out.push(name.to_ascii_lowercase());
+            }
         }
-        from = at + pat.len();
     }
-    def
+    out
 }
 
 /// `new_game_metro_mode` -> `metro`, `new_game_good_loot` -> `good_loot`.
@@ -175,18 +163,15 @@ pub struct Checkbox {
     pub id: String,
     /// The string id of its caption, as the layout holds it (bytes, usually ASCII).
     pub caption_id: Vec<u8>,
-    /// The left column: a mode, not an option.
+    /// A mode, not an option: its key ends with `_mode` and the game names it no modifier.
     pub campaign: bool,
     /// The script really creates it.
     pub available: bool,
 }
 
-/// Every `<check_...>` of the layout, campaign or option.
+/// Every `<check_...>` of the layout, campaign or option; `modifiers` are what [`modifiers`] read.
 #[must_use]
-pub fn checkboxes(ui: &[u8], script: &[u8]) -> Vec<Checkbox> {
-    // without the column headers (a stock install) nothing is a campaign
-    let x_mode = find(ui, b"<dar2_mode", 0).map_or(-1, |at| attr_int(ui, at, "x", -1));
-    let x_option = find(ui, b"<dar2_option", 0).map_or(-1, |at| attr_int(ui, at, "x", -1));
+pub fn checkboxes(ui: &[u8], script: &[u8], modifiers: &[String]) -> Vec<Checkbox> {
     let mut out = Vec::new();
     let mut pos = 0;
     while let Some(at) = find(ui, b"<check_", pos) {
@@ -196,7 +181,6 @@ pub fn checkboxes(ui: &[u8], script: &[u8]) -> Vec<Checkbox> {
             name_end += 1;
         }
         let node = ui.get(name_at..name_end).unwrap_or(&[]);
-        let x = attr_int(ui, at, "x", -1);
         pos = name_end;
 
         // check_metro_mode pairs with new_game_metro_mode, check_survival with
@@ -207,7 +191,8 @@ pub fn checkboxes(ui: &[u8], script: &[u8]) -> Vec<Checkbox> {
         let key = if !script.is_empty() && contains(script, with.as_bytes()) { with } else { base };
         let id = normalize_id(&key);
         let available = script.is_empty() || checkbox_live(script, node);
-        let campaign = x_mode >= 0 && x_option >= 0 && x >= 0 && (x - x_mode).abs() <= (x - x_option).abs();
+        let mode_key = key.len() > 5 && key.get(key.len() - 5..).is_some_and(|t| t.eq_ignore_ascii_case("_mode"));
+        let campaign = mode_key && !modifiers.iter().any(|m| m.eq_ignore_ascii_case(&node_text));
 
         // the caption lives on the sibling label node, as a string-table id
         let mut cap_tag = b"<cap_".to_vec();
@@ -384,7 +369,7 @@ pub fn scan(files: &GameFiles) -> ModeScan {
         add_module_modes(&mut modes, module_modes(files));
         return ModeScan { modes, error: Some(NO_LAYOUT.to_owned()) };
     }
-    let boxes = checkboxes(&ui, &script);
+    let boxes = checkboxes(&ui, &script, &modifiers(&read_text(files, MODIFIERS)));
     let captions = resolve_captions(files, &boxes);
     // options are parsed only to be told apart; they never reach a caller
     for (b, caption) in boxes.into_iter().zip(captions) {
@@ -401,8 +386,7 @@ mod tests {
     use super::*;
 
     const UI: &str = r#"<w>
-  <dar2_mode x="40" y="10"/>
-  <dar2_option x="400" y="10"/>
+  <check_hard_mode x="410" y="70"/>
   <check_metro_mode x="50" y="40" max="9" width="20"/>
   <cap_check_metro_mode x="80" y="40"><text>st_cap_check_metro_mode</text></cap_check_metro_mode>
   <check_survival x="60" y="70"/>
@@ -423,11 +407,14 @@ mod tests {
   self.story = xml:InitCheck(\"main_dialog:check_story\", self)\n\
   --]]\n\
   self.nc = xml:InitCheck(\"main_dialog:check_nocap\", self)\n\
+  self.hard = xml:InitCheck(\"main_dialog:check_hard_mode\", self)\n\
 end\n";
 
     #[test]
-    fn columns_scripts_and_captions() {
-        let boxes = checkboxes(UI.as_bytes(), SCRIPT.as_bytes());
+    fn keys_modifiers_scripts_and_captions() {
+        let listed = modifiers(b"[exclusive_campaigns]\r\ncheck_survival\r\n\r\n; one life\r\n[modifiers]\r\nCheck_Hard_Mode ; hardcore\r\n");
+        assert_eq!(listed, ["check_hard_mode"]);
+        let boxes = checkboxes(UI.as_bytes(), SCRIPT.as_bytes(), &listed);
         let summary: Vec<(&str, &str, &str, bool, bool)> = boxes
             .iter()
             .map(|b| (b.node.as_str(), b.key.as_str(), b.id.as_str(), b.campaign, b.available))
@@ -435,35 +422,28 @@ end\n";
         assert_eq!(
             summary,
             [
+                ("check_hard_mode", "new_game_hard_mode", "hard", false, true),
                 ("check_metro_mode", "new_game_metro_mode", "metro", true, true),
                 ("check_survival", "new_game_survival_mode", "survival", true, true),
                 ("check_one_life", "new_game_one_life", "one_life", false, true),
-                ("check_azazel", "new_game_azazel", "azazel", true, false),
-                ("check_story", "new_game_story", "story", true, false),
-                ("check_nocap", "new_game_nocap", "nocap", true, true),
+                ("check_azazel", "new_game_azazel", "azazel", false, false),
+                ("check_story", "new_game_story", "story", false, false),
+                ("check_nocap", "new_game_nocap", "nocap", false, true),
             ]
         );
-        assert_eq!(boxes[0].caption_id, b"st_cap_check_metro_mode");
-        assert_eq!(boxes[1].caption_id, b"st_cap_survival");
-        assert!(boxes[5].caption_id.is_empty());
+        assert_eq!(boxes[1].caption_id, b"st_cap_check_metro_mode");
+        assert_eq!(boxes[2].caption_id, b"st_cap_survival");
+        assert!(boxes[6].caption_id.is_empty());
     }
 
     #[test]
-    fn no_headers_no_campaigns() {
-        let boxes = checkboxes(b"<check_metro_mode x=\"5\"/>", b"");
+    fn a_mode_key_is_a_mode_unless_the_game_names_it_a_modifier() {
+        let boxes = checkboxes(b"<check_metro_mode x=\"5\"/>", b"", &[]);
         assert_eq!(boxes.len(), 1);
-        assert!(!boxes[0].campaign);
+        assert!(boxes[0].campaign);
         assert!(boxes[0].available);
         assert_eq!(boxes[0].key, "new_game_metro_mode");
-    }
-
-    #[test]
-    fn attributes_start_where_found() {
-        let t = b"<a max=\"9\" x=\"12\" item_height=\"3\" height=\"-4\">";
-        assert_eq!(attr_int(t, 0, "x", -1), 12);
-        assert_eq!(attr_int(t, 0, "height", 0), -4);
-        assert_eq!(attr_int(t, 0, "y", -1), -1);
-        assert_eq!(attr_int(b"<a> x=\"1\"", 0, "x", -1), -1);
+        assert!(!checkboxes(b"<check_metro_mode x=\"5\"/>", b"", &["check_metro_mode".to_owned()])[0].campaign);
     }
 
     #[test]

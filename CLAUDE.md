@@ -913,9 +913,11 @@ A change of plan is a change of its document first.
 - Do NOT hardcode the mode list: it is scanned from the linked game
   (`gz-game`'s `modes.rs`), because a global mod (Revolution II and the like)
   replaces both the `ui_mm_faction_select.script` script and the whole
-  `ui_mm_faction_select_16.xml` layout. A mode differs from an option by its
-  COLUMN in that layout (`dar2_mode` vs `dar2_option`) — "one life", "rich
-  stashes", "high rewards" are options and do not belong in the list.
+  `ui_mm_faction_select_16.xml` layout. A mode is a checkbox whose key ends
+  with `_mode`, unless the game names it a modifier: `[modifiers]` of the
+  game's `configs\dead_air_x64_mode_exclusive.ltx` (hardcore - one life -,
+  easy, rerum, ...), the same list the engine reads when a new game starts.
+  Nothing of one mod's layout (its tags, its columns) is read as a rule.
 - The author picks by the names the player sees (the game's string table,
   cp1251 → UTF-8), not by technical ids.
 - A new mode brought by a mod is effectively a separate new game; it does not
