@@ -929,7 +929,8 @@ class Run:
             fields["target"] = "default"
         r = set_fields(fields)
         check(r.get("ok"), "B the manifest takes id, name, version, author, website and github", short(r))
-        self.plain_mode = not current.get("mode")
+        # a module that brings a mode is that mode's ("new <id>") with or without a mode line
+        self.plain_mode = not current.get("mode") and not current.get("provides_mode")
 
         # the links of the card: a key per service, GitHub's from the repository, the one website as the kind it is
         r = cmd("mod.set", set={"links": {"telegram": TELEGRAM, "boosty": BOOSTY}})
