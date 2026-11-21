@@ -70,17 +70,18 @@ func (m *mock) treeOf(files map[string][]byte) string {
 
 // blob is a posted blob or a file of any commit: blob ids name their bytes.
 func (m *mock) blob(sha string) ([]byte, bool) {
-	if data, present := m.git().blobs[sha]; present {
+	g := m.git()
+	if data, present := g.blobs[sha]; present {
 		return data, true
 	}
+	// A miss hashes the commits once: every file met is kept, so the next lookup of any of them is a map read.
 	for _, c := range m.commits {
 		for _, data := range c.files {
-			if gitBlobSHA(data) == sha {
-				return data, true
-			}
+			g.blobs[gitBlobSHA(data)] = data
 		}
 	}
-	return nil, false
+	data, present := g.blobs[sha]
+	return data, present
 }
 
 func (m *mock) gitCommitJSON(c *commit) object {
@@ -292,7 +293,8 @@ func (m *mock) moveBranch(branch string, body object) (any, error) {
 	if !known {
 		return nil, refusal(422, "Object does not exist")
 	}
-	if force, _ := body.get("force"); !truthy(force) && (len(target.parents) == 0 || target.parents[0] != head) {
+	// The head itself is a fast forward too, as on GitHub: nothing moves.
+	if force, _ := body.get("force"); !truthy(force) && target.sha != head && (len(target.parents) == 0 || target.parents[0] != head) {
 		return nil, refusal(422, "Update is not a fast forward")
 	}
 	m.catalog.branches[branch] = target.sha
