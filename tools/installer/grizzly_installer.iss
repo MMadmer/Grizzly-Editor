@@ -1,6 +1,6 @@
 ; The installer of Grizzly Editor (docs/UPDATES.md section 2): the same files as the release archive, which
-; is the portable edition, installed for the current user (no administrator rights) with shortcuts and an
-; uninstaller. Built by `Build.ps1 -Package` through tools/rust/installer.ps1:
+; is the portable edition, installed for all users (the default, in Program Files) or for the current user alone,
+; with shortcuts and an uninstaller. Built by `Build.ps1 -Package` through tools/rust/installer.ps1:
 ;     ISCC /DAppVersion=<version> /DSourceDir=<the archive unpacked> /O<Bin\x64\Package>
 ;
 ; Over an installed editor it is the update: the folder offered is the one installed, the editor running
@@ -28,15 +28,17 @@ AppPublisher=Madmer
 AppPublisherURL=https://github.com/MMadmer/Grizzly-Editor
 AppSupportURL=https://github.com/MMadmer/Grizzly-Editor/issues
 AppUpdatesURL=https://github.com/MMadmer/Grizzly-Editor/releases
-DefaultDirName={localappdata}\Programs\Grizzly Editor
+DefaultDirName={autopf}\Grizzly Editor
 ; The folder is always asked (an update over an earlier install offers that folder): a skipped page sent
 ; every update to the first folder without a choice.
 DisableDirPage=no
 UsePreviousAppDir=yes
 DefaultGroupName=Grizzly Editor
 DisableProgramGroupPage=yes
-; the editor writes its home beside its programs: the installation is the user's, never Program Files
-PrivilegesRequired=lowest
+; for all users (the default) or for me alone, asked as the game's Setup asks it; Inno keeps the choice of an
+; earlier install for the update over it
+PrivilegesRequired=admin
+PrivilegesRequiredOverridesAllowed=dialog commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -62,6 +64,11 @@ russian.Downgrade=В этой папке установлен Grizzly Editor %1 
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[Dirs]
+; the editor writes its home beside its programs and updates itself there: installed for all users, the folder
+; stays every user's to write
+Name: "{app}"; Permissions: users-modify; Check: IsAdminInstallMode
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

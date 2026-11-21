@@ -612,7 +612,8 @@ A change of plan is a change of its document first.
 
 - **A release is one zip** that is also the portable edition (its home is its own folder), with `update-manifest.txt`
   inside it naming every file's size and SHA-256, and **Setup** (`tools/installer/grizzly_installer.iss`, Inno Setup
-  through `tools/rust/installer.ps1`) installs exactly its files for the current user - over an installed editor it is
+  through `tools/rust/installer.ps1`) installs exactly its files for all users (the default, the folder made every
+  user's to write) or the current user alone - over an installed editor it is
   the update: the managed files replaced, the dropped ones deleted, the home kept; the release notes are free
   Markdown read tolerantly (`gz_update::notes`: the window's language by any line naming one, nothing required). `Build.ps1 -Package` makes
   them (`tools/rust/package.py`: two packs of one input are byte-identical). The installed version is the installation manifest's. A build without one - every developer build - has no updater

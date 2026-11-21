@@ -25,7 +25,7 @@ $dir = Join-Path $env:TEMP 'gz_setup_test\Grizzly Editor'
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{3F8B6E2A-5C41-4D7E-9A1B-6E0D2C7F4A93}_is1'
 $fail = 0
 function Check($ok, $what) { if ($ok) { "  ok   $what" } else { "  FAIL $what"; $script:fail++ } }
-function Run-Setup { $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$dir`"" -PassThru -Wait; $p.ExitCode }
+function Run-Setup { $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`"" -PassThru -Wait; $p.ExitCode }
 if (Test-Path $key) { throw 'an installed Grizzly Editor is registered already: this test would take its uninstall entry' }
 if (Test-Path (Split-Path $dir)) { Remove-Item (Split-Path $dir) -Recurse -Force }
 

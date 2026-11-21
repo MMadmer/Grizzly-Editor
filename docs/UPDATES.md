@@ -12,7 +12,7 @@ version behind or twenty, the download is what actually differs, and nobody publ
 A version is one GitHub release of `MMadmer/Grizzly-Editor` whose tag is a strict Semantic Version,
 `MAJOR.MINOR.PATCH` (no `v`). It carries:
 
-- `Grizzly-Editor-MAJOR.MINOR.PATCH-Setup.exe` - the installer: the archive's files installed for the current user
+- `Grizzly-Editor-MAJOR.MINOR.PATCH-Setup.exe` - the installer: the archive's files installed for all users or the current user
   (section 2). Over an installed editor it is the update.
 - `Grizzly-Editor-MAJOR.MINOR.PATCH.zip` - the complete installation (section 2), the portable edition and the source
   of every update. The name is fixed: it is the one asset every client looks for.
@@ -63,7 +63,7 @@ The text of a release, the way this repository writes it (any other shape still 
 
 ## Installation
 
-- **Setup** - installs for your Windows user, no administrator rights; over an installed editor it updates it
+- **Setup** - installs for all users (the default) or for your Windows user alone; over an installed editor it updates it
   and keeps your projects and settings.
 - **Portable ZIP** - unpack anywhere and start `Grizzly.exe`; it keeps its settings in its own folder.
 
@@ -97,8 +97,10 @@ installed. A client that meets a schema it does not know offers the release page
 The data root is the folder of the programs (`find_root` meets `fs.ltx` there), and so is the home: the project
 list, the settings, the logs and the game library live beside the programs. That is why the archive is a **portable
 edition** as it is - unpacked anywhere it runs, and carried to another machine it keeps its settings -, and why
-**Setup installs for the current user** (`%LOCALAPPDATA%\Programs\Grizzly Editor` unless the author picks another
-folder; no administrator rights, never Program Files): the folder must stay the editor's to write. Setup installs
+**Setup asks for whom it installs**, as the game's Setup does: for all users (the default: `Program Files\Grizzly
+Editor`, with administrator rights) or for the current user alone (`%LOCALAPPDATA%\Programs\Grizzly Editor`, no
+rights). The folder must stay the editor's to write - its home and its own updates live there -, so installed for
+all users it is made every user's to modify (`users-modify`). Setup installs
 exactly the archive's files, with shortcuts and an uninstaller. Over an installed editor it is the update: the
 folder offered is the one installed, an editor running there is asked to close, the managed files are replaced,
 those the new manifest no longer names are deleted, a download of the editor's own updater waiting in `.update\` is
