@@ -20,6 +20,9 @@ gz-ui.workspace = true
 gz-app.workspace = true
 # the editor's own updates: the chip, the dialog, the Preferences group
 gz-update.workspace = true
+# feedback to the editor's author: the dialog, Help > Send Feedback..., the crash toast
+gz-feedback.workspace = true
+time.workspace = true
 egui.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true

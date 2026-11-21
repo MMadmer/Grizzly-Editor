@@ -712,26 +712,14 @@ impl PublishDialog {
                     let _ = text::label(ui, "Notes", Font::Body, p.text_secondary, Clip::End)
                         .tip("What changed, shown on the release page. Markdown.");
                 });
-                let w = ui.available_width().max(1.0);
-                let hint = gz_ui::i18n::t(ui.ctx(), "What changed in this release - players read it on the release page. Markdown.");
-                let resp = ui.add(
-                    egui::TextEdit::multiline(&mut self.notes)
-                        .font(Font::Body.id())
-                        .margin(egui::Margin::symmetric(8, 6))
-                        .hint_text(hint) // ui-text: translated by i18n::t above
-                        .desired_rows(5)
-                        .desired_width(w),
+                gz_ui::form::area_field(
+                    ui,
+                    egui::Id::unique("gz-ui-release.publish.notes"),
+                    &mut self.notes,
+                    "Notes",
+                    "What changed in this release - players read it on the release page. Markdown.",
+                    5,
                 );
-                // an input reads as one: its outline, the focus ring while it has the keys
-                let stroke = if resp.has_focus() {
-                    egui::Stroke::new(2.0, p.accent_bright)
-                } else if resp.hovered() {
-                    egui::Stroke::new(1.0, p.border)
-                } else {
-                    egui::Stroke::new(1.0, p.border_subtle)
-                };
-                ui.painter().rect_stroke(resp.rect, egui::CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
-                gz_ui::audit::control(ui.ctx(), "Notes", true, None, Some("What changed, shown on the release page. Markdown."), resp.rect);
                 ui.add_space(6.0);
             });
             // what has to be dealt with before this can go is never folded away

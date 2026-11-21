@@ -179,6 +179,9 @@ type mock struct {
 	assetDrop  *assetDrop
 	noRanges   bool
 	assetStats map[string]*assetStat
+
+	// The report hub of the editor's feedback (reports.go).
+	reportDesk *reportDesk
 }
 
 func newMock(cfg *config) *mock {

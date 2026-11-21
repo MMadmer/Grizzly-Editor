@@ -888,6 +888,12 @@ fn build(icon: Icon, b: &mut B<'_>) {
             b.m().arc(8.0, 6.5, 2.1, 200.0, 380.0).to(8.0, 9.0).end(false);
             b.d(8.0, 11.5, 1.0);
         }
+        // a word to the editor's author: a speech bubble with two lines in it
+        Icon::Feedback => {
+            b.z(&[1.5, 2.5, 14.5, 2.5, 14.5, 11.0, 7.25, 11.0, 4.0, 14.0, 4.0, 11.0, 1.5, 11.0]);
+            b.l(&[4.5, 5.5, 11.5, 5.5]);
+            b.l(&[4.5, 8.0, 9.5, 8.0]);
+        }
         Icon::Keyboard => {
             b.r(1.5, 4.0, 14.5, 12.0, 1.5);
             for x in [4.25, 6.75, 9.25, 11.75] {

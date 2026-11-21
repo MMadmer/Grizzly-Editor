@@ -46,3 +46,6 @@ gamedata/textures/
 
 # A local documentation search index, not project content
 /docs/index.bleve/
+
+# The report hub's upload key the release build carries: never in the repository
+crates/gz-feedback/report_token.local

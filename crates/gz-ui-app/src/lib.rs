@@ -27,6 +27,7 @@
 mod browser_cmd;
 pub mod cards;
 pub mod collect;
+pub mod feedback;
 mod folder;
 pub mod game_prefs;
 pub mod keyboard;
@@ -57,6 +58,7 @@ pub fn install(b: &mut ShellBuilder) {
     log::install(b);
     prefs::install(b);
     update::install(b);
+    feedback::install(b);
 }
 
 /// The commands of this package: `project.page`.

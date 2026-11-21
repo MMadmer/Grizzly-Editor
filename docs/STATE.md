@@ -222,6 +222,20 @@ What the suites hold, beyond what their names say:
   the browser's Export... are not driven by a suite.
 - **A module build builds a stale piece first** (`test_game_library` E): Build Mod over a level of the game
   writes `levels\<level>\pieces\main` and ships it, and the piece is fresh after.
+- **Feedback to the editor's author** (`test_feedback` against the mock hub, `gz-feedback`'s tests, 21.11.2026): a
+  crash planted in the log folder - a report naming the user, a dump with the user in its module, PDB and handle
+  paths and in its stack, the crashed run's log - is offered at the start with that log bound by the process its first
+  line names (another program's log set aside beside it is not taken), and the dialog shows it on its card while it is
+  offered; `crash=latest` is that crash, not a newer one the editor caught; the bug report sent
+  with it reaches the mock as the hub's form (`product = grizzly-editor`, the kind, the editor's version, the report's
+  id as its `Idempotency-Key`) and not one entry of the package holds the user's, the computer's or the domain's
+  name, a path of the user's, an e-mail or network address or a key, in UTF-8 or UTF-16; the dump keeps its modules
+  by file name; a suggestion goes without a package; a busy hub is tried again, a refusal is a sentence; the dialog
+  and the crash's toast are in the window. A real fault's report and its compact dump (`gz-win`'s crash
+  tests: a child process that faults, exit code 3, no stack bytes, no folder of the program in the dump), and a real
+  compact dump of the editor's own process fed through the dump pass (`gz-feedback`'s `minidump` tests: it reads,
+  its modules keep their file names, no folder of the program is left). Not run:
+  a report to the real hub (the release build carries its key; a QA run never reaches it).
 - **The editor's release assets** (`tools/qa/test_installer.ps1`, `gz-update`'s notes tests, 21.11.2026 on 0.7.0):
   Setup installs the portable archive's 53 managed files for the user, the installed editor answers from a shell, a
   second Setup over it deletes the file an older manifest named, drops a staged download and keeps `_projects.ini`,

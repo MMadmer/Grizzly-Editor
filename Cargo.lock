@@ -1247,6 +1247,7 @@ dependencies = [
  "gz-crash",
  "gz-editor",
  "gz-export-level",
+ "gz-feedback",
  "gz-game",
  "gz-gamelib",
  "gz-ico",
@@ -1518,6 +1519,28 @@ dependencies = [
  "serde_json",
  "smol_str 0.3.7",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "gz-feedback"
+version = "0.7.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "futures",
+ "gz-base",
+ "gz-editor",
+ "gz-win",
+ "hex",
+ "parking_lot 0.13.0",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -2308,6 +2331,7 @@ dependencies = [
  "gz-app",
  "gz-base",
  "gz-editor",
+ "gz-feedback",
  "gz-log",
  "gz-project",
  "gz-query",
@@ -2319,6 +2343,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]

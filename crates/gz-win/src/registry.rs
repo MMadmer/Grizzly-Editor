@@ -36,9 +36,30 @@ pub fn long_paths_enabled() -> bool {
     read.is_ok() && value == 1
 }
 
+/// A DWORD value; `None` when the key or the value is not there or is no DWORD.
+pub(crate) fn read_dword(root: HKEY, key: &str, value: &str) -> Option<u32> {
+    let (key, value) = (HSTRING::from(key), HSTRING::from(value));
+    let mut data = 0u32;
+    let mut size = 4u32;
+    // SAFETY: the names are wide strings that live across the call, `data` and `size` live across
+    // it too, and RRF_RT_REG_DWORD lets the call write at most the four bytes `size` names.
+    let read = unsafe {
+        RegGetValueW(
+            root,
+            &key,
+            &value,
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut data).cast()),
+            Some(&raw mut size),
+        )
+    };
+    (read == ERROR_SUCCESS).then_some(data)
+}
+
 /// A string value (`""` names a key's default value); `None` when the key or the value is not
 /// there or is no string.
-fn read_string(root: HKEY, key: &str, value: &str) -> Option<String> {
+pub(crate) fn read_string(root: HKEY, key: &str, value: &str) -> Option<String> {
     let (key, value) = (HSTRING::from(key), HSTRING::from(value));
     let mut size = 0u32;
     // SAFETY: the names are wide strings that live across the call; no buffer is passed, so the

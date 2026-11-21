@@ -632,6 +632,28 @@ A change of plan is a change of its document first.
 - Never tested against GitHub: under `-qa_github` the client talks to loopback only (`tools/qa/github_mock`,
   `test_update.py`). **Publishing a release of the editor is the author's, by hand.**
 
+## Feedback to the editor's author (`docs/REPORTS.md`, `gz-feedback`)
+
+- **Help > Send Feedback...** (`dlg.feedback`, `feedback.send`) sends a bug report or a suggestion to the report hub
+  the game's reports go to (`product = grizzly-editor`, the hub at `D:\Programs\DARF\DARF_Server`, its own
+  repository), with an anonymous diagnostic package when the author lets it go (on for a bug and a crash, off for a
+  suggestion): `report.json` in the keys the hub reads, the editor's state as its own commands answer it, the last 4 MB
+  of the log, the settings, and a crash's report, its run's log and its dump - inside the hub's limits.
+- **Anonymous, and still useful** (`sanitize.rs`, `minidump.rs`, the game's `DIAGNOSTIC_REPORTS.md` rule): the
+  machine's folders become markers and keep what lies below them, any other path keeps its last name, the user's,
+  the computer's and the domain's names, keys, e-mail and network addresses are masked; a dump loses its stacks and
+  memory, its modules and PDBs keep their file names, and any stream outside a short list goes. What the author
+  writes goes as written.
+- **A crash is offered once it happened**: gz-crash writes `grizzly_crash_<secs>_<pid>.txt` (and `.dmp` when the
+  editor ended; compact - no stacks, no memory - in an installation), the log of a start is set aside as
+  `<name>.previous.log` (a start that hands its project to a running editor touches no log), and the next start binds
+  the crashed run's log to it by the process its first line names, keeps the ten newest crashes and offers the newest fatal one in a toast until it is
+  sent or declined.
+- **The hub's upload key is the game's and never in the repository**: the ignored `crates/gz-feedback/report_token.local`
+  or `GRIZZLY_REPORT_UPLOAD_TOKEN` at build time; never logged, never in an answer. A build without one cannot send
+  and says so. A QA run speaks to the mock's `/api/v1/reports` alone (`GRIZZLY_REPORT_URL`, `GRIZZLY_REPORT_TOKEN`):
+  `tools/qa/test_feedback.py`.
+
 ## Startup
 
 - `grizzly`'s `startup.rs` owns the profile of a start: one line per stage with its seconds, read calls and file

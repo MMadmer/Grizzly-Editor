@@ -78,6 +78,7 @@ pub enum Icon {
     Reveal,
     Info,
     Help,
+    Feedback,
     Keyboard,
     ExpandAll,
     CollapseAll,
@@ -278,6 +279,7 @@ impl Icon {
         Icon::Reveal,
         Icon::Info,
         Icon::Help,
+        Icon::Feedback,
         Icon::Keyboard,
         Icon::ExpandAll,
         Icon::CollapseAll,
@@ -480,6 +482,7 @@ impl Icon {
             Icon::Reveal => "reveal",
             Icon::Info => "info",
             Icon::Help => "help",
+            Icon::Feedback => "feedback",
             Icon::Keyboard => "keyboard",
             Icon::ExpandAll => "expand_all",
             Icon::CollapseAll => "collapse_all",
@@ -736,7 +739,7 @@ mod tests {
             assert!(seen.insert(icon.name()), "{} twice", icon.name());
             assert_eq!(Icon::from_name(icon.name()), Some(icon));
         }
-        assert_eq!(Icon::ALL.len(), 195);
+        assert_eq!(Icon::ALL.len(), 196);
         assert!(!Icon::ALL.contains(&Icon::None));
         assert_eq!(Icon::from_name("no_such_icon"), None);
     }

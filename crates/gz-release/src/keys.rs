@@ -199,7 +199,8 @@ impl AuthorKeys {
             return Err(format!("can't write {target}"));
         }
         self.remember_key_path(&target);
-        self.log.info(format!("[catalog] author key {} created in {target}", key.public.id()));
+        // the key's id names its author in the catalog: the log says a key was made, not which
+        self.log.info(format!("[catalog] an author key was created in {target}"));
         *self.open.lock() = Some(Open { key, path: target });
         Ok(())
     }

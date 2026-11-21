@@ -52,6 +52,17 @@ fn main() -> ExitCode {
     }
     let paths = app_paths(&cli);
 
+    // one editor per home: a second start hands its project to the editor that holds the home (an
+    // update's restart takes over from the one that is ending, and never hands back). It is asked
+    // before the log starts: the log is the running editor's, and a start that hands over leaves it
+    // as it is - its crash's log would be set aside otherwise.
+    if !cli.commandlet()
+        && cli.updated.is_none()
+        && launch::hand_over(&paths.home, cli.project.as_deref(), &Log::memory())
+    {
+        return ExitCode::SUCCESS;
+    }
+
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_owned()).to_lowercase();
     // A commandlet keeps a log of its own: it never takes the log of an editor that is open on
     // the same home.
@@ -72,9 +83,20 @@ fn main() -> ExitCode {
     };
     gz_crash::install(
         log.clone(),
-        gz_crash::CrashOptions { dir: paths.logs.clone(), unattended: cli.unattended },
+        gz_crash::CrashOptions {
+            dir: paths.logs.clone(),
+            unattended: cli.unattended,
+            // an installation's dumps are compact - no stacks, no memory -, a build of the sources keeps them whole
+            compact: paths.exe_dir.join("update-manifest.txt").is_file(),
+            version: env!("CARGO_PKG_VERSION"),
+        },
     );
-    log.info(format!("Grizzly Editor {} starting", env!("CARGO_PKG_VERSION")));
+    // the process names the run: a crash names it too, and the next start finds this log by it
+    log.info(format!(
+        "Grizzly Editor {} starting, process {}",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    ));
     for arg in &cli.unknown {
         log.warn(format!("unknown command line option '{arg}'"));
     }
@@ -87,16 +109,6 @@ fn main() -> ExitCode {
     if let Some(named) = &cli.bad_theme {
         log.warn(format!("-theme names no theme: '{named}' (app.prefs key=theme lists them)"));
     }
-    // one editor per home: a second start hands its project to the editor that holds the home
-    // (an update's restart takes over from the one that is ending, and never hands back)
-    if !cli.commandlet()
-        && cli.updated.is_none()
-        && launch::hand_over(&paths.home, cli.project.as_deref(), &log)
-    {
-        log.info("Grizzly Editor closed: the editor that holds this home took the request");
-        return ExitCode::SUCCESS;
-    }
-
     startup.stage("Starting the workers");
     let runtime = match Runtime::start(ExecOptions::default()) {
         Ok(rt) => rt,
@@ -149,6 +161,16 @@ fn main() -> ExitCode {
         commandlet: cli.commandlet(),
     };
     gz_update::install(&editor, start);
+    // feedback to the editor's author; a crash of the last run is offered once
+    gz_feedback::install(&editor, log_file.clone(), env!("GRIZZLY_BUILD_COMMIT"));
+    gz_feedback::provide(&editor, "gpu", |ed| {
+        let a = gz_app::gpu::Gpu::of(ed).adapters().unwrap_or_default();
+        gz_editor::json!({ "active": a.active, "adapters": a.names })
+    });
+    gz_feedback::provide(&editor, "ui", |ed| {
+        let s = gz_app::EditorSettings::of(ed);
+        gz_editor::json!({ "language": s.language().key(), "theme": s.theme().id })
+    });
     gz_scene::install(&editor);
     // the game as the editor's library: a run that stays up keeps it current by itself
     gz_gamelib::install(&editor, !cli.commandlet());
@@ -276,6 +298,7 @@ fn build_registry(preview: bool) -> Registry {
         gz_publish::register(&mut registry);
     }
     gz_update::register(&mut registry);
+    gz_feedback::register(&mut registry);
     if !preview {
         // after gz-release: the real release.catalog replaces its key-only stand-in
         gz_catalog::register(&mut registry);

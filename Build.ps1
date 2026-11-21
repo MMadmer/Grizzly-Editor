@@ -34,6 +34,16 @@ function Fail([string]$msg) { Write-Host "`nBUILD SETUP ERROR: $msg" -Foreground
 if ($PSVersionTable.PSVersion.Major -lt 7) { Fail "run it with pwsh 7: pwsh -NoProfile -File .\Build.ps1" }
 if ($Package -and $Debug) { Fail "a package is made from the release build: drop -Debug" }
 if ($Preview -and $Package) { Fail "a preview build is no release: drop -Package" }
+# a release carries the report hub's key (crates/gz-feedback/build.rs): without it Send Feedback is off for every user
+if ($Package) {
+    $key = $env:GRIZZLY_REPORT_UPLOAD_TOKEN
+    $keyFile = Join-Path $PSScriptRoot 'crates\gz-feedback\report_token.local'
+    if (-not $key -and (Test-Path -LiteralPath $keyFile)) { $key = (Get-Content -LiteralPath $keyFile -Raw) }
+    if (-not $key -or $key.Trim().Length -lt 24) {
+        Fail "a release carries the report hub's upload key: put it into crates\gz-feedback\report_token.local (ignored by git) or GRIZZLY_REPORT_UPLOAD_TOKEN"
+    }
+    Remove-Variable key
+}
 if ($Preview -and -not $Out) { Fail "a preview build goes to a folder of its own: give -Out <dir>" }
 
 $bin = if ($Out) { [IO.Path]::GetFullPath($Out, (Get-Location).Path) } else { Join-Path $root "Bin\x64\$config" }

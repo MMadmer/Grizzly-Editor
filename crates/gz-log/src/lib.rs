@@ -100,12 +100,20 @@ pub struct LogGuard {
 }
 
 impl Log {
-    /// Starts the log. With a `file`, a writer thread owns it; `echo` also prints to stderr.
+    /// Starts the log. With a `file`, a writer thread owns it; `echo` also prints to stderr. The
+    /// log a run before left there becomes `<name>.previous.log` (replacing an older one): the log
+    /// of a run that crashed survives the next start.
     pub fn start(file: Option<&Path>, echo: bool) -> io::Result<(Log, LogGuard)> {
         let out = match file {
             Some(path) => {
                 if let Some(dir) = path.parent() {
                     std::fs::create_dir_all(dir)?;
+                }
+                if let Some(previous) = previous_log(path)
+                    && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
+                {
+                    // a log that cannot be moved is started over, as before
+                    let _ = std::fs::rename(path, previous);
                 }
                 Some(BufWriter::with_capacity(64 * 1024, File::create(path)?))
             }
@@ -271,6 +279,17 @@ impl Log {
     }
 }
 
+/// `<name>.previous.<extension>` beside `path`.
+fn previous_log(path: &Path) -> Option<std::path::PathBuf> {
+    let mut name = path.file_stem()?.to_os_string();
+    name.push(".previous");
+    if let Some(extension) = path.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    Some(path.with_file_name(name))
+}
+
 impl Drop for LogGuard {
     fn drop(&mut self) {
         if let Some(tx) = &self.log.0.tx {
@@ -365,5 +384,34 @@ mod tests {
         assert_eq!(log.last_report().map(|r| r.level), Some(Level::Warning));
         assert_eq!(log.tail(10).len(), 4);
         assert_eq!(Level::Detail.file_mark(), "* ");
+    }
+
+    #[test]
+    fn the_log_of_the_run_before_is_kept_once() {
+        let dir = std::env::temp_dir().join(format!("gz_log_previous_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("grizzly_test.log");
+        let previous = dir.join("grizzly_test.previous.log");
+        let run = |text: &str| {
+            let (log, guard) = Log::start(Some(&path), false).unwrap();
+            log.plain(text);
+            drop(guard);
+        };
+        // the first run has nothing to keep
+        run("first run");
+        assert!(!previous.exists());
+        run("second run");
+        assert_eq!(std::fs::read_to_string(&previous).unwrap(), "first run\r\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second run\r\n");
+        // a third run keeps only the second
+        run("third run");
+        assert_eq!(std::fs::read_to_string(&previous).unwrap(), "second run\r\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "third run\r\n");
+        // an empty log replaces nothing
+        std::fs::write(&path, "").unwrap();
+        run("fourth run");
+        assert_eq!(std::fs::read_to_string(&previous).unwrap(), "second run\r\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

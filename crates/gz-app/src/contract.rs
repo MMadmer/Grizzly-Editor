@@ -38,7 +38,7 @@ pub const DRAWERS: [(&str, &str); 2] =
     [("content", "Content Drawer###drawer.content"), ("log", "Output Log###drawer.log")];
 
 /// The dialogs `ui.dialog` opens and closes: the MCP id and the window's name.
-pub const DIALOGS: [(&str, &str); 7] = [
+pub const DIALOGS: [(&str, &str); 8] = [
     ("package_release", "Package Release###dlg.package_release"),
     ("publish_release", "Publish Release###dlg.publish_release"),
     ("build_to_folder", "Build to Folder###dlg.build_to_folder"),
@@ -46,6 +46,7 @@ pub const DIALOGS: [(&str, &str); 7] = [
     ("import_base_scene", "Import Base Scene###dlg.import_base_scene"),
     ("submit", "Submit to Mod Browser###dlg.catalog_submit"),
     ("update", "Update###dlg.update"),
+    ("feedback", "Send Feedback###dlg.feedback"),
 ];
 
 /// The kinds of major tab.

@@ -86,6 +86,8 @@ SUITES: dict[str, dict] = {
     "test_mod_catalog": {"args": ["--project", OD], "timeout": 120},
     # the editor updates itself: a fake installation of harmless files against the mock (headless), then the window's face of it
     "test_update": {"args": ["--project", TEST], "timeout": 120},
+    # feedback to the editor's author: a planted crash sent to the mock hub, read for every trace of the machine
+    "test_feedback": {"args": [], "timeout": 120},
     # the Go mock of GitHub and VirusTotal that the updater's, the publisher's and the catalog's suites stand on
     "test_github_mock": {"args": [], "timeout": 120},
     # the bridge, the six doors and the socket under load

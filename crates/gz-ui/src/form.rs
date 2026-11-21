@@ -6,6 +6,7 @@
 //!   `grid::text_field` has none), named to the audit by its hint; [`row_field`] - the same as wide
 //!   as the row it is in.
 //! - [`secret_field`] - a one-line field whose text is never drawn (a password, a token).
+//! - [`area_field`] - a text of several lines as wide as the row, with its outline and a hint.
 //!
 //! Each takes the [`Id`] its state lives under (`row_field`, a salt it makes one of): the caller
 //! decides whether it is the panel's (`ui.make_persistent_id`) or one the form reaches from outside
@@ -14,11 +15,11 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use egui::{Id, Margin, Response, TextEdit, Ui, Vec2};
+use egui::{CornerRadius, Id, Margin, Response, Stroke, StrokeKind, TextEdit, Ui, Vec2};
 
 use crate::i18n::Tx;
 use crate::units::em;
-use crate::{Font, audit, metrics};
+use crate::{Font, audit, metrics, palette};
 
 /// A box and its label, `width` wide, the whole row a click target; disabled with the `Ui`: the
 /// kit's [`crate::Check`]. Returns whether it flipped.
@@ -86,5 +87,42 @@ pub fn secret_field<'a>(
             .min_size(Vec2::new(width, metrics::FRAME)),
     );
     audit::control(ui.ctx(), hint, true, None, None, resp.rect);
+    resp
+}
+
+/// A text of several lines as wide as the row it is in, `rows` lines tall at first, with `hint`
+/// while it is empty and an outline that reads as one input (the focus ring while it has the keys).
+/// `label` names it to the audit, the hint its tip.
+pub fn area_field<'a>(
+    ui: &mut Ui,
+    id: Id,
+    value: &mut String,
+    label: impl Into<Tx<'a>>,
+    hint: impl Into<Tx<'a>>,
+    rows: usize,
+) -> Response {
+    let label = label.into().text(ui.ctx());
+    let hint = hint.into().text(ui.ctx());
+    let hint: &str = &hint;
+    let width = ui.available_width().max(em(3.0));
+    let resp = ui.add(
+        TextEdit::multiline(value)
+            .id(id)
+            .font(Font::Body.id())
+            .margin(Margin::symmetric(8, 6))
+            .hint_text(hint)
+            .desired_rows(rows)
+            .desired_width(width),
+    );
+    let p = palette(ui.ctx());
+    let stroke = if resp.has_focus() {
+        Stroke::new(2.0, p.accent_bright)
+    } else if resp.hovered() {
+        Stroke::new(1.0, p.border)
+    } else {
+        Stroke::new(1.0, p.border_subtle)
+    };
+    ui.painter().rect_stroke(resp.rect, CornerRadius::same(4), stroke, StrokeKind::Inside);
+    audit::control(ui.ctx(), &label, true, None, Some(hint), resp.rect);
     resp
 }

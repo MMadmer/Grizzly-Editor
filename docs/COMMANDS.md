@@ -180,4 +180,5 @@ applies; `{"batch": [ ... ]}` runs several in order and answers `results`. One a
 | `ui` | the window: tabs, panels, drawers, dialogs, popups, scroll, splits, scale, audit, the contract |
 | `shot` | pictures: the window, the viewport, an asset |
 | `update` | the editor's own updates (`docs/UPDATES.md`) |
+| `feedback` | bug reports and suggestions to the editor's author, a crash offered at the next start (`docs/REPORTS.md`) |
 | `perf` | frame pacing, UI-thread stalls |

@@ -9,7 +9,9 @@
 //! - [`attach_parent_console`], [`on_console_end`] - a run without a window in its launcher's
 //!   console: its streams, and the console's end as a request to stop;
 //! - [`end_with_this_process`] - a child process that does not outlive this one;
-//! - [`write_minidump`], [`install_fatal_exception_dump`] - what a crash leaves behind;
+//! - [`write_minidump`], [`install_fatal_exception_dump`], [`stack_frames`], [`module_of`] - what a
+//!   crash leaves behind, its code addresses as `module + RVA`;
+//! - [`system_info`], [`process_memory`] - the machine and the process as a bug report says them;
 //! - [`foreground_is_ours`] - whether a window of this process is in front;
 //! - [`raise_this_thread_priority`] - the thread that draws and presents above the pools;
 //! - [`keep_full_speed`] - the process out of Windows' power throttling while its window is
@@ -30,43 +32,40 @@
 
 mod caption;
 mod console;
+mod crash;
 mod files;
 mod folders;
 mod instance;
 mod job;
 mod registry;
 mod stack;
+mod system;
 mod update;
 
 pub use caption::{CaptionHitTest, CaptionShape, PxRect, hit_test, install_caption_hit_test};
 pub use console::{ConsoleStreams, attach_parent_console, on_console_end};
+pub use crash::{
+    CRASH_EXIT_CODE, Frame, install_fatal_exception_dump, module_of, stack_frames, write_minidump,
+};
 pub use files::remove_file_keeping_marks;
 pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
 pub use instance::{allow_foreground, process_alive};
 pub use job::end_with_this_process;
 pub use registry::{Association, delete_user_key, installed_game_roots, long_paths_enabled};
 pub use stack::{current_thread_id, symbol_names, thread_stack};
+pub use system::{ProcessMemory, SystemInfo, computer_names, process_memory, system_info};
 pub use update::{NamedEvent, rename_in_place};
 
-use std::fs::File;
 use std::io;
-use std::os::windows::io::AsRawHandle;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
-use windows::Win32::Foundation::{FILETIME, HANDLE};
-use windows::Win32::System::Diagnostics::Debug::{
-    EXCEPTION_POINTERS, MINIDUMP_EXCEPTION_INFORMATION, MiniDumpNormal,
-    MiniDumpWithIndirectlyReferencedMemory, MiniDumpWriteDump, SetUnhandledExceptionFilter,
-};
+use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId, GetProcessIoCounters,
-    GetProcessTimes, GetStartupInfoW, GetThreadPriority, GetThreadTimes, IO_COUNTERS,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetProcessIoCounters, GetProcessTimes,
+    GetStartupInfoW, GetThreadPriority, GetThreadTimes, IO_COUNTERS,
     PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
     PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, STARTF_USESHOWWINDOW, STARTUPINFOW,
     SetProcessInformation, SetThreadPriority, THREAD_PRIORITY, THREAD_PRIORITY_ABOVE_NORMAL,
-    TerminateProcess,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, SW_MINIMIZE, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
@@ -308,82 +307,6 @@ pub fn fill_client(hwnd: isize, rgb: [u8; 3]) -> bool {
         }
         ReleaseDC(Some(hwnd), dc);
         painted
-    }
-}
-
-fn dump_to(file: &File, exception: Option<*const EXCEPTION_POINTERS>) -> io::Result<()> {
-    let info = exception.map(|pointers| MINIDUMP_EXCEPTION_INFORMATION {
-        // SAFETY: reading the id of the calling thread has no preconditions.
-        ThreadId: unsafe { GetCurrentThreadId() },
-        ExceptionPointers: pointers.cast_mut(),
-        ClientPointers: false.into(),
-    });
-    let kind = MiniDumpNormal | MiniDumpWithIndirectlyReferencedMemory;
-    // SAFETY: the process handle is the always-valid pseudo-handle; `file` is an open, writable
-    // file that outlives the call; `info`, when present, lives on this stack frame until the
-    // call returns and points at the exception record the system handed to the filter.
-    unsafe {
-        MiniDumpWriteDump(
-            GetCurrentProcess(),
-            GetCurrentProcessId(),
-            HANDLE(file.as_raw_handle()),
-            kind,
-            info.as_ref().map(std::ptr::from_ref),
-            None,
-            None,
-        )
-        .map_err(io::Error::other)
-    }
-}
-
-/// Writes a minidump of this process as it is now.
-pub fn write_minidump(path: &Path) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    dump_to(&File::create(path)?, None)
-}
-
-// Where the exception filter writes its dump. The filter is called by the system with no
-// argument of ours, so the path has to live in a static; it is set once, before the filter is
-// installed, and only read afterwards.
-static FATAL_DUMP: OnceLock<PathBuf> = OnceLock::new();
-
-/// The exit code of a crashed editor: what the test harness looks for.
-pub const CRASH_EXIT_CODE: i32 = 3;
-
-unsafe extern "system" fn fatal_filter(pointers: *const EXCEPTION_POINTERS) -> i32 {
-    if let Some(path) = FATAL_DUMP.get()
-        && let Ok(file) = File::create(path)
-    {
-        let _ = dump_to(&file, Some(pointers));
-    }
-    // The state is broken: no Rust destructor, `atexit` handler or thread-local teardown may
-    // run on it (`std::process::exit` runs them). The process ends here, as a filter may end it.
-    // SAFETY: the pseudo-handle of this process is always valid; TerminateProcess does not
-    // return when it terminates the calling process.
-    unsafe {
-        let _ = TerminateProcess(GetCurrentProcess(), CRASH_EXIT_CODE as u32);
-    }
-    // only reached when the system refused to end the process: the default handler ends it
-    1
-}
-
-/// From now on an access violation or any other unhandled system exception - a fault inside a
-/// C library or a driver - leaves a minidump at `path` and ends the process with
-/// [`CRASH_EXIT_CODE`]. A second call changes nothing.
-pub fn install_fatal_exception_dump(path: PathBuf) {
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if FATAL_DUMP.set(path).is_err() {
-        return;
-    }
-    // SAFETY: `fatal_filter` has the signature the system expects, never returns into the faulting
-    // code (it terminates the process, or hands the exception to the default handler), and stays
-    // valid for the life of the process.
-    unsafe {
-        SetUnhandledExceptionFilter(Some(fatal_filter));
     }
 }
 

@@ -387,6 +387,12 @@ func (x *exchange) routeLocked(raw []byte) (*answer, error) {
 	}
 
 	switch {
+	case post && match(seg, "api", "v1", "reports"):
+		return m.takeReport(x.r.Header, raw)
+	case get && match(seg, "__reports"):
+		return ok(m.reportsJSON(), nil)
+	case post && match(seg, "__reports", "fail"):
+		return ok(m.failReports(query["status"], query["count"]))
 	case get && match(seg, "__state"):
 		return ok(m.stateJSON(), nil)
 	case post && match(seg, "__shutdown"):

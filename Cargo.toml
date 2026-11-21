@@ -69,6 +69,7 @@ gz-build = { path = "crates/gz-build" }
 gz-release = { path = "crates/gz-release" }
 gz-github = { path = "crates/gz-github" }
 gz-update = { path = "crates/gz-update" }
+gz-feedback = { path = "crates/gz-feedback" }
 gz-catalog = { path = "crates/gz-catalog" }
 gz-terrain = { path = "crates/gz-terrain" }
 gz-scene = { path = "crates/gz-scene" }
