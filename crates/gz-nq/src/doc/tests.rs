@@ -174,7 +174,12 @@ fn a_frame_moves_the_nodes_inside_it() {
     let f = g.canvas.frames.first().cloned().unwrap_or_default();
     assert_eq!(f.title, "Start");
     let (s0, a0, b0) = (g.nodes[0].pos, g.nodes[1].pos, g.nodes[2].pos);
+    // the wire s -> a lies inside, a -> b leaves the frame
+    g.canvas.set_route("s", "next", "a", vec![[10.0, 10.0]]);
+    g.canvas.set_route("a", "next", "b", vec![[20.0, 20.0]]);
     assert!(apply(&mut g, r#"{ op = "frame", action = "move", index = 1, by = { 32, 64 } }"#).is_ok());
+    assert_eq!(g.canvas.route("s", "next", "a"), Some(&[[42.0, 74.0]][..]));
+    assert_eq!(g.canvas.route("a", "next", "b"), Some(&[[20.0, 20.0]][..]));
     assert_eq!(g.nodes[0].pos, [s0[0] + 32.0, s0[1] + 64.0]);
     assert_eq!(g.nodes[1].pos, [a0[0] + 32.0, a0[1] + 64.0]);
     // a node outside the frame stays
@@ -327,6 +332,43 @@ fn arrangements() {
     let from = layout::output_pin(cx.flow, a.pos, layout::node_size(&cx, a), 0, 1);
     let into = layout::input_pin(cx.flow, p, layout::node_size(&cx, &g.nodes[2]));
     assert!((from[1] - into[1]).abs() < 0.01, "{from:?} {into:?}");
+}
+
+#[test]
+fn the_tree_of_a_node_is_laid_out_from_its_root_and_nothing_else_moves() {
+    let c = cat();
+    let mut g = graph();
+    // a second tree beside the first: t -> x -> y
+    let mut t = Node::new("t", "trigger.start");
+    t.connect("next", "x");
+    let mut x = Node::new("x", "flow.step");
+    x.connect("next", "y");
+    for n in [t, x, Node::new("y", "flow.step")] {
+        g.nodes.push_back(n);
+    }
+    for (i, n) in g.nodes.iter_mut().enumerate() {
+        n.pos = [i as f32 * 1000.0, (i as f32 * 333.0).round()];
+    }
+    let index = |id: &str| g.nodes.iter().position(|n| n.id == id).unwrap_or(usize::MAX);
+    // from a node deep in the first tree: the tree is s, a, b and its start s
+    let (tree, root) = arrange::tree(&c, &g, index("b"));
+    assert_eq!(root, index("s"));
+    assert_eq!(tree, vec![index("s"), index("a"), index("b")]);
+    let a =
+        Arrange { action: ArrangeAction::Layout, nodes: vec!["b".into()], scope: Scope::Tree, flow: None };
+    let moved = arrange_positions(&c, &g, &a, &[]).unwrap_or_default();
+    let ids: Vec<usize> = moved.iter().map(|(i, _)| *i).collect();
+    assert!(ids.iter().all(|i| tree.contains(i)), "only the tree moves: {ids:?}");
+    // the root keeps its place
+    let was = g.nodes[index("s")].pos;
+    assert!(moved.iter().any(|(i, p)| *i == index("s") && *p == was), "{moved:?}");
+    // two nodes of two trees: each tree from its own start, once
+    let both = Arrange { nodes: vec!["a".into(), "b".into(), "y".into()], ..a };
+    let moved = arrange_positions(&c, &g, &both, &[]).unwrap_or_default();
+    assert_eq!(moved.len(), 6, "{moved:?}");
+    // a node no wire touches is a tree of one
+    let (alone, at) = arrange::tree(&c, &g, index("c"));
+    assert_eq!((alone, at), (vec![index("c")], index("c")));
 }
 
 #[test]

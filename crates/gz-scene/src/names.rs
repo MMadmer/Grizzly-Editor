@@ -35,6 +35,37 @@ pub trait Names: Send + Sync {
     }
 }
 
+/// The names, with the compiled models of the editor's own data (`gamedata\meshes` of its
+/// library) that a build stages into the module - a stash's case among them: what the build finds,
+/// the audit finds too.
+pub struct WithEditorModels<'a> {
+    pub names: &'a dyn Names,
+    pub meshes: std::path::PathBuf,
+}
+
+impl Names for WithEditorModels<'_> {
+    fn has(&self, kind: &str, name: &str) -> Option<bool> {
+        match self.names.has(kind, name) {
+            Some(false) if kind == "model" && self.meshes.join(name.replace('/', "\\")).is_file() => {
+                Some(true)
+            }
+            said => said,
+        }
+    }
+
+    fn nearest(&self, kind: &str, name: &str) -> Vec<String> {
+        self.names.nearest(kind, name)
+    }
+
+    fn refusal(&self, kind: &str, name: &str) -> Option<String> {
+        self.names.refusal(kind, name)
+    }
+
+    fn undrawn(&self, model: &str) -> Option<bool> {
+        self.names.undrawn(model)
+    }
+}
+
 /// What gives the lists: asked once per check, off the UI thread.
 pub type NamesSource =
     Arc<dyn for<'a> Fn(&'a Arc<Editor>) -> BoxFuture<'a, Option<Arc<dyn Names>>> + Send + Sync>;

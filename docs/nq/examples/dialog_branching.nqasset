@@ -4,7 +4,7 @@
 -- a phrase loop through a player reply, once on the topic, a dialog exit into objective.kill{spawn} and
 -- the reward in the on_exit of the final phrase.
 return {
-  nq = 1,
+  nq = 2,
   id = "dialog_branching",
   title = "Долг вежливости",
   activation = "auto",

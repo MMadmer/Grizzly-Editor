@@ -104,11 +104,15 @@ fn debug_hash(h: &mut Stable, v: &dyn std::fmt::Debug) {
     let _ = write!(h, "{v:?}");
 }
 
-/// An object's two hashes: where it is, and what it is.
+/// An object's hashes: where it is, and what it is. Whether a static object is a stash is a
+/// word of the spawn layer alone (an `inventory_box` over it): its own hash, so the geometry, the
+/// light and the piece do not go stale over it. It is not kept in `build.state`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ObjHash {
     pub xform: u64,
     pub data: u64,
+    /// 0 for an object that is no stash.
+    pub stash: u64,
 }
 
 /// The hashes of one object version.
@@ -127,12 +131,21 @@ pub fn object_hash(o: &Object) -> ObjHash {
         // a group's member list names session ids: what it holds is its members' own business
         ObjData::Group(_) => debug_hash(&mut d, &o.data.clone().without_members()),
         ObjData::Spawn(sp) => spawn_hash(&mut d, sp),
+        ObjData::SceneObject(so) => scene_object_hash(&mut d, so),
         other => debug_hash(&mut d, other),
     }
     if let Some(m) = &o.motion {
         d.bytes(&m.motion);
     }
-    ObjHash { xform: x.finish(), data: d.finish() }
+    let stash = match &o.data {
+        ObjData::SceneObject(so) => so.stash.as_ref().map_or(0, |s| {
+            let mut h = Stable::new();
+            debug_hash(&mut h, s);
+            h.finish().max(1)
+        }),
+        _ => 0,
+    };
+    ObjHash { xform: x.finish(), data: d.finish(), stash }
 }
 
 /// A spawn point's data: a decoded entity by the packets the game reads - what the reader of a
@@ -161,6 +174,28 @@ fn spawn_hash(d: &mut Stable, sp: &gz_scene::objects::SpawnData) {
         d.word(h.xform);
         d.word(h.data);
     }
+}
+
+/// A static object as its hash read before a stash was one of its words: the same text, so a
+/// level built then keeps its fingerprints, and a stash moves none of the geometry's.
+fn scene_object_hash(h: &mut Stable, so: &gz_scene::objects::SceneObjectData) {
+    // the derived text of the data as it was, written piece by piece the same way
+    #[derive(Debug)]
+    #[allow(dead_code)]
+    struct SceneObjectData<'a> {
+        reference: &'a SmolStr,
+        flags: u32,
+        surfaces: &'a [gz_scene::objects::SurfaceOverride],
+    }
+    #[derive(Debug)]
+    #[allow(dead_code)]
+    enum Shape<'a> {
+        SceneObject(SceneObjectData<'a>),
+    }
+    // every field named: a new one fails to compile here until it is hashed or left out on purpose
+    let gz_scene::objects::SceneObjectData { reference, flags, surfaces, stash: _ } = so;
+    let shape = Shape::SceneObject(SceneObjectData { reference, flags: *flags, surfaces });
+    debug_hash(h, &shape);
 }
 
 /// One object of a scene version as a step sees it.
@@ -461,6 +496,9 @@ pub fn steps(scene: &SceneState, objects: &Objects, opts: &Options) -> FxHashMap
                 h.str(&e.name);
                 h.word(e.hash.xform);
                 h.word(e.hash.data);
+                if step == Step::SpawnLayer && e.hash.stash != 0 {
+                    h.word(e.hash.stash);
+                }
             }
         }
         h.word(layers(scene, step, opts));
@@ -689,5 +727,45 @@ mod tests {
         assert!(terrain_layers(&s, Step::Piece).is_some());
         assert!(terrain_layers(&terrain_scene(false), Step::Piece).is_none());
         assert!(terrain_layers(&s, Step::Geometry).is_none());
+    }
+
+    /// A static object hashes as it did before a stash was one of its words, and a stash is a
+    /// word of the spawn layer alone.
+    #[test]
+    fn a_stash_moves_the_spawn_layer_and_nothing_else() {
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct SceneObjectData {
+            reference: SmolStr,
+            flags: u32,
+            surfaces: Vec<gz_scene::objects::SurfaceOverride>,
+        }
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        enum Old {
+            SceneObject(SceneObjectData),
+        }
+        let data = gz_scene::objects::SceneObjectData {
+            reference: "props/box".into(),
+            flags: 1,
+            surfaces: vec![gz_scene::objects::SurfaceOverride { name: "a".into(), ..Default::default() }],
+            stash: None,
+        };
+        let old = Old::SceneObject(SceneObjectData {
+            reference: data.reference.clone(),
+            flags: data.flags,
+            surfaces: data.surfaces.clone(),
+        });
+        let (mut a, mut b) = (Stable::new(), Stable::new());
+        debug_hash(&mut a, &old);
+        scene_object_hash(&mut b, &data);
+        assert_eq!(a.finish(), b.finish(), "the hash of a static object is the one it had");
+        let plain = Object::new(ObjClass::SceneObject, "box", ObjData::SceneObject(data.clone()));
+        let mut stashed = data;
+        stashed.stash = Some(gz_scene::objects::Stash::default());
+        let stash = Object::new(ObjClass::SceneObject, "box", ObjData::SceneObject(stashed));
+        let (hp, hs) = (object_hash(&plain), object_hash(&stash));
+        assert_eq!((hp.data, hp.stash), (hs.data, 0));
+        assert_ne!(hs.stash, 0);
     }
 }

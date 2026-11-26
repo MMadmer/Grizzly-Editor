@@ -202,6 +202,18 @@ pub fn validate_commands(m: &Manifest, functions: &[String], taken: &[(String, S
             let (script, function) = c.function.split_once('.').unwrap_or((c.function.as_str(), ""));
             out.push(problem("E404", format!("{at}: gamedata\\scripts\\{script}.script has no function {function}( - the game would find nothing to call"), name));
         }
+        // a console command is one name for the whole game: the module that loads first keeps it
+        let as_word = m.id.replace(['.', '-'], "_");
+        if valid_command_name(name) && !as_word.is_empty() && !crate::names::is_own(name, &as_word) {
+            out.push(problem(
+                "W409",
+                format!(
+                    "{at} is not named after the module - a console command is one name for the whole game, and the module that loads first keeps it: name it '{}'",
+                    crate::names::own_form(name, &as_word)
+                ),
+                name,
+            ));
+        }
         if let Some((_, module)) = taken.iter().find(|(command, _)| command.eq_ignore_ascii_case(name)) {
             out.push(problem("W407", format!("{at} is a command of module '{module}' of the linked game too - the one that loads first keeps it"), name));
         }
@@ -240,6 +252,31 @@ mod tests {
         assert_eq!(out, ["od.status", "od.report", "od.spaced"]);
         assert!(has_script_function(&out, "OD.status"));
         assert!(!has_script_function(&out, "od.Status"));
+    }
+
+    /// A console command of the module is named after it, or it is a warning.
+    #[test]
+    fn a_command_of_the_module_is_named_after_it() {
+        let cmd =
+            |name: &str| Command { name: name.into(), function: "od.status".into(), ..Command::default() };
+        let m = Manifest {
+            id: "od".into(),
+            commands: vec![cmd("status"), cmd("od_status")],
+            ..Manifest::default()
+        };
+        let found = validate_commands(&m, &["od.status".to_owned()], &[]);
+        let codes: Vec<&str> = found.iter().map(|p| p.code.as_str()).collect();
+        assert_eq!(codes, ["W409"]);
+        assert!(found[0].message.contains("'status'") && found[0].message.contains("'od_status'"));
+        // a command name takes no '.' or '-': the id is a word of it with them as '_'
+        let m = Manifest {
+            id: "od.extra".into(),
+            commands: vec![cmd("od_extra_status"), cmd("ping")],
+            ..Manifest::default()
+        };
+        let found = validate_commands(&m, &["od.status".to_owned()], &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("'od_extra_ping'"), "{}", found[0].message);
     }
 
     #[test]

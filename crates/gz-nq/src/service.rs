@@ -45,6 +45,10 @@ pub trait SceneLookup: Send + Sync {
     fn restrictors(&self) -> Vec<PickerEntry>;
     fn stories(&self) -> Vec<PickerEntry>;
     fn way_paths(&self) -> Vec<PickerEntry>;
+    /// The scene's stashes: what a quest reaches by its name (`{ name = }`) besides the zones.
+    fn stashes(&self) -> Vec<PickerEntry> {
+        Vec::new()
+    }
     /// The scene's level when the linked game knows it (`E031`).
     fn level(&self) -> Option<String>;
 }
@@ -529,6 +533,12 @@ impl NqService {
             w.ready().await;
         }
         self.way_paths()
+    }
+
+    /// The stashes of the open scene.
+    #[must_use]
+    pub fn stashes(&self) -> Vec<PickerEntry> {
+        self.scene_lookup().map(|s| s.stashes()).unwrap_or_default()
     }
 
     /// The way paths of the open scene, then the linked game's own patrols.

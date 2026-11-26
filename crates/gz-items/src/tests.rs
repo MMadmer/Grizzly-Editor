@@ -148,15 +148,50 @@ fn full_game() -> Game {
 }
 
 fn codes(roster: &Roster, file: &str, lookups: &dyn Lookups) -> Vec<&'static str> {
-    let catalog = Catalog::parse(CATALOG);
-    let i = roster.index_of_file(file).unwrap();
-    issues_of(roster, i, &catalog, lookups, Path::new("D:\\nowhere")).into_iter().map(|x| x.code).collect()
+    issues(roster, file, lookups).into_iter().map(|x| x.code).collect()
 }
 
+/// The problems of a file of the roster. The fixtures name their sections the way the game does
+/// (`wpn_sil_diy`), not after the test's module: `I434` has a test of its own.
 fn issues(roster: &Roster, file: &str, lookups: &dyn Lookups) -> Vec<crate::model::Issue> {
+    every_issue(roster, file, lookups).into_iter().filter(|x| x.code != crate::validate::NOT_NAMED).collect()
+}
+
+fn every_issue(roster: &Roster, file: &str, lookups: &dyn Lookups) -> Vec<crate::model::Issue> {
     let catalog = Catalog::parse(CATALOG);
     let i = roster.index_of_file(file).unwrap();
     issues_of(roster, i, &catalog, lookups, Path::new("D:\\nowhere"))
+}
+
+/// A section a new item makes is named after the module (`we`), or it is a warning at its key;
+/// the section of an item left out is `<module>_<id>`, and a change is of the game's name.
+#[test]
+fn a_section_the_module_makes_is_named_after_it() {
+    let g = full_game();
+    let r = roster(&[
+        ("items/sil.itemasset", NEW),
+        (
+            "items/own.itemasset",
+            "return { item = 1, id = \"own\", base = \"wpn_ak74\", sections = { { name = \"wpn_we_own_snd\", base = \"wpn_base\" } } }",
+        ),
+        ("items/edit.itemasset", "return { item = 1, edit = \"wpn_ak74\", set = { cost = 2 } }"),
+    ]);
+    let named = |file: &str| -> Vec<String> {
+        every_issue(&r, file, &g)
+            .into_iter()
+            .filter(|x| x.code == crate::validate::NOT_NAMED)
+            .map(|x| format!("{} {}", gz_luadata::path::show(&x.path), x.message))
+            .collect()
+    };
+    let sil = named("items/sil.itemasset");
+    assert_eq!(sil.len(), 2, "{sil:?}");
+    assert!(
+        sil[0].starts_with("section [wpn_sil_diy] is a new section") && sil[0].contains("'we_wpn_sil_diy'"),
+        "{sil:?}"
+    );
+    assert!(sil[1].starts_with("sections[0].name [wpn_sil_diy_sounds]"), "{sil:?}");
+    assert!(named("items/own.itemasset").is_empty());
+    assert!(named("items/edit.itemasset").is_empty());
 }
 
 const NEW: &str = r#"return {
@@ -627,7 +662,11 @@ fn texts_icons_and_where_it_is_found() {
     let check = |f: &str| {
         let catalog = Catalog::parse(CATALOG);
         let i = r.index_of_file(f).unwrap();
+        // the fixtures' sections are named the game's way; I434 has a test of its own
         issues_of(&r, i, &catalog, &g, dir.path())
+            .into_iter()
+            .filter(|x| x.code != crate::validate::NOT_NAMED)
+            .collect::<Vec<_>>()
     };
     let t = check("items/t.itemasset");
     assert_eq!(

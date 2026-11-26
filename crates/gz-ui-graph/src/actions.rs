@@ -114,7 +114,7 @@ pub fn actions() -> Vec<Action> {
     let mut v = vec![
         // the view
         act!("graph.frame_all", "Frame All", "graph.view", CANVAS, Icon::ZoomFit, const { &[Chord::new(Key::Home)] }, on_a_graph, { "frame": "all" }),
-        act!("graph.frame_selection", "Frame Selection", "graph.view", CANVAS, Icon::FrameSelection, const { &[Chord::new(Key::F)] }, on_a_graph, { "frame": "selection" }),
+        act!("graph.frame_selection", "Frame Selection", "graph.view", CANVAS, Icon::FrameSelection, const { &[Chord::shift(Key::F)] }, on_a_graph, { "frame": "selection" }),
         act!("graph.back", "Back", "graph.view", TAB, Icon::Back, const { &[Chord::alt(Key::ArrowLeft)] }, on_a_graph, { "history": "back" }),
         act!("graph.forward", "Forward", "graph.view", TAB, Icon::Forward, const { &[Chord::alt(Key::ArrowRight)] }, on_a_graph, { "history": "forward" }),
         act!("graph.add_node", "Add Node...", "graph.view", CANVAS, Icon::Plus, const { &[Chord::new(Key::Tab), Chord::new(Key::Space)] }, on_a_graph, { "menu": "picker" }),
@@ -133,7 +133,7 @@ pub fn actions() -> Vec<Action> {
         act!("graph.find_next", "Find Next", "graph.find", TAB, Icon::Search, const { &[Chord::new(Key::F3)] }, on_a_graph, { "go": "next" }),
         act!("graph.find_previous", "Find Previous", "graph.find", TAB, Icon::Search, const { &[Chord::shift(Key::F3)] }, on_a_graph, { "go": "previous" }),
         // edits of the selection
-        act!("graph.connect_nearest", "Connect to the Nearest", "graph.edit", CANVAS, Icon::Link, const { &[Chord::shift(Key::Q)] }, on_one, { "ops": [{ "op": "connect_nearest" }] }),
+        act!("graph.connect_nearest", "Connect to the Nearest", "graph.edit", CANVAS, Icon::Link, const { &[Chord::new(Key::Q)] }, on_one, { "ops": [{ "op": "connect_nearest" }] }),
         act!("graph.bypass", "Bypass Node", "graph.edit", CANVAS, Icon::Unlink, const { &[Chord::alt(Key::D)] }, on_selection, { "ops": [{ "op": "bypass" }] }),
         act!("graph.duplicate_with_wires", "Duplicate with Wires", "graph.edit", CANVAS, Icon::Duplicate, const { &[Chord::ctrl_shift(Key::D)] }, on_selection, { "ops": [{ "op": "duplicate", "wires": true }] }),
         act!("graph.disable", "Disable / Enable", "graph.edit", CANVAS, Icon::EyeOff, const { &[Chord::ctrl_shift(Key::E)] }, on_selection, { "ops": [{ "op": "disable" }] }),
@@ -143,6 +143,7 @@ pub fn actions() -> Vec<Action> {
         // arrangements
         act!("graph.auto_layout", "Auto Layout", "graph.arrange", TAB, Icon::AutoLayout, &[], on_a_graph, { "action": "layout", "scope": "all" }),
         act!("graph.auto_layout_selection", "Auto Layout Selection", "graph.arrange", CANVAS, Icon::AutoLayout, &[], on_two, { "action": "layout", "scope": "selection" }),
+        act!("graph.auto_layout_tree", "Auto Layout Tree", "graph.arrange", CANVAS, Icon::AutoLayout, const { &[Chord::new(Key::F)] }, on_selection, { "action": "layout", "scope": "tree" }),
         act!("graph.auto_layout_branch", "Auto Layout Branch", "graph.arrange", CANVAS, Icon::AutoLayout, &[], on_one, { "action": "layout", "scope": "branch" }),
         act!("graph.align_left", "Align Left", "graph.arrange", CANVAS, Icon::ChevronLeft, const { &[Chord::shift(Key::A)] }, on_two, { "action": "align", "how": "left" }),
         act!("graph.align_centre", "Align Centre", "graph.arrange", CANVAS, Icon::Minus, &[], on_two, { "action": "align", "how": "centre" }),
@@ -152,7 +153,7 @@ pub fn actions() -> Vec<Action> {
         act!("graph.align_bottom", "Align Bottom", "graph.arrange", CANVAS, Icon::ChevronDown, const { &[Chord::shift(Key::S)] }, on_two, { "action": "align", "how": "bottom" }),
         act!("graph.distribute_horizontally", "Distribute Horizontally", "graph.arrange", CANVAS, Icon::More, &[], on_three, { "action": "distribute", "how": "horizontal" }),
         act!("graph.distribute_vertically", "Distribute Vertically", "graph.arrange", CANVAS, Icon::Overflow, &[], on_three, { "action": "distribute", "how": "vertical" }),
-        act!("graph.straighten", "Straighten Connections", "graph.arrange", CANVAS, Icon::Flow, const { &[Chord::new(Key::Q)] }, on_selection, { "action": "straighten" }),
+        act!("graph.straighten", "Straighten Connections", "graph.arrange", CANVAS, Icon::Flow, const { &[Chord::shift(Key::Q)] }, on_selection, { "action": "straighten" }),
         act!("graph.flow_right", "Flow Left to Right", "graph.arrange", TAB, Icon::ChevronRight, &[], on_a_graph, { "action": "layout", "flow": "right" })
             .checked(flows_right),
         act!("graph.flow_down", "Flow Top to Bottom", "graph.arrange", TAB, Icon::ChevronDown, &[], on_a_graph, { "action": "layout", "flow": "down" })

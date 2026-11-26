@@ -382,7 +382,7 @@ impl SceneObjectData {
                 });
             }
         }
-        Ok(Self { reference: reference.into(), flags, surfaces })
+        Ok(Self { reference: reference.into(), flags, surfaces, stash: None })
     }
 
     /// The stream reader; version `0x10` carries the placement in a chunk of its own, which
@@ -427,7 +427,7 @@ impl SceneObjectData {
                 });
             }
         }
-        Ok(Body::Read(Self { reference: reference.into(), flags, surfaces }))
+        Ok(Body::Read(Self { reference: reference.into(), flags, surfaces, stash: None }))
     }
 }
 

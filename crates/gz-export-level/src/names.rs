@@ -20,20 +20,11 @@ fn cut_bytes(s: &str, n: usize) -> &str {
     s.get(..cut).unwrap_or_default()
 }
 
-/// An op name is a section name and a file-name part, so every byte that is
-/// not `a-z A-Z 0-9 _ - .` becomes `_` (a Cyrillic letter is two of them); 127 bytes at most;
-/// an empty name is `unnamed`.
+/// An op name: `gz_scene::objects::op_name`, the one rule the scene's check of a stash's name
+/// reads too.
 #[must_use]
 pub fn sanitize_op_name(src: &str) -> String {
-    let mut out = String::with_capacity(src.len().min(127));
-    for b in src.bytes().take(127) {
-        let ok = b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.');
-        out.push(if ok { char::from(b) } else { '_' });
-    }
-    if out.is_empty() {
-        out.push_str("unnamed");
-    }
-    out
+    gz_scene::objects::op_name(src)
 }
 
 /// A way path's name is a patrol name, an ltx section and a picker entry at

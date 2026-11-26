@@ -55,6 +55,7 @@ pub mod edit;
 pub mod exclude;
 mod io;
 pub mod model;
+pub mod names;
 pub mod radio;
 pub mod reference;
 pub mod rules;

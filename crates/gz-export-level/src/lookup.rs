@@ -90,6 +90,19 @@ impl SceneLookup for LiveScene {
         })
     }
 
+    fn stashes(&self) -> Vec<PickerEntry> {
+        self.with(|s| {
+            s.of_class(ObjClass::SceneObject)
+                .filter(|o| {
+                    !o.name.is_empty()
+                        && !o.marks.base
+                        && matches!(&o.data, ObjData::SceneObject(d) if d.stash.is_some())
+                })
+                .map(|o| entry(&o.name, "scene: stash".to_owned()))
+                .collect()
+        })
+    }
+
     fn way_paths(&self) -> Vec<PickerEntry> {
         self.with(|s| {
             s.of_class(ObjClass::Way)

@@ -47,8 +47,8 @@ impl Canvas {
         menu_up: bool,
         ppp: f32,
     ) {
-        let (pressed, down, sec_pressed, sec_down, sec_released, mid_down, delta, mods, wheel, double, now) =
-            ctx.input(|i| {
+        let (pressed, down, sec_pressed, sec_down, sec_released, mid_down, delta, mods, wheel, now) = ctx
+            .input(|i| {
                 (
                     i.pointer.primary_pressed(),
                     i.pointer.primary_down(),
@@ -65,11 +65,45 @@ impl Canvas {
                             _ => 0.0,
                         })
                         .sum::<f32>(),
-                    i.pointer.button_double_clicked(PointerButton::Primary),
                     i.time,
                 )
             });
+        // a frame that waited (a busy machine) can hold both presses of a double click
+        let presses = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        egui::Event::PointerButton { button: PointerButton::Primary, pressed: true, .. }
+                    )
+                })
+                .count()
+        });
+        // a second press near the first one soon after it is a double click, told at the press:
+        // egui tells one at the release, when the first press already started a gesture
+        let double = pressed && {
+            let (delay, dist) =
+                ctx.options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
+            let twice = presses >= 2
+                || self.last_press.is_some_and(|(t, at)| now - t <= delay && (mouse - at).length() <= dist);
+            self.last_press = if twice { None } else { Some((now, mouse)) };
+            twice
+        };
         let covered = cx.covered.iter().any(|r| r.contains(mouse));
+        // a right press beside the canvas's own menu takes it down and is the canvas's press: the
+        // menu of what is under it comes up at the release, as with no menu up
+        let mut menu_up = menu_up;
+        if sec_pressed
+            && menu_up
+            && self.frame_title.is_none()
+            && egui::Popup::is_id_open(ctx, self.id.with("menu"))
+            && resp.contains_pointer()
+            && !covered
+        {
+            self.close_menu(ctx);
+            menu_up = egui::Popup::is_any_open(ctx);
+        }
         let over = (resp.hovered() || resp.contains_pointer()) && !menu_up && !covered;
         // the minimap and the edge pills are the canvas's own controls: a click there is theirs
         let hovered = over && !self.minimap_hovered && self.beyond_hot.is_none();
@@ -149,6 +183,12 @@ impl Canvas {
             self.press(sc, cx, mouse, mods, double, ppp);
         }
         self.follow_gestures(ctx, sc, cx, mouse, grab, down, ppp);
+        if !down && let Some(r) = self.on_release.take() {
+            match r {
+                OnRelease::Rename => self.want_rename = true,
+                OnRelease::FrameTitle(fi, title) => self.frame_title = Some((fi, title, true)),
+            }
+        }
 
         // what the view does is the document's once the gesture is over
         let wheel_busy = now - self.last_wheel < WHEEL_SETTLE;
@@ -171,7 +211,8 @@ impl Canvas {
         double: bool,
         ppp: f32,
     ) {
-        // a reroute: a double click takes it away, a drag moves it
+        // a reroute: a click selects it (Ctrl or Shift adds it or takes it out), a drag moves it with
+        // the rest of the selection, a double click takes it away
         if let Some((li, k)) = self.hot_knot {
             if double {
                 if let Some(l) = sc.links.get(li) {
@@ -179,11 +220,34 @@ impl Canvas {
                     if k < via.len() {
                         via.remove(k);
                     }
+                    self.forget_knot(sc, li, k);
                     self.push_route(sc, cx, li, &via);
                 }
-            } else if let Some(at) = sc.links.get(li).and_then(|l| l.via.get(k)) {
-                self.knot_drag = Some(KnotDrag { link: li, index: k, at: *at, moved: false });
+                return;
             }
+            let Some(r) = Self::knot_ref(sc, li, k) else { return };
+            let picked = self.knots.iter().any(|x| x.same(&r));
+            self.knots_kept = true;
+            if mods.ctrl || mods.command || mods.shift {
+                if picked {
+                    self.knots.retain(|x| !x.same(&r));
+                    self.knot_hits.retain(|x| *x != (li, k));
+                    return;
+                }
+                self.knots.push(r.clone());
+                self.knot_hits.push((li, k));
+            } else if !picked {
+                cx.view.selection.clear();
+                cx.view.slot.clear();
+                self.knots = vec![r.clone()];
+                self.knot_hits = vec![(li, k)];
+            }
+            let mut d = self.group_drag(sc, cx.view, None, mouse);
+            let plain = !(mods.ctrl || mods.command || mods.shift);
+            if plain && picked && (self.knots.len() + cx.view.selection.len()) > 1 {
+                d.single = Some(Single::Knot(r));
+            }
+            self.drag = Some(d);
             return;
         }
         // Alt on a wire: a click removes it, a drag moves its nearer end
@@ -201,6 +265,7 @@ impl Canvas {
                 Some(pin) => Linking::From { node: sn.id.clone(), pin: SmolStr::new(&pin.name) },
                 None => Linking::Into { node: sn.id.clone() },
             });
+            self.link_press = mouse;
             return;
         }
         if let Some(n) = self.hit_node(sc, cx.view, mouse) {
@@ -232,32 +297,26 @@ impl Canvas {
             let id = sn.id.clone();
             if double && self.hit_header(sc, cx.view, n, mouse) {
                 cx.view.select_only(&id);
-                self.want_rename = true;
+                self.on_release = Some(OnRelease::Rename);
                 return;
             }
+            let mut single = None;
             if mods.ctrl || mods.command || mods.shift {
                 cx.view.toggle(&id);
+                self.knots_kept = true;
             } else if !cx.view.is_selected(&id) {
                 cx.view.select_only(&id);
+                self.clear_knots();
             } else {
                 cx.view.slot.clear();
+                if cx.view.selection.len() + self.knots.len() > 1 {
+                    single = Some(Single::Node(id.clone()));
+                }
             }
-            let nodes: Vec<(usize, SmolStr, [f32; 2])> = cx
-                .view
-                .selection
-                .iter()
-                .filter_map(|s| sc.node_of(s).map(|i| (i, s.clone(), self.pos_of(sc, i))))
-                .collect();
-            let anchor = nodes.iter().position(|(i, _, _)| *i == n).unwrap_or(0);
             if cx.view.is_selected(&id) {
-                self.drag = Some(Drag {
-                    nodes,
-                    anchor,
-                    start: mouse,
-                    moved: false,
-                    delta: [0.0, 0.0],
-                    on_wire: None,
-                });
+                let mut d = self.group_drag(sc, cx.view, Some(n), mouse);
+                d.single = single;
+                self.drag = Some(d);
             }
             return;
         }
@@ -265,7 +324,7 @@ impl Canvas {
             if double && !resize {
                 let title =
                     sc.frames.iter().find(|f| f.index == fi).map(|f| f.title.clone()).unwrap_or_default();
-                self.frame_title = Some((fi, title, true));
+                self.on_release = Some(OnRelease::FrameTitle(fi, title));
                 return;
             }
             let inside = sc
@@ -304,6 +363,38 @@ impl Canvas {
         if !(mods.ctrl || mods.command || mods.shift) {
             cx.view.selection.clear();
             cx.view.slot.clear();
+            self.clear_knots();
+        }
+    }
+
+    /// A drag of the selection, nodes and reroutes, from the press at `mouse`; `node` is the node
+    /// pressed (the one the grid and the guides place), none for a reroute.
+    fn group_drag(&self, sc: &Scene, view: &ViewMirror, node: Option<usize>, mouse: Pos2) -> Drag {
+        let nodes: Vec<(usize, SmolStr, [f32; 2])> = view
+            .selection
+            .iter()
+            .filter_map(|s| sc.node_of(s).map(|i| (i, s.clone(), self.pos_of(sc, i))))
+            .collect();
+        // the node pressed places the drag on the grid; pressed on a reroute, the first node does
+        let anchor = match node {
+            Some(n) => nodes.iter().position(|(i, _, _)| *i == n).unwrap_or(0),
+            None if nodes.is_empty() => usize::MAX,
+            None => 0,
+        };
+        let knots: Vec<(usize, usize, [f32; 2])> =
+            self.knot_hits.iter().map(|&(li, k)| (li, k, self.knot_at(sc, li, k))).collect();
+        let knot_refs = knots.iter().filter_map(|&(li, k, _)| Self::knot_ref(sc, li, k)).collect();
+        Drag {
+            nodes,
+            knots,
+            knot_refs,
+            edit: sc.edit,
+            anchor,
+            start: mouse,
+            moved: false,
+            delta: [0.0, 0.0],
+            on_wire: None,
+            single: None,
         }
     }
 
@@ -321,31 +412,6 @@ impl Canvas {
         ppp: f32,
     ) {
         let s = Self::scale(cx.view);
-        // a reroute being dragged
-        if let Some(mut k) = self.knot_drag.take() {
-            let start = self.to_screen(
-                cx.view,
-                sc.links.get(k.link).and_then(|l| l.via.get(k.index)).copied().unwrap_or(k.at),
-            );
-            if down {
-                if (mouse - start).length() > 3.0 {
-                    k.moved = true;
-                }
-                if k.moved {
-                    let w = self.to_world(cx.view, mouse);
-                    k.at = [layout::sane(w[0]), layout::sane(w[1])];
-                }
-                self.knot_drag = Some(k);
-            } else if k.moved
-                && let Some(l) = sc.links.get(k.link)
-            {
-                let mut via = l.via.clone();
-                if let Some(v) = via.get_mut(k.index) {
-                    *v = k.at;
-                }
-                self.push_route(sc, cx, k.link, &via);
-            }
-        }
         // Alt on a wire: moved, it becomes a rewire of the nearer end; let go, the wire goes
         if let Some((li, start)) = self.alt_press {
             if down && (mouse - start).length() > 4.0 {
@@ -381,7 +447,7 @@ impl Canvas {
                 }
                 self.drag = Some(d);
             } else {
-                self.end_drag(cx, d);
+                self.end_drag(ctx, sc, cx, d);
             }
         }
         // a frame being moved or resized
@@ -444,6 +510,23 @@ impl Canvas {
                         cx.view.selection.push(n.id.clone());
                     }
                 }
+                // the reroutes inside the rectangle
+                self.knots_kept = true;
+                for li in self.visible_links(sc, [a[0], a[1], b[0], b[1]]) {
+                    let Some(l) = sc.links.get(li) else { continue };
+                    for (k, v) in l.via.iter().enumerate() {
+                        if v[0] >= a[0]
+                            && v[0] <= b[0]
+                            && v[1] >= a[1]
+                            && v[1] <= b[1]
+                            && let Some(kr) = Self::knot_ref(sc, li, k)
+                            && !self.knots.iter().any(|x| x.same(&kr))
+                        {
+                            self.knots.push(kr);
+                            self.knot_hits.push((li, k));
+                        }
+                    }
+                }
             }
         }
     }
@@ -452,7 +535,16 @@ impl Canvas {
     /// on the grid, or on a neighbour's edge or centre when one is within a few px.
     fn adjust_drag(&mut self, sc: &Scene, cx: &CanvasCx<'_>, d: &Drag, raw: [f32; 2]) -> [f32; 2] {
         self.guides.clear();
-        let Some(&(ai, _, start)) = d.nodes.get(d.anchor) else { return raw };
+        let Some(&(ai, _, start)) = d.nodes.get(d.anchor) else {
+            // dragged by a reroute: a lone reroute lands on the grid
+            return match d.knots.as_slice() {
+                [(_, _, at)] if d.nodes.is_empty() && cx.prefs.snap => {
+                    let to = add(*at, raw);
+                    [layout::snap(to[0]) - at[0], layout::snap(to[1]) - at[1]]
+                }
+                _ => raw,
+            };
+        };
         let Some(an) = sc.nodes.get(ai) else { return raw };
         let mut at = add(start, raw);
         if cx.prefs.snap {
@@ -532,6 +624,9 @@ impl Canvas {
     /// go on goes on the wire it is dropped on.
     fn wire_for_lone(&mut self, sc: &Scene, cx: &CanvasCx<'_>, d: &Drag, mouse: Pos2) -> Option<usize> {
         let [(i, _, _)] = d.nodes.as_slice() else { return None };
+        if !d.knots.is_empty() {
+            return None;
+        }
         let n = sc.nodes.get(*i)?;
         let wired = n.trigger
             || n.pins.iter().any(|p| p.connected)
@@ -543,9 +638,28 @@ impl Canvas {
         self.hit_link(sc, cx.view, mouse)
     }
 
-    fn end_drag(&mut self, cx: &mut CanvasCx<'_>, d: Drag) {
+    fn end_drag(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>, d: Drag) {
         self.guides.clear();
         if !d.moved {
+            // a click on one of several selected things singles it out
+            match d.single {
+                Some(Single::Node(id)) => {
+                    cx.view.select_only(&id);
+                    self.clear_knots();
+                }
+                Some(Single::Knot(r)) => {
+                    cx.view.selection.clear();
+                    cx.view.slot.clear();
+                    self.knots = vec![r];
+                    self.knots_kept = true;
+                    self.resolve_knots(sc);
+                }
+                None => {}
+            }
+            return;
+        }
+        if !d.knots.is_empty() {
+            self.end_group_drag(ctx, sc, cx, &d);
             return;
         }
         let at: Vec<(usize, SmolStr, [f32; 2])> = d
@@ -589,7 +703,72 @@ impl Canvas {
         self.settle = Some(Settle {
             from_edit: cx.scene.map_or(cx.edit, |s| s.edit),
             at: at.into_iter().map(|(i, _, p)| (i, p)).collect(),
+            knots: Vec::new(),
         });
+    }
+
+    /// A drag that moved reroutes: the nodes' places and the wires' points, one undo step.
+    fn end_group_drag(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>, d: &Drag) {
+        // a scene that came during the drag (an undo, the file changed outside) numbers its wires
+        // anew: the reroutes are found again there by their wires and points, or nothing moves
+        let mut places = d.knots.clone();
+        if sc.edit != d.edit {
+            places.clear();
+            for (r, (_, _, start)) in d.knot_refs.iter().zip(&d.knots) {
+                let Some((li, k)) = Self::find_knot(sc, r) else {
+                    self.set_status(ctx, "The graph changed during the drag: nothing was moved");
+                    return;
+                };
+                places.push((li, k, *start));
+            }
+        }
+        let moved = |p: [f32; 2]| [layout::sane(p[0] + d.delta[0]), layout::sane(p[1] + d.delta[1])];
+        let mut ops: Vec<Value> = Vec::new();
+        let mut at = Vec::with_capacity(d.nodes.len());
+        for (i, id, start) in &d.nodes {
+            let p = moved(*start);
+            ops.push(op_table(&[
+                ("op", Value::from("move")),
+                ("id", Value::from(id.as_str())),
+                ("x", Value::from(f64::from(p[0]))),
+                ("y", Value::from(f64::from(p[1]))),
+            ]));
+            at.push((*i, p));
+        }
+        let mut wires: Vec<usize> = places.iter().map(|(li, _, _)| *li).collect();
+        wires.sort_unstable();
+        wires.dedup();
+        let mut knots = Vec::with_capacity(places.len());
+        for li in wires {
+            let Some(l) = sc.links.get(li) else { continue };
+            let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else {
+                continue;
+            };
+            let mut via = l.via.clone();
+            for (_, k, start) in places.iter().filter(|(w, _, _)| *w == li) {
+                if let Some(v) = via.get_mut(*k) {
+                    let was = *v;
+                    *v = moved(*start);
+                    knots.push((li, *k, *v));
+                    // the selection follows the reroute to its new point
+                    if let Some(r) = Self::knot_ref(sc, li, *k) {
+                        self.knot_moved(&KnotRef { at: was, ..r }, *v);
+                    }
+                }
+            }
+            ops.push(op_table(&[
+                ("op", Value::from("route")),
+                ("from", Value::from(f.id.as_str())),
+                ("pin", Value::from(l.pin.as_str())),
+                ("to", Value::from(t.id.as_str())),
+                ("points", Value::from(via.iter().map(|q| point(*q)).collect::<Vec<_>>())),
+            ]));
+        }
+        if ops.is_empty() {
+            return;
+        }
+        cx.ops.push(Op::Doc(DocOp::ApplyOps(Value::from(ops))));
+        self.settle = Some(Settle { from_edit: sc.edit, at, knots });
     }
 
     fn end_frame_drag(&mut self, sc: &Scene, cx: &mut CanvasCx<'_>, f: FrameDrag) {
@@ -599,8 +778,27 @@ impl Canvas {
         }
         let Some(fr) = sc.frames.iter().find(|x| x.index == f.index) else { return };
         let index = Value::from((f.index + 1) as f64);
+        let r = fr.rect;
+        let to = if f.resize {
+            [r[0], r[1], (r[2] + f.delta[0]).max(r[0] + 64.0), (r[3] + f.delta[1]).max(r[1] + 48.0)]
+        } else {
+            [r[0] + f.delta[0], r[1] + f.delta[1], r[2] + f.delta[0], r[3] + f.delta[1]]
+        };
+        self.frame_settle = Some((sc.edit, f.index, to));
+        if !f.resize {
+            // the selected reroutes of the wires it holds whole follow them
+            for (li, l) in sc.links.iter().enumerate() {
+                if f.inside.contains(&(l.from as usize)) && f.inside.contains(&(l.to as usize)) {
+                    for k in 0..l.via.len() {
+                        if let Some(r) = Self::knot_ref(sc, li, k) {
+                            let now = add(r.at, f.delta);
+                            self.knot_moved(&r, now);
+                        }
+                    }
+                }
+            }
+        }
         let op = if f.resize {
-            let r = fr.rect;
             op_table(&[
                 ("op", Value::from("frame")),
                 ("action", Value::from("set")),
@@ -615,6 +813,16 @@ impl Canvas {
                     .inside
                     .iter()
                     .filter_map(|&i| sc.nodes.get(i).map(|n| (i, add(n.pos, f.delta))))
+                    .collect(),
+                // the reroutes of the wires it holds whole
+                knots: sc
+                    .links
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| {
+                        f.inside.contains(&(l.from as usize)) && f.inside.contains(&(l.to as usize))
+                    })
+                    .flat_map(|(li, l)| l.via.iter().enumerate().map(move |(k, v)| (li, k, add(*v, f.delta))))
                     .collect(),
             });
             op_table(&[
@@ -662,7 +870,18 @@ impl Canvas {
 
     /// The wire under the pointer goes (the D key).
     pub fn remove_hot_wire(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>) -> bool {
-        let Some(li) = self.hot_link.or_else(|| self.hit_link(sc, cx.view, self.last_mouse)) else {
+        // the wire lit under the pointer, or the one under it when nothing was lit yet - never one
+        // behind a node, nor one where the pointer is not over the canvas at all
+        let mouse = self.last_mouse;
+        let hot = self.hot_link;
+        let li = match hot {
+            Some(li) => Some(li),
+            None if self.hovered && self.hit_node(sc, cx.view, mouse).is_none() => {
+                self.hit_link(sc, cx.view, mouse)
+            }
+            None => None,
+        };
+        let Some(li) = li else {
             return false;
         };
         self.remove_wire(ctx, sc, cx, li);
@@ -700,6 +919,15 @@ impl Canvas {
     fn end_link(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>, mouse: Pos2, grab: f32) {
         let Some(l) = self.linking.take() else { return };
         self.status = gz_ui::Tx::EMPTY;
+        // a pin pressed and let go where it was is a click on its node: it is selected
+        if (mouse - self.link_press).length() < 4.0 {
+            let (Linking::From { node, .. } | Linking::Into { node }) = &l;
+            if !cx.view.is_selected(node) {
+                cx.view.select_only(node);
+                self.clear_knots();
+            }
+            return;
+        }
         match l {
             Linking::From { node: from, pin } => {
                 let mut node = self.hit_node(sc, cx.view, mouse);
@@ -860,13 +1088,13 @@ impl Canvas {
                     tip.push_str(&row.summary);
                 }
                 tip.push('\n');
-                tip.push_str(&t("Double-click to edit it, drag to move it"));
+                tip.push_str(&t("Double-click to edit it. Drag it within the node, onto another node, or just under a node to run it on exit"));
                 self.tip = tip;
             }
             return;
         }
         if self.hot_knot.is_some() {
-            self.tip = t("A reroute: drag to move it, double-click to remove it");
+            self.tip = t("A reroute: click to select it, drag to move it, double-click to remove it");
             return;
         }
         if let Some(li) = self.hot_link
@@ -902,7 +1130,6 @@ impl Canvas {
             || self.marquee.is_some()
             || self.act_drag.is_some()
             || self.cut.is_some()
-            || self.knot_drag.is_some()
             || self.frame_drag.is_some()
             || self.drag.as_ref().is_some_and(|d| d.moved);
         self.linking = None;
@@ -910,8 +1137,8 @@ impl Canvas {
         self.marquee = None;
         self.cut = None;
         self.alt_press = None;
-        self.knot_drag = None;
         self.frame_drag = None;
+        self.on_release = None;
         self.guides.clear();
         if self.drag.as_ref().is_some_and(|d| d.moved) {
             self.drag = None;

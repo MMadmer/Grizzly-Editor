@@ -13,7 +13,7 @@ use gz_base::{Finding, Findings};
 use gz_entities::{Entity, Settings, Shape};
 use gz_scene::math::{Vec3, get_xyz};
 use gz_scene::objects::radio::RadioCx;
-use gz_scene::objects::{CF_SPHERE, PointKind, SpawnEntity};
+use gz_scene::objects::{CF_SPHERE, PointKind, SpawnEntity, Stash, stash};
 use gz_scene::{ObjClass, ObjData, Object, SceneState};
 
 use crate::ExportError;
@@ -68,6 +68,8 @@ pub struct SpawnResult {
     pub orders: u32,
     /// Radios bound to what they play (`[xms_radio]`).
     pub radios: u32,
+    /// Stashes: an `inventory_box` over a static object that is one.
+    pub stashes: u32,
     /// Base spawns the mod takes out (`op = remove`).
     pub removed: u32,
     pub names: Vec<String>,
@@ -139,6 +141,37 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         op
     };
     let selected = |o: &Object| !input.selected_only || scene.is_selected(o.id);
+
+    // a stash is reached by its name: one the layer cannot write as it is, or writes another
+    // object under, is refused before anything is written (`S226` of the scene's check)
+    let refused: Vec<String> = stash::clashes(scene)
+        .into_iter()
+        .filter(|(id, _)| !input.selected_only || scene.is_selected(*id))
+        .map(|(_, why)| why)
+        .collect();
+    if let Some(first) = refused.first() {
+        let more = match refused.len() {
+            1 => String::new(),
+            n => format!(" ({} stashes in all)", n),
+        };
+        return Err(ExportError::new(format!("{first}{more}")));
+    }
+
+    // ---- stashes: an inventory_box over each static object that is one ----
+    // Before the objects: the box takes the object's own name, which quests reach it by.
+    for (o, st) in stash::baked(scene) {
+        if !selected(o) {
+            continue;
+        }
+        let Some(op) = stash_op(&mut out, input, o, st, &mut staged_now) else { continue };
+        fresh.push_str(&op);
+        fresh.push_str(&mode_line);
+        fresh.push_str("\r\n");
+        replaced.push(format!("obj:{}", o.name));
+        out.result.names.push(o.name.to_string());
+        out.result.exported += 1;
+        out.result.stashes += 1;
+    }
 
     for o in scene.of_class(ObjClass::SceneObject) {
         if !selected(o) {
@@ -588,6 +621,80 @@ fn entity_visual(entity: &Entity, settings: Option<&(dyn Settings + Sync)>) -> S
         vname.clear();
     }
     vname
+}
+
+/// A stash's box: an `inventory_box` at the object's place under its name, wearing the model's
+/// unseen case (staged where it must be), its custom data what the stash says of itself. The op
+/// without its mode line; `None`, with why, when the game has no box to make.
+fn stash_op(
+    out: &mut SpawnBake,
+    input: &SpawnInput<'_>,
+    o: &Object,
+    st: Stash,
+    staged_now: &mut HashSet<String>,
+) -> Option<String> {
+    let ObjData::SceneObject(so) = &o.data else { return None };
+    let name = o.name.as_str();
+    if let Some(s) = input.settings
+        && !s.section_exist(stash::SECTION)
+    {
+        out.warn(format!(
+            "'{name}' is no stash in the game: the linked game has no section {} - it is left out",
+            stash::SECTION
+        ));
+        out.result.skipped += 1;
+        return None;
+    }
+    // the case is the model's twin; without one the box's own case opens the stash
+    let case = stash::case_model(&so.reference);
+    let found = if staged_now.contains(&case) {
+        Found::Staged
+    } else {
+        input.visuals.spawns.get(&case).map_or(Found::Missing, |v| v.found.clone())
+    };
+    let visual = match found {
+        Found::Staged | Found::Game | Found::Project(_) => Some(case),
+        Found::Sdk(src) => {
+            out.stage.push((src, case.clone()));
+            out.log
+                .info(format!("[XMS] spawn export: staged an editor model -> gamedata\\meshes\\{case}.ogf"));
+            staged_now.insert(case.clone());
+            Some(case)
+        }
+        Found::Missing => {
+            let [x, y, z] = stash::OWN_CASE;
+            out.warn(format!(
+                "'{name}' is a stash, and its model has no unseen case '{case}' in the game, the project or the editor's data: the stash opens by {}'s own case box ({x} x {y} x {z} m)",
+                stash::SECTION
+            ));
+            None
+        }
+    };
+    let s = o.scale();
+    if !similar(s.x, 1.0) || !similar(s.y, 1.0) || !similar(s.z, 1.0) {
+        out.result.scaled += 1;
+        out.warn(format!(
+            "'{name}' is a stash and is scaled: its case is not, and the stash opens at the model's own size"
+        ));
+    }
+    let xf = o.world();
+    let mut op = format!(
+        "[obj:{name}]\r\nop        = add\r\nsection   = {}\r\nlevel     = {}\r\nposition  = {}\r\ndirection = {}\r\n",
+        stash::SECTION,
+        input.level,
+        f3(xf.c()),
+        f3(get_xyz(&xf))
+    );
+    if let Some(v) = visual {
+        let _ = write!(op, "visual    = {v}\r\n");
+    }
+    let cd = st.section();
+    if !cd.is_empty() {
+        let file = format!("{}_{name}.ltx", input.level);
+        let _ = write!(op, "custom_data = @spawn/custom_data/{file}\r\n");
+        out.custom_data.push((file, cd));
+    }
+    Some(op)
 }
 
 /// A radio's `[xms_radio]` appended to its custom data, or why it is left out.
@@ -1071,6 +1178,121 @@ mod tests {
                 "'lost' plays the playlist 'gone', which mod.ltx does not declare - the radio plays the player's station until it does",
                 "'barrel' (physic_object) is no radio - what it plays is left out",
             ]
+        );
+    }
+
+    /// A static object that is a stash bakes an `inventory_box` under its name at its place,
+    /// wearing the model's unseen case, its custom data the stash's false keys alone; the object
+    /// itself stays the piece's. A model without a case gets the box's own, a scaled stash is
+    /// said, and a name the layer writes another object under is refused.
+    #[test]
+    fn a_stash_bakes_an_inventory_box_over_its_object() {
+        let st = settings()
+            .section("inventory_box", &[("class", "S_INVBOX"), ("visual", "dynamics\\box_case.ogf")]);
+        let stash_object = |name: &str, reference: &str, stash: Stash, pos: Vec3| {
+            let d = SceneObjectData { stash: Some(stash), ..SceneObjectData::library(reference) };
+            let mut o = authored(Object::new(ObjClass::SceneObject, name, ObjData::SceneObject(d)), pos);
+            o.xform.rotation = Vec3::new(0.0, 0.5, 0.0);
+            o
+        };
+        let mut s = SceneState::default();
+        s.insert(stash_object(
+            "courier_stash",
+            "dynamics\\equipment_cache\\equipment_box_02",
+            Stash::default(),
+            Vec3::new(-242.7, -20.0281, -154.8),
+        ));
+        s.insert(stash_object(
+            "quiet_stash",
+            "dynamics\\equipment_cache\\equipment_box_02",
+            Stash { random: false, loot: false },
+            Vec3::new(1.0, 0.0, 1.0),
+        ));
+        let mut big =
+            stash_object("lost_stash", "props\\crate", Stash { random: true, loot: false }, Vec3::ZERO);
+        big.xform.scale = Vec3::splat(2.0);
+        s.insert(big);
+        let mut visuals = Visuals::default();
+        let unseen: Arc<[u8]> = Arc::from(b"case".as_slice());
+        visuals.spawns.insert(
+            "dynamics\\equipment_cache\\equipment_box_02_case".into(),
+            crate::visuals::SpawnVisual { found: Found::Game, bytes: Some(unseen) },
+        );
+        let patrols = HashSet::new();
+        let input = SpawnInput {
+            scene: &s,
+            level: "l01_escape".into(),
+            selected_only: false,
+            section: None,
+            mode: None,
+            mirror: true,
+            visuals: &visuals,
+            settings: Some(&st),
+            game_patrols: &patrols,
+            radio: None,
+            old_text: "",
+            statics_in_piece: true,
+        };
+        let bake = bake(&input).unwrap();
+        let text = bake.text.clone().unwrap_or_default();
+        let courier = format!(
+            "[obj:courier_stash]\r\nop        = add\r\nsection   = inventory_box\r\nlevel     = l01_escape\r\nposition  = -242.699997,-20.028099,-154.800003\r\ndirection = {}\r\nvisual    = dynamics\\equipment_cache\\equipment_box_02_case\r\n\r\n",
+            dir(&s, "courier_stash")
+        );
+        assert!(text.starts_with(&courier), "{text}");
+        assert!(
+            text.contains("[obj:quiet_stash]\r\n")
+                && text.contains("custom_data = @spawn/custom_data/l01_escape_quiet_stash.ltx\r\n"),
+            "{text}"
+        );
+        // a model without its case: the box's own, no visual line
+        let lost = text.split("[obj:lost_stash]").nth(1).unwrap_or_default();
+        assert!(!lost.contains("visual"), "{text}");
+        // no story id anywhere, and nothing but the false keys
+        assert!(!text.contains("story") && bake.custom_data.iter().all(|(_, t)| !t.contains("story")));
+        assert_eq!(
+            bake.custom_data,
+            [
+                (
+                    "l01_escape_quiet_stash.ltx".to_owned(),
+                    "[xms_stash]\r\nrandom = false\r\nloot = false\r\n".to_owned()
+                ),
+                ("l01_escape_lost_stash.ltx".to_owned(), "[xms_stash]\r\nloot = false\r\n".to_owned()),
+            ]
+        );
+        let r = &bake.result;
+        assert_eq!((r.stashes, r.exported, r.invisible, r.scaled), (3, 3, 0, 1));
+        assert_eq!(r.names, ["courier_stash", "quiet_stash", "lost_stash"]);
+        assert_eq!(
+            r.warnings,
+            [
+                "'lost_stash' is a stash, and its model has no unseen case 'props\\crate_case' in the game, the project or the editor's data: the stash opens by inventory_box's own case box (0.94 x 0.43 x 0.48 m)",
+                "'lost_stash' is a stash and is scaled: its case is not, and the stash opens at the model's own size",
+            ]
+        );
+        // a game without pieces: the object is a prop of the layer too, under a name of its own
+        let mut found = visuals.clone();
+        found.props.insert("dynamics\\equipment_cache\\equipment_box_02".into(), Found::Game);
+        let input = SpawnInput { visuals: &found, statics_in_piece: false, ..input };
+        let names = super::bake(&input).unwrap().result.names;
+        assert_eq!(&names[..3], ["courier_stash", "quiet_stash", "lost_stash"]);
+        assert!(names.contains(&"courier_stash_2".to_owned()), "{names:?}");
+        // another object the layer writes under the stash's name: refused, nothing written
+        let mut clash = s.clone();
+        clash.insert(authored(
+            Object::new(
+                ObjClass::SpawnPoint,
+                "quiet stash",
+                ObjData::Spawn(Box::new(SpawnData::of_kind(PointKind::PlayerStart))),
+            ),
+            Vec3::ZERO,
+        ));
+        let input = SpawnInput { scene: &clash, statics_in_piece: true, ..input };
+        let e = super::bake(&input).expect_err("refused");
+        assert!(
+            e.0.starts_with("quiet_stash is a stash, and a quest reaches it by its name: quiet stash"),
+            "{}",
+            e.0
         );
     }
 

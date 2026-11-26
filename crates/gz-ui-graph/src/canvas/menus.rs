@@ -77,6 +77,14 @@ impl PickFor {
     }
 }
 
+/// The keys an action of the window is bound to now (the Keyboard page can bind them again).
+fn bound_keys(cx: &CanvasCx<'_>, id: &str) -> String {
+    cx.editor
+        .and_then(|e| gz_app::Actions::of(e))
+        .map(|actions| actions.table.read().keys_label(id))
+        .unwrap_or_default()
+}
+
 /// An action's menu row: its title (or `label`), icon and keys as bound now, off with its reason.
 /// Picked, the tab runs it.
 fn action_row(ui: &mut Ui, cx: &mut CanvasCx<'_>, id: &'static str, label: Option<&'static str>) -> bool {
@@ -558,12 +566,23 @@ impl Canvas {
                 if menu_item(ui, "Replace Node...", MenuItem::default()) {
                     self.chain_menu(Menu::Picker(PickFor::Replace { node: id.clone() }), at_screen);
                 }
-                if menu_item(ui, "Duplicate", MenuItem { icon: Icon::Duplicate, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "Duplicate",
+                    MenuItem {
+                        icon: Icon::Duplicate,
+                        keys: &bound_keys(cx, "edit.duplicate"),
+                        ..MenuItem::default()
+                    },
+                ) {
                     cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::Duplicate { wires: false })));
                 }
                 action_row(ui, cx, "graph.duplicate_with_wires", None);
-                if menu_item(ui, "Copy", MenuItem { icon: Icon::Copy, keys: "Ctrl+C", ..MenuItem::default() })
-                    && let Some(t) = Self::copy_text(cx.graph, &cx.view.selection)
+                if menu_item(
+                    ui,
+                    "Copy",
+                    MenuItem { icon: Icon::Copy, keys: &bound_keys(cx, "edit.copy"), ..MenuItem::default() },
+                ) && let Some(t) = Self::copy_text(cx.graph, &cx.view.selection)
                 {
                     ctx.copy_text(t);
                 }
@@ -616,6 +635,7 @@ impl Canvas {
                     action_row(ui, cx, "graph.straighten", None);
                     ui.separator();
                     action_row(ui, cx, "graph.auto_layout_selection", None);
+                    action_row(ui, cx, "graph.auto_layout_tree", None);
                     action_row(ui, cx, "graph.auto_layout_branch", None);
                 });
                 action_row(ui, cx, "graph.add_frame", None);
@@ -633,10 +653,20 @@ impl Canvas {
                 if menu_item(
                     ui,
                     "Delete",
-                    MenuItem { icon: Icon::Delete, keys: "Del", danger: true, ..MenuItem::default() },
+                    MenuItem {
+                        icon: Icon::Delete,
+                        keys: &bound_keys(cx, "edit.delete"),
+                        danger: true,
+                        ..MenuItem::default()
+                    },
                 ) && !cx.view.selection.is_empty()
                 {
-                    cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::Delete)));
+                    // the selected reroutes go with the nodes, one undo step, as with the Delete key
+                    let selection = cx.view.selection.clone();
+                    match self.delete_ops(sc, &selection) {
+                        Some(ops) => cx.ops.push(Op::Doc(DocOp::ApplyOps(ops))),
+                        None => cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::Delete))),
+                    }
                 }
             }
             Menu::Action { node, exit, index } => {
@@ -719,6 +749,7 @@ impl Canvas {
                 if menu_item(ui, "Remove Reroutes", MenuItem { enabled: has_via, ..MenuItem::default() })
                     && let Some(li) = li
                 {
+                    self.drop_knots_of(sc, li);
                     self.push_route(sc, cx, li, &[]);
                 }
                 ui.separator();
@@ -735,16 +766,32 @@ impl Canvas {
                 }
             }
             Menu::Knot { link, index } => {
-                if menu_item(ui, "Remove Reroute", MenuItem { icon: Icon::Delete, ..MenuItem::default() })
-                    && let Some(l) = sc.links.get(*link)
+                // a selected reroute among others: the menu speaks for all of them
+                let many = self.knot_selected(*link, *index) && self.knot_hits.len() > 1;
+                if many {
+                    if menu_item(
+                        ui,
+                        "Remove Selected Reroutes",
+                        MenuItem { icon: Icon::Delete, ..MenuItem::default() },
+                    ) && let Some(ops) = self.delete_ops(sc, &[])
+                    {
+                        cx.ops.push(Op::Doc(DocOp::ApplyOps(ops)));
+                    }
+                } else if menu_item(
+                    ui,
+                    "Remove Reroute",
+                    MenuItem { icon: Icon::Delete, ..MenuItem::default() },
+                ) && let Some(l) = sc.links.get(*link)
                 {
                     let mut via = l.via.clone();
                     if *index < via.len() {
                         via.remove(*index);
                     }
+                    self.forget_knot(sc, *link, *index);
                     self.push_route(sc, cx, *link, &via);
                 }
                 if menu_item(ui, "Remove Every Reroute of the Wire", MenuItem::default()) {
+                    self.drop_knots_of(sc, *link);
                     self.push_route(sc, cx, *link, &[]);
                 }
             }
@@ -815,7 +862,11 @@ impl Canvas {
                 if menu_item(
                     ui,
                     "Paste",
-                    MenuItem { icon: Icon::Paste, keys: "Ctrl+V", ..MenuItem::default() },
+                    MenuItem {
+                        icon: Icon::Paste,
+                        keys: &bound_keys(cx, "edit.paste"),
+                        ..MenuItem::default()
+                    },
                 ) {
                     self.want_paste = Some(*at);
                 }

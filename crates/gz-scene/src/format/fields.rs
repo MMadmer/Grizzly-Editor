@@ -13,7 +13,7 @@ use crate::math::Vec3;
 use crate::model::{MotionRaw, ObjData, Object, SceneState, co};
 use crate::objects::{
     CF_BOX, CF_SPHERE, Fuzzy, LT_DIRECT, LT_POINT, LT_SPOT, SHAPE_COMMON, SHAPE_LEVEL_BOUND, SO_USE_SURFACE,
-    SO_VISUAL_MODE, ShapeData, ShapeDef, SurfaceOverride, WayPoint, light_flags,
+    SO_VISUAL_MODE, ShapeData, ShapeDef, Stash, SurfaceOverride, WayPoint, light_flags,
 };
 
 /// What a key holds, for the reference and the property rows.
@@ -465,6 +465,44 @@ fn surfaces_of(v: &Value) -> Result<Vec<SurfaceOverride>, Bad> {
 
 const SO_NAMED: u32 = SO_USE_SURFACE | SO_VISUAL_MODE;
 
+/// A stash as its key writes it: `true` while it says nothing of itself, else the keys that are
+/// `false`.
+fn stash_value(s: Option<Stash>) -> Value {
+    let Some(s) = s else { return Value::Nil };
+    if s == Stash::default() {
+        return Value::Bool(true);
+    }
+    let mut t = Table::new();
+    if !s.random {
+        t.put("random", false);
+    }
+    if !s.loot {
+        t.put("loot", false);
+    }
+    Value::Table(t)
+}
+
+fn stash_of(v: &Value) -> Result<Option<Stash>, Bad> {
+    const TAKES: &str = "takes true, or { random = false, loot = false }";
+    match v {
+        Value::Nil | Value::Bool(false) => Ok(None),
+        Value::Bool(true) => Ok(Some(Stash::default())),
+        Value::Table(t) if t.arr.is_empty() => {
+            let mut s = Stash::default();
+            for (k, x) in &t.fields {
+                let on = as_bool(x).map_err(|_| format!("{TAKES}: '{k}' takes true or false"))?;
+                match k.as_str() {
+                    "random" => s.random = on,
+                    "loot" => s.loot = on,
+                    _ => return Err(format!("{TAKES}, not '{k}'")),
+                }
+            }
+            Ok(Some(s))
+        }
+        _ => Err(TAKES.into()),
+    }
+}
+
 static SCENE_OBJECT: &[Field<Object>] = &[
     field!(
         SceneObject,
@@ -522,6 +560,18 @@ static SCENE_OBJECT: &[Field<Object>] = &[
         |d| int(d.flags & !SO_NAMED),
         |d, v| d.flags = (d.flags & SO_NAMED) | (as_u32(v)? & !SO_NAMED),
         applies = |o| matches!(&o.data, ObjData::SceneObject(d) if d.flags & !SO_NAMED != 0)
+    ),
+    field!(
+        SceneObject,
+        "stash",
+        "Stash",
+        "Stash",
+        "",
+        Ty::Table("`true`, or `{ random = false, loot = false }`: each key `true` when left out"),
+        "none",
+        "The object is a stash: the build puts an `inventory_box` over it - the model's unseen case `<ref>_case` at the same place, or the box's own case where the model has none - under the object's name, and a quest reaches it by the name (an object reference `name = \"<name>\"`). `random = false`: the game never puts a random stash's loot in it; `loot = false`: no NPC searches it or takes what is in it. A false key is written into the box's custom data as `[xms_stash]`.",
+        |d| stash_value(d.stash),
+        |d, v| d.stash = stash_of(v)?
     ),
 ];
 

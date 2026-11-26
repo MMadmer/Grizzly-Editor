@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use gz_asset::{AssetFile, KindOps};
 use gz_base::Problem;
 use gz_editor::Editor;
-use gz_luadata::Seg;
+use gz_luadata::{LuaDataError, LuaDoc, Seg, Value};
 use gz_project::AssetKind;
 
 use crate::asset;
@@ -39,12 +39,55 @@ const TASK: &[&str] = &["title", "descr", "type", "target", "icon", "auto_comple
 const ROLE: &[&str] = &["title", "many", "optional", "default"];
 const KNOWN: &[(&str, &[&str])] = &[("", TOP), ("nodes.*", NODE), ("tasks.*", TASK), ("roles.*", ROLE)];
 
+/// The steps of the format: `MIGRATIONS[0]` lifts version 1 to 2. The game's runtime takes the same
+/// steps (`xms_nq_load.script`, `ASSET_MIGRATE`): change both or neither.
+const MIGRATIONS: &[gz_asset::Migration] = &[version_2];
+
+/// Version 2: a signal's plain name is the graph's own module's - two modules that both send
+/// `done` no longer start each other's quests; `<module>.<name>` is one other module's and
+/// `*.<name>` every module's. In version 1 a plain name heard every module: a listener of an older
+/// graph keeps hearing them all, its plain name becoming `*.<name>`. What a graph sends is as it was.
+fn version_2(doc: &mut LuaDoc) -> Result<(), LuaDataError> {
+    fn listeners(v: &Value, at: &mut Vec<Seg>, out: &mut Vec<(Vec<Seg>, String)>) {
+        if !v.is_table() {
+            return;
+        }
+        if v.get_string("kind", "") == "event.signal"
+            && let Some(p) = v.get("params")
+        {
+            let name = p.get_string("name", "");
+            if !name.is_empty() && !name.contains('.') {
+                let mut path = at.clone();
+                path.extend([Seg::key("params"), Seg::key("name")]);
+                out.push((path, name));
+            }
+        }
+        for (k, x) in v.fields() {
+            at.push(Seg::key(k.as_str()));
+            listeners(x, at, out);
+            at.pop();
+        }
+        for (i, x) in v.arr().iter().enumerate() {
+            at.push(Seg::Index(i));
+            listeners(x, at, out);
+            at.pop();
+        }
+    }
+    let mut found = Vec::new();
+    listeners(&doc.value(), &mut Vec::new(), &mut found);
+    for (path, name) in found {
+        doc.set(&path, &Value::from(format!("*.{name}")))?;
+    }
+    Ok(())
+}
+
 /// The kinds of the graph area.
 #[must_use]
 pub fn kinds() -> [KindOps; 2] {
     let make = |kind: AssetKind| {
         let mut k = KindOps::of(kind);
         k.known = KNOWN;
+        k.migrations = MIGRATIONS;
         k.reference_doc = if kind == AssetKind::Behaviour {
             "docs/nq/NQ_FORMAT.md section 10"
         } else {
@@ -193,6 +236,27 @@ fn check(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<Proble
                 .filter(|p| p.code != "E001")
                 .map(|p| positioned(p, &file)),
         );
+        // what ships is the file as written: its own version is what the game reads
+        let written = i32::try_from(file.read_version).unwrap_or(i32::MAX);
+        let vkey = if graph.is_behaviour() { "beh" } else { "nq" };
+        let current = i32::try_from(file.ops.version).unwrap_or(written);
+        if let Some(reads) = catalog.reads_format() {
+            if written > reads {
+                out.push(file.place(
+                    Problem::error("E001", crate::validate::newer_than_the_game(vkey, written, reads)),
+                    &[Seg::key(vkey)],
+                ));
+            } else if reads < current {
+                // a file the game reads, which a save of this editor makes one it refuses
+                out.push(file.place(
+                    Problem::warning(
+                        "W002",
+                        crate::validate::saved_newer_than_the_game(vkey, current, reads),
+                    ),
+                    &[Seg::key(vkey)],
+                ));
+            }
+        }
         if graph.is_behaviour() {
             let graphs: Vec<(String, Vec<String>)> = env
                 .index
@@ -323,6 +387,47 @@ async fn reference(ed: Arc<Editor>, behaviour: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// A graph of version 1 is lifted on read: its listeners of a plain signal name keep hearing
+    /// every module (`*.<name>`), what it sends and a qualified name stay, the header says 2.
+    #[test]
+    fn a_version_1_graph_keeps_hearing_every_module() {
+        let [quest, _] = kinds();
+        let ops = std::sync::Arc::new(quest);
+        let text = r#"return {
+  nq = 1,
+  id = "q",
+  nodes = {
+    { id = "t", kind = "trigger.when", cond = { { kind = "event.signal", params = { name = "go" } } }, out = { next = "s" } },
+    { id = "s", kind = "flow.step", on_enter = { { kind = "signal.send", params = { name = "go" } } },
+      cond = { { kind = "any", params = { of = { { kind = "event.signal", params = { name = "mod_b.go" } } } } } } },
+  },
+}
+"#;
+        let rel = gz_base::RelPath::new("q.nqasset").unwrap_or_else(|e| panic!("{e}"));
+        let file = gz_asset::read_text(&ops, rel, std::path::PathBuf::from("q.nqasset"), text, &[])
+            .unwrap_or_else(|f| panic!("{}", f.problem.message));
+        let v = file.doc.value();
+        assert_eq!(v.get("nq").map(|n| n.to_number(0.0)), Some(2.0));
+        let nodes = v.get("nodes").map(|n| n.arr().to_vec()).unwrap_or_default();
+        let heard =
+            nodes[0].get("cond").and_then(|c| c.arr()[0].get("params").map(|p| p.get_string("name", "")));
+        assert_eq!(heard.as_deref(), Some("*.go"));
+        let sent =
+            nodes[1].get("on_enter").and_then(|a| a.arr()[0].get("params").map(|p| p.get_string("name", "")));
+        assert_eq!(sent.as_deref(), Some("go"), "what a graph sends is as it was");
+        let other = nodes[1]
+            .get("cond")
+            .and_then(|c| {
+                c.arr()[0]
+                    .get("params")
+                    .and_then(|p| p.get("of"))
+                    .map(|o| o.arr()[0].get("params").map(|p| p.get_string("name", "")))
+            })
+            .flatten();
+        assert_eq!(other.as_deref(), Some("mod_b.go"), "a qualified name stays");
+    }
+
     use super::*;
     use gz_luadata::path::show;
 

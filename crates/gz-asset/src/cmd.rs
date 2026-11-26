@@ -328,7 +328,7 @@ an asset's content; the editor follows every change to the files at once.
 The syntax, for every Lua asset: one `return { ... }` of literals - tables, strings, numbers,
 booleans - with comments (`--`), trailing commas and long strings (`[[ ... ]]`). No code: an
 identifier as a value, a call or an operator is refused. The first key is the kind's header and
-the format version (`nq = 1`); the extension is the kind and the header agrees with it. Keys the
+the format version (`nq = 2`); the extension is the kind and the header agrees with it. Keys the
 editor does not know are kept where they are; anything with a default may be left out. Things
 are named by `id` / `name`, never by position.
 

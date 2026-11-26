@@ -218,7 +218,7 @@ impl BuildState {
                     let (Some(xform), Some(data)) = (unhex(x), unhex(d)) else { continue };
                     by_class[c.index()].push(Entry {
                         name: SmolStr::new(n),
-                        hash: ObjHash { xform, data },
+                        hash: ObjHash { xform, data, stash: 0 },
                         graph_point: g == "g",
                     });
                 }
@@ -281,13 +281,20 @@ mod tests {
         by_class[ObjClass::SceneObject.index()] = vec![
             Entry {
                 name: "box with spaces 01".into(),
-                hash: ObjHash { xform: 1, data: 2 },
+                hash: ObjHash { xform: 1, data: 2, stash: 0 },
                 graph_point: false,
             },
-            Entry { name: "]]odd[[".into(), hash: ObjHash { xform: 3, data: 4 }, graph_point: false },
+            Entry {
+                name: "]]odd[[".into(),
+                hash: ObjHash { xform: 3, data: 4, stash: 0 },
+                graph_point: false,
+            },
         ];
-        by_class[ObjClass::SpawnPoint.index()] =
-            vec![Entry { name: "gp_01".into(), hash: ObjHash { xform: 5, data: 6 }, graph_point: true }];
+        by_class[ObjClass::SpawnPoint.index()] = vec![Entry {
+            name: "gp_01".into(),
+            hash: ObjHash { xform: 5, data: 6, stash: 0 },
+            graph_point: true,
+        }];
         s.objects = Objects { by_class };
         let text = s.write();
         assert_eq!(BuildState::read(&text).unwrap(), s, "{text}");

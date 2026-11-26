@@ -253,6 +253,34 @@ fn text_row_edit(ui: &mut Ui, role: &'static str, salt: &str, row: &Row, s: &mut
     })
 }
 
+/// A text field over a value whose text does not survive a round trip (a number being typed:
+/// "1." reads 1, "a" of "all" reads 0): while it has the focus it shows what was typed, and every
+/// change is offered to `parse`, which gives the value, or nothing while it is no value yet.
+fn typed_row(
+    ui: &mut Ui,
+    role: &'static str,
+    salt: &str,
+    row: &Row,
+    shown: String,
+    parse: impl Fn(&str) -> Option<Value>,
+) -> Option<Value> {
+    grid(ui, role, salt, |g| {
+        g.row(&row.label, &row.help, row.flags, row.depth, |ui| {
+            let key = ui.make_persistent_id("gz-ui-graph.typing");
+            let mut s = ui.data(|d| d.get_temp::<String>(key)).unwrap_or(shown);
+            let r = grid::text_field(ui, &mut s);
+            let out = if r.changed() { parse(&s) } else { None };
+            if r.has_focus() {
+                ui.data_mut(|d| d.insert_temp(key, s));
+            } else {
+                ui.data_mut(|d| d.remove::<String>(key));
+            }
+            out
+        })
+        .flatten()
+    })
+}
+
 fn number_row(
     ui: &mut Ui,
     role: &'static str,
@@ -402,6 +430,7 @@ impl ParamCx<'_> {
                 | "way_path"
                 | "character_id"
                 | "global_name"
+                | "object_name"
         );
         if doc_scoped {
             // ids and names are data; the second line is data or the editor's word for a kind
@@ -438,6 +467,16 @@ impl ParamCx<'_> {
                     }
                 }
                 "role" => self.graph.roles.iter().for_each(|r| push(&r.name, Tx::EMPTY)),
+                // what is placed under a name a quest reaches: the scene's stashes, the zones of
+                // the level and of the scene; any other name is typed
+                "object_name" => {
+                    self.data.stashes.iter().for_each(|e| push(&e.id, Tx::raw(e.extra.clone())));
+                    if let Some(p) = self.pickers().filter(|p| p.available()) {
+                        for e in p.entries(PickerType::Restrictor) {
+                            push(&e.id, Tx::raw(e.extra.clone()));
+                        }
+                    }
+                }
                 "character_id" => {
                     for c in self.data.characters.iter() {
                         let extra = if c.template {
@@ -462,6 +501,9 @@ impl ParamCx<'_> {
                     "role" => "This graph declares no roles",
                     "character_id" => "No characters in this project - Create > Character",
                     "global_name" => "The module declares no global variables - add one under Global",
+                    "object_name" => {
+                        "No zones or stashes in the level or the open scene: type the object's name"
+                    }
                     _ if self.behaviour => "Nothing declared in this graph",
                     _ => "Nothing declared in this quest",
                 }
@@ -784,22 +826,30 @@ pub fn typed(
             scalar_value(ui, cx, salt, row, v)
         }
         "count_or_all" => {
-            let mut s = match &*v {
+            let shown = match &*v {
                 Value::Number(n) => format!("{}", *n as i64),
                 other => other.to_text(""),
             };
-            if text_row_edit(ui, role, salt, row, &mut s) {
+            let parse = |s: &str| {
                 let t = s.trim();
-                *v = if t.is_empty() {
+                Some(if t.is_empty() {
                     Value::Nil
                 } else if t == "all" {
                     Value::from("all")
+                } else if "all".starts_with(t) {
+                    // "a", "al": "all" on its way
+                    return None;
                 } else {
                     Value::Number(text::c_atof(t))
-                };
-                return true;
+                })
+            };
+            match typed_row(ui, role, salt, row, shown, parse) {
+                Some(nv) => {
+                    *v = nv;
+                    true
+                }
+                None => false,
             }
-            false
         }
         _ => {
             let mut s = v.to_text("");
@@ -1031,6 +1081,7 @@ fn pick_type_of(mode: &str) -> &str {
         "path" => "way_path",
         "story" => "story_id",
         "character" => "character_id",
+        "name" => "object_name",
         other => other,
     }
 }
@@ -1159,6 +1210,8 @@ pub fn object_ref(
     let mut list = modes(&["story", "ref"]);
     if character {
         list.push("character".to_owned());
+        // an object placed in the level or the module's scene, by its name
+        list.push("name".to_owned());
     }
     let mut mode = mode_of(v, &list);
     let mut ch = false;
@@ -2894,38 +2947,42 @@ pub fn lua(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
 
 /// A bool, a number or a string typed by its content.
 pub fn scalar_value(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
-    let mut s = match &*v {
+    let shown = match &*v {
         Value::Bool(b) => (if *b { "true" } else { "false" }).to_owned(),
         Value::Number(n) => look::num(*n),
         other => other.to_text(""),
     };
-    if !text_row_edit(ui, cx.role, salt, row, &mut s) {
-        return false;
-    }
-    let t = s.trim();
-    *v = match t {
-        "true" => Value::Bool(true),
-        "false" => Value::Bool(false),
-        _ => match gz_luadata::Value::from(t).to_number(f64::NAN) {
-            n if !t.is_empty() && !n.is_nan() => Value::Number(n),
-            _ => Value::from(s.as_str()),
-        },
+    let parse = |s: &str| {
+        let t = s.trim();
+        Some(match t {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => match gz_luadata::Value::from(t).to_number(f64::NAN) {
+                n if !t.is_empty() && !n.is_nan() => Value::Number(n),
+                _ => Value::from(s),
+            },
+        })
     };
-    true
+    match typed_row(ui, cx.role, salt, row, shown, parse) {
+        Some(nv) => {
+            *v = nv;
+            true
+        }
+        None => false,
+    }
 }
 
 /// A value the catalog does not know, kept and edited as Lua.
 pub fn raw(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
-    let mut s = gz_luadata::write_value(v, 0);
-    if !text_row_edit(ui, cx.role, salt, row, &mut s) {
-        return false;
-    }
-    match gz_luadata::parse(&format!("return {s}")) {
-        Ok(nv) => {
+    let shown = gz_luadata::write_value(v, 0);
+    // what does not read as Lua yet is being typed: it stays in the field, the value waits
+    let parse = |s: &str| gz_luadata::parse(&format!("return {s}")).ok();
+    match typed_row(ui, cx.role, salt, row, shown, parse) {
+        Some(nv) => {
             *v = nv;
             true
         }
-        Err(_) => false,
+        None => false,
     }
 }
 

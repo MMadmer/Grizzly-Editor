@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "grizzly"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-app",
  "gz-asset",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "gz-app"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "egui",
@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "gz-asset"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-base",
@@ -1356,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "gz-base"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "encoding_rs",
  "serde",
@@ -1367,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "gz-build"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-base",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "gz-catalog"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "flate2",
  "gz-base",
@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "gz-characters"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-asset",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "gz-chunk"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "gz-corpus"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-chunk",
  "rayon",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "gz-crash"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-log",
  "gz-win",
@@ -1457,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "gz-editor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "futures",
@@ -1477,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "gz-entities"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1495,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "gz-export-level"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "glam",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "gz-feedback"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-level"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1560,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-mesh"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "gz-base",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-object"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bitflags 2.13.2",
  "glam",
@@ -1589,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-ogf"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-sound"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-base",
  "gz-chunk",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-spawn"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-tex"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bcdec_rs",
  "bitflags 2.13.2",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-xml"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-base",
  "gz-corpus",
@@ -1655,7 +1655,7 @@ dependencies = [
 
 [[package]]
 name = "gz-fmt-xr"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "gz-game"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-asset",
@@ -1694,7 +1694,7 @@ dependencies = [
 
 [[package]]
 name = "gz-gamelib"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "glam",
@@ -1731,7 +1731,7 @@ dependencies = [
 
 [[package]]
 name = "gz-github"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "getrandom 0.3.4",
@@ -1750,14 +1750,14 @@ dependencies = [
 
 [[package]]
 name = "gz-ico"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "gz-items"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-asset",
@@ -1790,7 +1790,7 @@ dependencies = [
 
 [[package]]
 name = "gz-lc"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1810,7 +1810,7 @@ dependencies = [
 
 [[package]]
 name = "gz-lc-gpu"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bytemuck",
  "futures",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "gz-lc-light"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1845,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "gz-levelbuild"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "gz-log"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "crossbeam-channel",
  "gz-base",
@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ltx"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-base",
  "gz-corpus",
@@ -1909,7 +1909,7 @@ dependencies = [
 
 [[package]]
 name = "gz-lua"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-luadata",
  "mlua",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "gz-luadata"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-corpus",
  "rustc-hash 2.1.3",
@@ -1932,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "gz-mcp"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-editor",
  "gz-task",
@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "gz-mcp-bridge"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-ico",
  "serde_json",
@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "gz-media"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-asset",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "gz-mod"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-base",
@@ -2004,7 +2004,7 @@ dependencies = [
 
 [[package]]
 name = "gz-nq"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-asset",
@@ -2035,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "gz-particles"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-corpus",
@@ -2045,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "gz-pda"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-asset",
@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "gz-pix"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "png",
@@ -2075,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "gz-project"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "gz-base",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "gz-publish"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-base",
  "gz-editor",
@@ -2119,7 +2119,7 @@ dependencies = [
 
 [[package]]
 name = "gz-query"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-base",
  "gz-task",
@@ -2130,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "gz-release"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -2163,7 +2163,7 @@ dependencies = [
 
 [[package]]
 name = "gz-render"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -2185,7 +2185,7 @@ dependencies = [
 
 [[package]]
 name = "gz-scene"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "futures",
@@ -2225,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "gz-screens"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "gz-base",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "gz-store"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "gz-base",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "gz-task"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "futures",
@@ -2274,7 +2274,7 @@ dependencies = [
 
 [[package]]
 name = "gz-terrain"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "glam",
  "gz-base",
@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "gz-text"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "encoding_rs",
  "futures",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "gz-base",
@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-app"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "gz-app",
@@ -2348,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-content"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "glam",
@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-graph"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arboard",
  "egui",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-level"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "glam",
@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-mod"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "gz-app",
@@ -2467,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-pda"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "futures",
@@ -2498,7 +2498,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-previews"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "cpal",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-release"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "gz-app",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-text"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "futures",
@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-viewport"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "egui",
@@ -2630,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "gz-ui-world"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "egui",
  "gz-app",
@@ -2662,7 +2662,7 @@ dependencies = [
 
 [[package]]
 name = "gz-update"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -2684,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "gz-vfs"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gz-base",
  "gz-chunk",
@@ -2697,7 +2697,7 @@ dependencies = [
 
 [[package]]
 name = "gz-win"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "windows",
@@ -2705,7 +2705,7 @@ dependencies = [
 
 [[package]]
 name = "gz-world"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "futures",
  "glam",

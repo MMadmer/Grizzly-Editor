@@ -72,7 +72,7 @@ fn check_hook(editor: Arc<Editor>, rel: RelPath) -> BoxFuture<'static, Vec<Probl
 
 /// Puts these checks into `asset.check`.
 pub(crate) fn install(editor: &Arc<Editor>) {
-    gz_asset::Kinds::of(editor).add_text_check(CHECKED, check_hook);
+    gz_asset::Kinds::of(editor).add_text_check("text", CHECKED, check_hook);
 }
 
 // ---- positions ---------------------------------------------------------------------------------

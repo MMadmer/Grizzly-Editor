@@ -270,7 +270,7 @@ pub struct Graph {
 impl Default for Graph {
     fn default() -> Self {
         Self {
-            nq: 1,
+            nq: i32::try_from(gz_project::AssetKind::Quest.version()).unwrap_or(1),
             id: String::new(),
             kind: DocKind::Quest,
             title: Value::Nil,
@@ -1611,12 +1611,12 @@ mod tests {
     #[test]
     fn templates() {
         let q = quest_template("wolf");
-        assert!(q.starts_with("return {\n  nq = 1,\n  id = \"wolf\",\n  title = \"New quest\",\n"), "{q}");
+        assert!(q.starts_with("return {\n  nq = 2,\n  id = \"wolf\",\n  title = \"New quest\",\n"), "{q}");
         assert!(q.contains(
             "    { id = \"finish\", kind = \"flow.end\", params = { status = \"completed\" } },\n"
         ));
         let b = behaviour_template("");
-        assert!(b.starts_with("return {\n  beh = 1,\n  id = \"new_behaviour\",\n"), "{b}");
+        assert!(b.starts_with("return {\n  beh = 2,\n  id = \"new_behaviour\",\n"), "{b}");
         assert!(b.contains("  roles = { squad = { title = \"Squad\", many = true } },\n"));
         assert!(template_for("q/NewBehaviour2.behasset").contains("id = \"newbehaviour2\""));
     }

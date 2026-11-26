@@ -1546,7 +1546,10 @@ pub fn read_with(
             }
             if !state.name_free(&o.name) {
                 let fresh = state.unique_name(&o.name);
-                problems.push(at_span(
+                // a stash is reached by its name: renamed, a quest finds the other object
+                let p = if crate::objects::stash::of(&o).is_some() {
+                    Problem::error("S226", crate::objects::stash::taken_text(&o.name, &fresh))
+                } else {
                     Problem::warning(
                         "S013",
                         format!(
@@ -1554,10 +1557,9 @@ pub fn read_with(
                             o.name,
                             o.class.label()
                         ),
-                    ),
-                    &rel,
-                    span,
-                ));
+                    )
+                };
+                problems.push(at_span(p, &rel, span));
                 o.name = SmolStr::new(fresh);
             }
             if let ObjData::Spawn(d) = &o.data
@@ -2065,6 +2067,59 @@ mod tests {
             _ => String::new(),
         };
         assert_eq!((plays("radio_01"), plays("radio_02")), ("road_songs".to_owned(), String::new()));
+    }
+
+    /// A stash is `stash = true` while it says nothing of itself, else the keys that are false;
+    /// both spellings read back, and a key it does not take is refused at its line.
+    #[test]
+    fn a_stash_reads_back_in_both_spellings() {
+        use crate::objects::{SceneObjectData, Stash};
+        let mut s = scene();
+        let stashes = [
+            ("cache_plain", Some(Stash::default())),
+            ("cache_quiet", Some(Stash { random: false, loot: false })),
+            ("cache_kept", Some(Stash { random: true, loot: false })),
+            ("crate", None),
+        ];
+        for (name, stash) in stashes {
+            let d = SceneObjectData { stash, ..SceneObjectData::library("dynamics\\box") };
+            s.insert(Object::new(ObjClass::SceneObject, name, ObjData::SceneObject(d)));
+        }
+        let disk = saved(Texts::default(), &write(&s, None, None).unwrap());
+        let text = file(&disk, "objects.lua");
+        assert!(text.contains("stash = true"), "{text}");
+        assert!(text.contains("stash = { random = false, loot = false }"), "{text}");
+        assert!(text.contains("stash = { loot = false }"), "{text}");
+        assert_eq!(text.matches("stash").count(), 3, "{text}");
+        let r = read_back(&disk);
+        for (name, stash) in stashes {
+            let o = r.state.find(ObjClass::SceneObject, name).unwrap();
+            assert_eq!(crate::objects::stash::of(o), stash, "{name}");
+        }
+        // written by hand: `true`, a table, and a key the stash does not take
+        let hand = "return {\n  objects = {\n    { name = \"a\", ref = \"dynamics\\\\box\", stash = true },\n    { name = \"b\", ref = \"dynamics\\\\box\", stash = { random = false } },\n    { name = \"c\", ref = \"dynamics\\\\box\", stash = { randum = false } },\n  },\n}\n";
+        let texts = Texts {
+            scene: "return {\n  scene = 2,\n}\n".into(),
+            files: vec![("objects.lua".into(), hand.into())],
+            layers: Vec::new(),
+        };
+        let main = RelPath::new("levels/yard.scene").unwrap();
+        let folder = RelPath::new("levels/yard").unwrap();
+        let r = read_based(&texts, &main, &folder, None, None, None).unwrap();
+        let of = |n: &str| crate::objects::stash::of(r.state.find(ObjClass::SceneObject, n).unwrap());
+        assert_eq!(of("a"), Some(Stash::default()));
+        assert_eq!(of("b"), Some(Stash { random: false, loot: true }));
+        assert_eq!(of("c"), None);
+        let p = r.problems.iter().find(|p| p.code == "S011").unwrap_or_else(|| panic!("{:?}", r.problems));
+        assert!(p.message.contains("randum") && p.line == Some(5), "{p:?}");
+        // a stash whose name another object has is renamed, and that is an error: a quest that
+        // names it would find the other
+        let twice = "return {\n  objects = {\n    { name = \"a\", ref = \"dynamics\\\\box\" },\n    { name = \"A\", ref = \"dynamics\\\\box\", stash = true },\n  },\n}\n";
+        let texts = Texts { files: vec![("objects.lua".into(), twice.into())], ..texts };
+        let r = read_based(&texts, &main, &folder, None, None, None).unwrap();
+        let p = r.problems.iter().find(|p| p.code == "S226").unwrap_or_else(|| panic!("{:?}", r.problems));
+        assert_eq!((p.severity, p.line), (gz_base::Severity::Error, Some(4)), "{p:?}");
+        assert!(p.message.contains("this stash is"), "{}", p.message);
     }
 
     #[test]

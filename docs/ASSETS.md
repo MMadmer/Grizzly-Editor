@@ -19,7 +19,7 @@ the game alike.
 ```lua
 -- comments are the author's and survive every save
 return {
-  nq = 1,                                   -- the kind's header key and the format version
+  nq = 2,                                   -- the kind's header key and the format version
   id = "night_watch",
   title = { rus = "Ночной дозор", eng = "Night Watch" },
   nodes = {
@@ -39,7 +39,7 @@ and the editor already edits it without losing a byte it does not change.
 
 ## 2. The rules every kind keeps
 
-1. **A header key names the kind and the version**: `nq = 1`, `beh = 1`, `npc = 1`, `pda = 1`, `item = 1`,
+1. **A header key names the kind and the version**: `nq = 2`, `beh = 2`, `npc = 1`, `pda = 1`, `item = 1`,
    `trade = 1`, `loot = 1`, `recipe = 1`, `scene = 2`, `group = 1`, `mesh = 1`, `tex = 1`, `snd = 1`,
    `grizzly = 1` (the project). The extension is the kind; the
    header has to agree with it.
@@ -71,6 +71,24 @@ and the editor already edits it without losing a byte it does not change.
    `loot`, `craft`, `lists`: `I432`; a row of an item's `sections` about another item asset's section: `I433`),
    the build refuses the module, and the game never reads such a key. A new kind, or a new key of one, is held
    to the same question first: whose is it to say?
+10. **What a module names for the whole game is named after the module.** A section, a string id, the id of a
+   dialog, a specific character or a profile, a story id, an info portion, the name of a level of the module's
+   own, a mode, a console command and a new file under `gamedata` are one name for every module the player has:
+   two that pick one collide, and the game keeps one - the first in the load order; of a file and of a level,
+   the one whose files the game serves - and says who lost (`xms_conflicts`, `xms_report.json`). Such a name
+   carries the module's id as a whole word - bounded by the name's start or end or by `_`, `.` or `-`
+   (`od_rifle`, `wpn_od_ak74`, `st_od_items.xml`, a folder `od`), so the game's own prefixes (`wpn_`, `st_`) stay
+   (`gz_mod::names`). A name the game has already is a change of the game's, and stays as it is. What only the
+   module reads is its own without a word: a quest's tasks (`nq.<module>.*`), a signal from format 2, every
+   object of its scenes - a smart terrain and a way path too -, which the game composes as `<module>.<name>` (a
+   quest and an order name it plainly and reach the module's own first), a global variable, a playlist, a
+   screen. The checks are warnings, never refusals - a module built before them keeps working, and its author
+   clears them in the project: `I434` a section an item makes, `N001` a section of a config or a patch, `N002` a
+   string id, `N003` a dialog, specific character, profile, info portion or article id (of an XML file, or what a
+   `patch\*.xmlp` puts into one), `N004` new files (a warning per folder),
+   `S227` a story id, `S229` the name of a level of the module's own, `W064` an info portion, `mod.mode_name` a
+   mode, `W409` a console command. `N004` is said with the manifest (`asset.check` of `mod.ltx`) and by a build,
+   the rest at their lines.
 
 ## 3. How the editor writes: nothing it did not change
 

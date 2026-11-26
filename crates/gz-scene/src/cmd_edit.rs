@@ -1243,12 +1243,18 @@ async fn scene_audit(ed: Arc<Editor>, p: sense::audit::AuditParams, _o: Origin) 
     let level = snap.meta.level.level_path.to_string();
     let base = ed.exec.io(move || base_names(&roots, &level)).await;
     let radio = crate::game::radio_cx(&ed).await;
+    let names = crate::names::NameSources::names(&ed).await;
+    let meshes = gz_project::library_root(&ed).join("gamedata").join("meshes");
     let state = snap.clone();
     let found = ed
         .exec
         .cpu(move || {
             let sc = sense::Scene { state: &state, lib: &lib, pick: &pick };
-            sense::audit::audit_with(&sc, &p, base.as_ref(), Some(&radio))
+            let names = names
+                .as_deref()
+                .map(|names| crate::names::WithEditorModels { names, meshes: meshes.clone() });
+            let names = names.as_ref().map(|n| n as &dyn crate::names::Names);
+            sense::audit::audit_with(&sc, &p, base.as_ref(), Some(&radio), names)
         })
         .await?;
     // where each object is written: the file of its kind in the scene's folder

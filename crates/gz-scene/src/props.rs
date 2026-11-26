@@ -601,6 +601,21 @@ fn table_rows(state: &SceneState, o: &Object, f: &Field<Object>, cx: &PropCx<'_>
                     .help("The surfaces take the library object's own values again."),
             );
         }
+        (ObjData::SceneObject(d), "stash") => {
+            out.push(Row::new("stash", f.group, f.label, Kind::Bool, Val::Bool(d.stash.is_some())).help(
+                "The build puts a stash over the object - an inventory box at the same place, opened by the model's unseen case - under the object's name: a quest reaches it by that name.",
+            ));
+            if let Some(s) = d.stash {
+                out.push(
+                    Row::new("stash.random", f.group, "Random Stash Loot", Kind::Bool, Val::Bool(s.random))
+                        .help("The game may put a random stash's loot in it; off, it holds only what quests put in it."),
+                );
+                out.push(
+                    Row::new("stash.loot", f.group, "NPCs Search It", Kind::Bool, Val::Bool(s.loot))
+                        .help("The stalkers who search stashes may come to it and take what is in it."),
+                );
+            }
+        }
         (ObjData::Terrain(d), _) => terrain_rows(d, f, out),
         (ObjData::Light(d), "fuzzy") => {
             let g = "Fuzzy";
@@ -1545,6 +1560,15 @@ pub fn set_object(
             if k == "surfaces.reset" {
                 d.flags &= !SO_USE_SURFACE;
                 d.surfaces.clear();
+            } else if k == "stash" {
+                d.stash = on(p).then(|| d.stash.unwrap_or_default());
+            } else if let Some(field) = k.strip_prefix("stash.") {
+                let s = d.stash.as_mut().ok_or("takes a value while the object is a stash (`stash`)")?;
+                match field {
+                    "random" => s.random = on(p),
+                    "loot" => s.loot = on(p),
+                    _ => return Err("is no row of this object".into()),
+                }
             } else if let Some(rest) = k.strip_prefix("surfaces.") {
                 let (sname, field) = rest.rsplit_once('.').ok_or("is no row of this object")?;
                 if d.flags & SO_USE_SURFACE == 0 {
@@ -1806,34 +1830,28 @@ pub fn scene_items(state: &SceneState, list: &str) -> Option<Vec<String>> {
     })
 }
 
-/// The story ids the scene's spawn points carry: `story_id = X` under `[story_object]` of their
-/// custom data, or the bare id right under the header.
+/// The story ids the scene's spawn points carry.
 fn scene_story_ids(state: &SceneState) -> Vec<String> {
-    let mut out = Vec::new();
-    for o in state.of_class(ObjClass::SpawnPoint) {
-        let ObjData::Spawn(sd) = &o.data else { continue };
-        let Some(ini) = sd.entity.as_ref().and_then(SpawnEntity::entity).and_then(|e| e.custom_data()) else {
-            continue;
-        };
-        let Some(at) = ini.find("[story_object]") else { continue };
-        for line in ini[at + "[story_object]".len()..].lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            if line.starts_with('[') {
-                break;
-            }
-            match line.split_once('=') {
-                Some((k, v)) if k.trim() == "story_id" => out.push(v.trim().to_owned()),
-                Some(_) => {}
-                None => out.push(line.to_owned()),
-            }
-            break;
-        }
+    state.of_class(ObjClass::SpawnPoint).filter_map(|o| story_id_of(o)).collect()
+}
+
+/// The story id a spawn point carries: `story_id = X` under `[story_object]` of its custom data,
+/// or the bare id right under the header.
+#[must_use]
+pub fn story_id_of(o: &crate::model::Object) -> Option<String> {
+    let ObjData::Spawn(sd) = &o.data else { return None };
+    let ini = sd.entity.as_ref().and_then(SpawnEntity::entity).and_then(|e| e.custom_data())?;
+    let at = ini.find("[story_object]")?;
+    let line = ini[at + "[story_object]".len()..].lines().map(str::trim).find(|l| !l.is_empty())?;
+    if line.starts_with('[') {
+        return None;
     }
-    out.retain(|s| !s.is_empty());
-    out
+    let id = match line.split_once('=') {
+        Some((k, v)) if k.trim() == "story_id" => v.trim(),
+        Some(_) => return None,
+        None => line,
+    };
+    (!id.is_empty()).then(|| id.to_owned())
 }
 
 /// The ARGB of a sector's colour, for the renderer.
@@ -2134,6 +2152,49 @@ mod tests {
         assert!(set("not a playlist").is_err());
         let barrel = s.get(ids[1]).unwrap();
         assert!(find(&merge(vec![object_rows(&s, barrel, &pcx)]), RADIO_PLAYS).is_none());
+    }
+
+    /// A static object shows Stash; its two switches only while it is one, each set alone.
+    #[test]
+    fn a_static_object_becomes_a_stash_by_its_switches() {
+        let mut s = SceneState::default();
+        let e = cx();
+        let pcx = PropCx { lib: None, entity: &e, radio: None };
+        let id = s.insert(Object::new(
+            ObjClass::SceneObject,
+            "box",
+            ObjData::SceneObject(crate::objects::SceneObjectData::library("dynamics\\box")),
+        ));
+        let rows = |s: &SceneState| merge(vec![object_rows(s, s.get(id).unwrap(), &pcx)]);
+        let set = |s: &SceneState, key: &str, text: &str| -> Result<Object, String> {
+            let all = rows(s);
+            let r = &find(&all, key).ok_or("no row")?.row;
+            let Effect::Object(n) = set_object(s, s.get(id).unwrap(), key, &parse(r, text)?, &pcx)? else {
+                panic!()
+            };
+            Ok(n)
+        };
+        let r = rows(&s);
+        let stash = &find(&r, "stash").expect("a static object has Stash").row;
+        assert_eq!((stash.path.as_str(), &stash.value), ("Stash\\Stash", &Val::Bool(false)));
+        assert!(find(&r, "stash.random").is_none() && find(&r, "stash.loot").is_none());
+        s.replace(set(&s, "stash", "true").unwrap());
+        assert_eq!(crate::objects::stash::of(s.get(id).unwrap()), Some(crate::objects::Stash::default()));
+        let r = rows(&s);
+        assert_eq!(find(&r, "stash.random").unwrap().row.path, "Stash\\Random Stash Loot");
+        assert_eq!(find(&r, "stash.loot").unwrap().row.path, "Stash\\NPCs Search It");
+        s.replace(set(&s, "stash.loot", "false").unwrap());
+        assert_eq!(
+            crate::objects::stash::of(s.get(id).unwrap()),
+            Some(crate::objects::Stash { random: true, loot: false })
+        );
+        // off, and on again: a stash of its own words again
+        s.replace(set(&s, "stash", "false").unwrap());
+        assert_eq!(crate::objects::stash::of(s.get(id).unwrap()), None);
+        assert!(set(&s, "stash.random", "false").is_err());
+        // what is no static object has no such row
+        let light = s.insert(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default())));
+        assert!(find(&merge(vec![object_rows(&s, s.get(light).unwrap(), &pcx)]), "stash").is_none());
     }
 
     #[test]

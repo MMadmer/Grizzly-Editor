@@ -58,6 +58,7 @@ pub mod compose;
 pub mod doc;
 pub mod fields;
 pub mod model;
+pub mod names;
 pub mod resolve;
 pub mod roster;
 mod service;

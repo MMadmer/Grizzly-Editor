@@ -168,13 +168,29 @@ struct ActHit {
 struct Drag {
     /// node index, id, start position
     nodes: Vec<(usize, SmolStr, [f32; 2])>,
-    /// The node under the pointer: the one the grid and the guides place.
+    /// The selected reroutes that go along: wire (a link index of the scene the drag started
+    /// over), its place among the wire's points, start position; and the same reroutes by their
+    /// wire and point, to find them again in a scene that came meanwhile.
+    knots: Vec<(usize, usize, [f32; 2])>,
+    knot_refs: Vec<KnotRef>,
+    /// The scene's content serial when the drag started.
+    edit: u64,
+    /// The node under the pointer: the one the grid and the guides place (none when a reroute is).
     anchor: usize,
     start: Pos2,
     moved: bool,
     delta: [f32; 2],
     /// The wire a lone, unwired node is held over: it goes on it when it is let go.
     on_wire: Option<usize>,
+    /// A plain press on one of several selected things: let go without travel, it alone stays
+    /// selected (a node by its id, or a reroute).
+    single: Option<Single>,
+}
+
+#[derive(Clone, Debug)]
+enum Single {
+    Node(SmolStr),
+    Knot(KnotRef),
 }
 
 /// Positions committed by a drag, drawn until the scene that holds them arrives.
@@ -182,6 +198,8 @@ struct Drag {
 struct Settle {
     from_edit: u64,
     at: Vec<(usize, [f32; 2])>,
+    /// The reroutes moved: wire, place, position.
+    knots: Vec<(usize, usize, [f32; 2])>,
 }
 
 #[derive(Clone, Debug)]
@@ -191,6 +209,16 @@ struct ActDrag {
     index: usize,
     start: Pos2,
     dragging: bool,
+}
+
+/// What a double click asks for once the button is let go: a field focused at the press would
+/// lose its focus at the release, which egui takes for a click elsewhere.
+#[derive(Clone, Debug)]
+enum OnRelease {
+    /// The Details panel focuses the node's id.
+    Rename,
+    /// A frame's title is edited in place.
+    FrameTitle(usize, String),
 }
 
 /// A frame being moved (with the nodes inside it) or resized.
@@ -203,13 +231,31 @@ struct FrameDrag {
     inside: Vec<usize>,
 }
 
-/// A reroute being dragged: its wire (as a link index) and its place among the wire's points.
-#[derive(Clone, Debug)]
-struct KnotDrag {
-    link: usize,
+/// A selected reroute: its wire by the ends and the pin, its place among the wire's points and
+/// the point itself. A wire's index in the scene changes with every edit, and a place among the
+/// points with every reroute put in or taken out before it; the point says which one it was.
+#[derive(Clone, Debug, PartialEq)]
+struct KnotRef {
+    from: SmolStr,
+    pin: SmolStr,
+    to: SmolStr,
     index: usize,
     at: [f32; 2],
-    moved: bool,
+}
+
+impl KnotRef {
+    fn same_wire(&self, o: &KnotRef) -> bool {
+        self.from == o.from && self.pin == o.pin && self.to == o.to
+    }
+
+    /// The same reroute: one wire, one point.
+    fn same(&self, o: &KnotRef) -> bool {
+        self.same_wire(o) && near_point(self.at, o.at)
+    }
+}
+
+fn near_point(a: [f32; 2], b: [f32; 2]) -> bool {
+    (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01
 }
 
 /// Where a wire being drawn starts: an output pin, or an input it comes into.
@@ -290,12 +336,29 @@ pub struct Canvas {
     settle: Option<Settle>,
     marquee: Option<Pos2>,
     linking: Option<Linking>,
+    /// Where the wire being drawn was pressed: let go there, it was a click on the node.
+    link_press: Pos2,
     rewire: Option<Rewire>,
     /// An Alt press on a wire: a click removes it, a drag moves its nearer end.
     alt_press: Option<(usize, Pos2)>,
     act_drag: Option<ActDrag>,
     frame_drag: Option<FrameDrag>,
-    knot_drag: Option<KnotDrag>,
+    /// A frame's place committed by a move or a resize, drawn until the scene that holds it
+    /// arrives: the edit it was made over, the frame, its rectangle.
+    frame_settle: Option<(u64, usize, [f32; 4])>,
+    /// The selected reroutes (view state of the canvas alone: the document selects nodes).
+    knots: Vec<KnotRef>,
+    /// `knots` in this frame's scene: wire (link index), place.
+    knot_hits: Vec<(usize, usize)>,
+    /// The node selection as the last frame left it: one replaced from outside the canvas (Find,
+    /// the Problems drawer, a command, undo) drops the selected reroutes.
+    seen_selection: Vec<SmolStr>,
+    /// A gesture of this frame chose the reroutes with the nodes: a change of the node selection
+    /// does not drop them.
+    knots_kept: bool,
+    /// The last press of the left button, for a double click told at the press: egui tells one
+    /// at the release, after the press already started a gesture.
+    last_press: Option<(f64, Pos2)>,
     /// Ctrl + right drag: the cut line's start.
     cut: Option<Pos2>,
     hot_node: Option<usize>,
@@ -316,6 +379,7 @@ pub struct Canvas {
     pick_items: Vec<PickItem>,
     /// A frame's title being edited in place.
     frame_title: Option<(usize, String, bool)>,
+    on_release: Option<OnRelease>,
     want_frame_all: bool,
     want_frame_sel: bool,
     /// A zoom asked for explicitly: applied after a pending frame picked its own.
@@ -439,11 +503,17 @@ impl Canvas {
             settle: None,
             marquee: None,
             linking: None,
+            link_press: Pos2::ZERO,
             rewire: None,
             alt_press: None,
             act_drag: None,
             frame_drag: None,
-            knot_drag: None,
+            frame_settle: None,
+            knots: Vec::new(),
+            knot_hits: Vec::new(),
+            seen_selection: Vec::new(),
+            knots_kept: false,
+            last_press: None,
             cut: None,
             hot_node: None,
             hot_pin: None,
@@ -460,6 +530,7 @@ impl Canvas {
             next_menu: None,
             pick_items: Vec::new(),
             frame_title: None,
+            on_release: None,
             want_frame_all: frame_on_open,
             want_frame_sel: false,
             want_zoom: None,
@@ -674,6 +745,211 @@ impl Canvas {
         self.drag.as_ref().is_some_and(|d| d.moved) || self.settle.is_some() || self.frame_drag.is_some()
     }
 
+    /// Where a reroute is drawn now: the scene's place, moved by a drag or a commit in flight.
+    fn knot_at(&self, sc: &Scene, li: usize, k: usize) -> [f32; 2] {
+        let base = sc.links.get(li).and_then(|l| l.via.get(k)).copied().unwrap_or([0.0, 0.0]);
+        // a frame being moved carries the wires it holds whole
+        if let Some(f) = &self.frame_drag
+            && !f.resize
+            && sc
+                .links
+                .get(li)
+                .is_some_and(|l| f.inside.contains(&(l.from as usize)) && f.inside.contains(&(l.to as usize)))
+        {
+            return add(base, f.delta);
+        }
+        if let Some(d) = &self.drag
+            && d.moved
+            && let Some((_, _, start)) = d.knots.iter().find(|(l, j, _)| *l == li && *j == k)
+        {
+            return add(*start, d.delta);
+        }
+        if let Some(s) = &self.settle
+            && let Some((_, _, p)) = s.knots.iter().find(|(l, j, _)| *l == li && *j == k)
+        {
+            return *p;
+        }
+        base
+    }
+
+    /// A reroute of this wire is being moved (or its move is in flight).
+    fn knots_moving(&self, sc: &Scene, li: usize) -> bool {
+        let held = |f: &FrameDrag| {
+            sc.links
+                .get(li)
+                .is_some_and(|l| f.inside.contains(&(l.from as usize)) && f.inside.contains(&(l.to as usize)))
+        };
+        self.frame_drag.as_ref().is_some_and(|f| !f.resize && held(f))
+            || self.drag.as_ref().is_some_and(|d| d.moved && d.knots.iter().any(|(l, _, _)| *l == li))
+            || self.settle.as_ref().is_some_and(|s| s.knots.iter().any(|(l, _, _)| *l == li))
+    }
+
+    /// The reroute is selected.
+    fn knot_selected(&self, li: usize, k: usize) -> bool {
+        self.knot_hits.contains(&(li, k))
+    }
+
+    /// The selected reroutes found in this frame's scene, each at its point (its place among the
+    /// wire's points moves when one before it is put in or taken out); one whose wire or point is
+    /// gone drops out of the selection.
+    fn resolve_knots(&mut self, sc: &Scene) {
+        self.knot_hits.clear();
+        if self.knots.is_empty() {
+            return;
+        }
+        let by_wire = Self::wires_by_ends(sc);
+        let mut hits = Vec::with_capacity(self.knots.len());
+        self.knots.retain_mut(|r| {
+            let Some(&li) = by_wire.get(&(r.from.as_str(), r.pin.as_str(), r.to.as_str())) else {
+                return false;
+            };
+            let Some(l) = sc.links.get(li) else { return false };
+            let k = if l.via.get(r.index).is_some_and(|v| near_point(*v, r.at)) {
+                Some(r.index)
+            } else {
+                l.via.iter().position(|v| near_point(*v, r.at))
+            };
+            let Some(k) = k else { return false };
+            r.index = k;
+            hits.push((li, k));
+            true
+        });
+        self.knot_hits = hits;
+    }
+
+    /// The wires of a scene by their ends and pin.
+    fn wires_by_ends(sc: &Scene) -> std::collections::HashMap<(&str, &str, &str), usize> {
+        let mut by_wire = std::collections::HashMap::with_capacity(sc.links.len());
+        for (li, l) in sc.links.iter().enumerate() {
+            if let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) {
+                by_wire.insert((f.id.as_str(), l.pin.as_str(), t.id.as_str()), li);
+            }
+        }
+        by_wire
+    }
+
+    /// A reference found again in another scene: the wire's index and the point's place.
+    fn find_knot(sc: &Scene, r: &KnotRef) -> Option<(usize, usize)> {
+        let li = sc.links.iter().position(|l| {
+            l.pin == r.pin
+                && sc.nodes.get(l.from as usize).is_some_and(|n| n.id == r.from)
+                && sc.nodes.get(l.to as usize).is_some_and(|n| n.id == r.to)
+        })?;
+        let k = sc.links.get(li)?.via.iter().position(|v| near_point(*v, r.at))?;
+        Some((li, k))
+    }
+
+    /// The reference of a reroute of this frame's scene.
+    fn knot_ref(sc: &Scene, li: usize, k: usize) -> Option<KnotRef> {
+        let l = sc.links.get(li)?;
+        let (f, t) = (sc.nodes.get(l.from as usize)?, sc.nodes.get(l.to as usize)?);
+        Some(KnotRef {
+            from: f.id.clone(),
+            pin: l.pin.clone(),
+            to: t.id.clone(),
+            index: k,
+            at: *l.via.get(k)?,
+        })
+    }
+
+    /// A reroute taken out of its wire leaves the selection.
+    fn forget_knot(&mut self, sc: &Scene, li: usize, k: usize) {
+        if let Some(w) = Self::knot_ref(sc, li, k) {
+            self.knots.retain(|r| !r.same(&w));
+        }
+    }
+
+    /// Every reroute of a wire leaves the selection.
+    fn drop_knots_of(&mut self, sc: &Scene, li: usize) {
+        let Some(l) = sc.links.get(li) else { return };
+        let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else { return };
+        self.knots.retain(|r| !(r.from == f.id && r.pin == l.pin && r.to == t.id));
+    }
+
+    /// A selected reroute moved from `was` to `now`: its reference follows it.
+    fn knot_moved(&mut self, w: &KnotRef, now: [f32; 2]) {
+        for r in &mut self.knots {
+            if r.same(w) {
+                r.at = now;
+            }
+        }
+    }
+
+    /// The node selection was set from outside the canvas (a command): the reroutes it chose
+    /// with it stay.
+    pub fn selection_seen(&mut self, selection: &[SmolStr]) {
+        self.seen_selection = selection.to_vec();
+    }
+
+    /// No reroute is selected.
+    pub fn clear_knots(&mut self) {
+        self.knots.clear();
+        self.knot_hits.clear();
+    }
+
+    /// How many reroutes are selected.
+    #[must_use]
+    pub fn selected_knots(&self) -> usize {
+        self.knots.len()
+    }
+
+    /// Selects every reroute of the scene (Select All), or none.
+    pub fn select_all_knots(&mut self, sc: Option<&Scene>, all: bool) {
+        self.knots.clear();
+        if all && let Some(sc) = sc {
+            for (li, l) in sc.links.iter().enumerate() {
+                for k in 0..l.via.len() {
+                    self.knots.extend(Self::knot_ref(sc, li, k));
+                }
+            }
+        }
+    }
+
+    /// What Delete does to the selection when reroutes are in it: the nodes removed first, then
+    /// one `route` op per wire that stays, with the points that stay - one undo step named after
+    /// what goes. `None` when no reroute is selected (the document's own Delete takes the nodes).
+    #[must_use]
+    pub fn delete_ops(&mut self, sc: &Scene, nodes: &[SmolStr]) -> Option<Value> {
+        self.resolve_knots(sc);
+        if self.knot_hits.is_empty() {
+            return None;
+        }
+        let mut ops = Vec::new();
+        if !nodes.is_empty() {
+            let ids: Vec<Value> = nodes.iter().map(|s| Value::from(s.as_str())).collect();
+            ops.push(op_table(&[("op", Value::from("remove")), ("nodes", Value::from(ids))]));
+        }
+        let mut wires: Vec<usize> = self.knot_hits.iter().map(|(li, _)| *li).collect();
+        wires.sort_unstable();
+        wires.dedup();
+        for li in wires {
+            let Some(l) = sc.links.get(li) else { continue };
+            let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else {
+                continue;
+            };
+            // a wire of a node that goes, goes with it
+            if nodes.iter().any(|n| *n == f.id || *n == t.id) {
+                continue;
+            }
+            let keep: Vec<Value> = l
+                .via
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| !self.knot_hits.contains(&(li, *k)))
+                .map(|(_, q)| point(*q))
+                .collect();
+            ops.push(op_table(&[
+                ("op", Value::from("route")),
+                ("from", Value::from(f.id.as_str())),
+                ("pin", Value::from(l.pin.as_str())),
+                ("to", Value::from(t.id.as_str())),
+                ("points", Value::from(keep)),
+            ]));
+        }
+        self.clear_knots();
+        Some(Value::from(ops))
+    }
+
     fn rect_of(&self, sc: &Scene, view: &ViewMirror, i: usize) -> Rect {
         let n = sc.nodes.get(i);
         let p = self.pos_of(sc, i);
@@ -865,7 +1141,21 @@ impl Canvas {
         p: Pos2,
         detail: Detail,
     ) -> Option<(usize, bool, usize, f32)> {
-        let node = self.hit_node(sc, view, p)?;
+        let Some(node) = self.hit_node(sc, view, p) else {
+            // just under a node: the end of what it runs on exit, whether it has such actions or not
+            let s = Self::scale(view);
+            let reach = ACTION_ROW * s;
+            let below = self.candidates(sc, view, p, reach).into_iter().find(|&i| {
+                let r = self.rect_of(sc, view, i);
+                p.x >= r.min.x && p.x <= r.max.x && p.y > r.max.y && p.y <= r.max.y + reach
+            })?;
+            let n = sc.nodes.get(below)?;
+            if n.trigger || detail != Detail::Full || n.collapsed {
+                return None;
+            }
+            let gn = g.find_node(&n.id)?;
+            return Some((below, true, gn.on_exit.len(), self.rect_of(sc, view, below).max.y));
+        };
         let n = sc.nodes.get(node)?;
         if n.trigger || detail != Detail::Full || n.collapsed {
             return None;
@@ -896,22 +1186,16 @@ impl Canvas {
     /// dragged and a reroute being moved.
     fn link_points(&self, sc: &Scene, li: usize) -> Vec<[f32; 2]> {
         let Some(l) = sc.links.get(li) else { return Vec::new() };
-        let knot = self.knot_drag.as_ref().filter(|k| k.link == li && k.moved);
         let ends_moved = self.moving()
             && (self.pos_of(sc, l.from as usize)
                 != sc.nodes.get(l.from as usize).map_or([0.0; 2], |n| n.pos)
                 || self.pos_of(sc, l.to as usize) != sc.nodes.get(l.to as usize).map_or([0.0; 2], |n| n.pos));
-        if !ends_moved && knot.is_none() {
+        if !ends_moved && !self.knots_moving(sc, li) {
             return l.points.clone();
         }
         let w0 = self.output_pin_w(sc, l.from as usize, l.pin_index);
         let w3 = self.input_pin_w(sc, l.to as usize);
-        let mut via = l.via.clone();
-        if let Some(k) = knot
-            && let Some(slot) = via.get_mut(k.index)
-        {
-            *slot = k.at;
-        }
+        let via: Vec<[f32; 2]> = (0..l.via.len()).map(|k| self.knot_at(sc, li, k)).collect();
         let boxes: Vec<[f32; 4]> = [l.from as usize, l.to as usize]
             .iter()
             .filter_map(|&i| {
@@ -987,6 +1271,12 @@ impl Canvas {
     /// A frame's rectangle now: moved or resized by a gesture under way.
     fn frame_rect(&self, f: &scene::SceneFrame) -> [f32; 4] {
         let mut r = f.rect;
+        if let Some((_, index, at)) = self.frame_settle
+            && index == f.index
+            && self.frame_drag.is_none()
+        {
+            return at;
+        }
         if let Some(d) = self.frame_drag.as_ref().filter(|d| d.index == f.index) {
             if d.resize {
                 r[2] = (r[2] + d.delta[0]).max(r[0] + 64.0);

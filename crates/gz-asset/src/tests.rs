@@ -262,11 +262,16 @@ fn a_text_file_that_is_no_asset_is_checked_by_its_check() {
     std::fs::write(root.join("temp/d.script"), "x = 1\n").unwrap();
     let (rt, ed) = editor(root.clone());
     let kinds = Kinds::of(&ed);
-    kinds.add_text_check(&["script", "xml", "ltx", "testasset"], seen);
+    kinds.add_text_check("test", &["script", "xml", "ltx", "testasset"], seen);
     // the manifest keeps its own check, a kind's file its kind's
-    assert!(kinds.text_check("mod.ltx").is_none() && kinds.text_check("part.testasset").is_none());
-    assert!(kinds.text_check("other.ltx").is_some() && kinds.text_check("a.Script").is_some());
-    assert!(kinds.text_check("notes.txt").is_none());
+    assert!(kinds.text_checks("mod.ltx").is_empty() && kinds.text_checks("part.testasset").is_empty());
+    assert!(kinds.text_checks("other.ltx").len() == 1 && kinds.text_checks("a.Script").len() == 1);
+    assert!(kinds.text_checks("notes.txt").is_empty());
+    // a second check of the same extensions runs beside the first; one added again by its name
+    // takes its own place
+    kinds.add_text_check("other", &["xml"], seen);
+    kinds.add_text_check("other", &["xml"], seen);
+    assert_eq!((kinds.text_checks("ui/b.XML").len(), kinds.text_checks("a.script").len()), (2, 1));
 
     let seen_in = |args_: serde_json::Value| -> Vec<String> {
         let r = rt.block_on(ed.call("asset.check", args(args_), Origin::Mcp));
@@ -281,7 +286,8 @@ fn a_text_file_that_is_no_asset_is_checked_by_its_check() {
         files.sort();
         files
     };
-    assert_eq!(seen_in(json!({})), ["scripts/a.script", "ui/b.XML"]);
+    // both checks of an XML file ran
+    assert_eq!(seen_in(json!({})), ["scripts/a.script", "ui/b.XML", "ui/b.XML"]);
     // a file asked for by itself; a folder the build leaves out, asked for, is looked into
     assert_eq!(seen_in(json!({ "path": "scripts/a.script" })), ["scripts/a.script"]);
     assert_eq!(seen_in(json!({ "path": "design" })), ["design/c.script"]);

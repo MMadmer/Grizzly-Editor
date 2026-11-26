@@ -9,7 +9,7 @@ are the game's tree, `D:\Games\Dead Air\DeadAir-x64`; the unpacked game scripts 
 `D:\Games\Dead Air\_analysis\original\scripts` (read-only, the reference).
 
 Status: **implemented, covered by runtime regression tests and the editor's
-build gate.** The file carries its format version (`nq = 1`); a change of the
+build gate.** The file carries its format version (`nq = 2`; 2 made a signal's plain name the module's own), and the linked game's catalog says the newest it reads (`[nq.catalog] format`; none is 1) - a file newer than that is `E001`, since the game would refuse it; a change of the
 format is a new version with its migration step (`docs/ASSETS.md` section 2),
 paired with the game. After the editor's release §2 freezes.
 
@@ -303,7 +303,7 @@ Stalker/smart ids are illustrative.
 ```lua
 -- Долг вежливости: Sidorovich asks to wipe out the boars near the rookie village.
 return {
-  nq = 1,
+  nq = 2,
   id = "wolf_debt",
   title = "Долг вежливости",
   activation = "auto",
@@ -354,8 +354,10 @@ never looking at the canvas. What guarantees this:
    file is logical (top-down along the flow); the editor keeps the order the file
    has and puts a new node after the node it is linked from.
 2. **Coordinates are optional.** A node without `pos` gets its position from the
-   auto-layout on open, and a save writes it only once the author moved the node;
-   an AI never has to write `pos`.
+   auto-layout on open - beside the placed node a wire joins it to, where the layout puts it
+   relative to that node (a start before what it leads to), or below the rest when nothing is
+   placed there - and a save writes it only once the author moved the node; an AI never has to
+   write `pos`.
 3. **The schema is served on demand.** `asset.reference kind=quest` returns every kind
    with its groups, purpose (`use`), parameters (type/required/default/enum), pins
    and a one-line description — enough to write a quest from scratch. The same
@@ -1140,13 +1142,22 @@ A painter canvas of the kit: the scene of a revision is built off the UI thread
   nodes alone where they were, Auto Layout Branch the node and what only it leads to.
 - **Interaction**: LMB selects and drags (snapped to the 16 pt grid, alignment guides to the
   neighbours' edges and centres - both preferences); Ctrl/Shift+click toggles; a rubber band on
-  empty space. A wire is drawn from an output into a node or from an input out of one; dropped on
-  empty space it opens the picker, filtered by the pin. A lone node dropped on a wire goes on it.
-  Double-click a wire - a reroute; drag it, double-click it away. Alt+click a wire - it goes;
-  Alt+drag a wire's end - it is wired elsewhere. Ctrl+right drag cuts every wire the line crosses.
-  An action row: a click opens it in Details, a double click focuses its kind, a drag moves it
-  within its list, to the other list or to another node. A comment frame moves with what it holds
-  by its title strip and resizes by its corner; a double click renames it.
+  empty space; a click (no drag) on one of several selected things selects it alone. A double
+  click is told at its second press. A wire is drawn from an output into a node or from an input
+  out of one; dropped on empty space it opens the picker, filtered by the pin; a pin pressed and
+  let go where it was selects its node (over a node's own box a pin takes only about what it
+  draws, so a node zoomed out is no target of pins alone). A lone node dropped on a wire goes on
+  it. Double-click a wire - a reroute; double-click a reroute - it goes. A reroute is selected
+  like a node - a click, Ctrl/Shift+click, the rubber band - and a drag moves every selected node
+  and reroute together, one undo step; Delete takes the selected nodes and reroutes, one undo step;
+  a node selection set from outside the canvas (Find, Problems, a command, an undo) drops the
+  selected reroutes. Alt+click a wire - it goes; Alt+drag a wire's end - it is wired elsewhere; D
+  takes the wire under the pointer, never one behind a node. Ctrl+right drag cuts every wire the
+  line crosses; a right press beside the canvas's open menu takes it down and opens the menu of
+  what is under it. An action row: a click opens it in Details, a double click brings it into
+  view there, a drag moves it within its list, to the other list or to another node. A comment
+  frame moves with what it holds - nodes, and the reroutes of the wires with both ends inside - by
+  its title strip and resizes by its corner; a double click renames it.
 - **The picker** is the kit's `PickList`: ranked search, each kind's icon in its family colour,
   its description as the highlighted row's second line, Recent (per project) and Favourites (a
   star per row, one list for every project) on top, then the kinds by family. It opens on Tab or
@@ -1156,11 +1167,11 @@ A painter canvas of the kit: the scene of a revision is built off the UI thread
   Insert Node...) only kinds that do both. Picking makes the node and wires it.
 - **Actions**: every gesture's command and every menu row is an action of the group Graph with
   keys the author can bind again (Keyboard page): Align Left/Centre/Right/Top/Middle/Bottom,
-  Distribute, Straighten Connections (Q), Select Connected (Ctrl+L) / Upstream / Downstream,
+  Distribute, Straighten Connections (Shift+Q), Select Connected (Ctrl+L) / Upstream / Downstream,
   Add Comment Frame (C), Replace Node, Duplicate with Wires (Ctrl+Shift+D), Disable/Enable
-  (Ctrl+Shift+E), Collapse/Expand (Ctrl+Shift+H), Connect to the Nearest (Shift+Q), Bypass (Alt+D),
+  (Ctrl+Shift+E), Collapse/Expand (Ctrl+Shift+H), Connect to the Nearest (Q), Bypass (Alt+D),
   Remove the Wire Under the Pointer (D), Bookmarks (Shift+1..9 jump, Ctrl+1..9 set, by name),
-  Auto Layout (all, selection, branch), Frame All / Selection, Find (Ctrl+F, F3, Shift+F3), Find in
+  Auto Layout (all, selection, branch, the tree from its root: F), Frame All / Selection (Shift+F), Find (Ctrl+F, F3, Shift+F3), Find in
   Project (Ctrl+Shift+F), Back/Forward (Alt+Left/Right). Copy and paste work between graphs (a
   fragment of nodes as Lua; kinds the target may not use are left out and named).
 - **The minimap**: the whole graph and the view in the bottom right corner for a graph of 12 nodes
@@ -1227,7 +1238,7 @@ the operations of `graph.edit`.
 | Command | What it does |
 |---|---|
 | `graph.edit` | a list of operations (NQ_FORMAT §8.1), all or none, one undo step; `save=true` writes the file. An editor without a window always writes: no tab holds the edit |
-| `graph.arrange` | `layout` (all, selection, branch; a `flow` switches the graph's), `align`, `distribute`, `straighten` |
+| `graph.arrange` | `layout` (all, selection, branch, tree; a `flow` switches the graph's), `align`, `distribute`, `straighten` |
 | `graph.get` | the outline, the problems with their sentences, frames, routes, bookmarks, the wire options in force; boxes, wires' polylines, the view and a hit test at a world point on request |
 | `graph.find` | nodes of a graph (the tab follows) or of every graph of the project |
 | `graph.view` | the tab's view: zoom, centre, selection and its growth, the history, bookmarks, the panels and their widths, the split, scrolls, a menu or the picker up to look at (`menu=node\|wire\|canvas\|frame\|picker\|replace`, a picker from a pin), focus, the drawer; it answers what the frames that show the change drew, in one call |
@@ -1426,7 +1437,7 @@ It is **its own asset**, not a quest wearing a flag:
 | | quest | behaviour graph |
 |---|---|---|
 | extension | `.nqasset` | `.behasset` |
-| header | `nq = 1` | `beh = 1` |
+| header | `nq = 2` | `beh = 2` |
 | editor | Quest Graph window | Behaviour Graph window |
 | starts itself | yes (`activation`) | never — a caller runs it |
 | addresses | the player, the world | **roles** the caller binds |

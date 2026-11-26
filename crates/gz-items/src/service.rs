@@ -406,6 +406,7 @@ impl Items {
         }
         let tree = self.project.tree.snapshot();
         let root = self.root.clone();
+        let game_tree = roster.game.clone();
         let module_atlas = (!roster.plan.is_empty()).then(|| roster.plan.texture.to_ascii_lowercase());
         // computed by the query itself, so many askers at once share one walk of the files
         self.lookups
@@ -414,6 +415,10 @@ impl Items {
                 for t in &tables {
                     strings.extend(t.iter().map(|(id, _)| id.to_ascii_lowercase()));
                 }
+                let game_strings = strings.clone();
+                let tree_files: FxHashSet<String> = game_tree.files().iter().map(|f| config_key(f)).collect();
+                let modules: Vec<String> =
+                    files.modules().iter().map(|m| m.id.to_ascii_lowercase()).collect();
                 strings.extend(project_strings(&root, &tree));
                 let particles = particle_names(&files, &tree);
                 GameLookups {
@@ -423,6 +428,9 @@ impl Items {
                     media,
                     particles,
                     strings,
+                    game_strings,
+                    tree_files,
+                    modules,
                     communities,
                     ranks,
                     module_atlas,
@@ -755,6 +763,12 @@ pub struct GameLookups {
     media: Option<Arc<gz_media::Index>>,
     particles: FxHashSet<String>,
     strings: FxHashSet<String>,
+    /// The linked game's string ids alone, without the project's.
+    game_strings: FxHashSet<String>,
+    /// The files of the game's config tree, as `config_key` writes them (`items\weapons\w_ak74.ltx`).
+    tree_files: FxHashSet<String>,
+    /// The ids of the modules installed in the linked game, lower case.
+    modules: Vec<String>,
     communities: Vec<String>,
     ranks: Vec<String>,
     /// The module's own atlas, when its items make one.
@@ -803,6 +817,46 @@ impl GameLookups {
         }
         // a model without motions of its own says nothing about the names
         (!out.is_empty() || !v.motion_refs.is_empty()).then_some(out)
+    }
+}
+
+/// What the linked game has, for the names a module brings (`crate::names`): the game's alone,
+/// never the project's.
+pub(crate) struct GameNamesOf {
+    pub lookups: Arc<GameLookups>,
+    /// The game's config tree without the module.
+    pub game: Arc<gz_ltx::Ltx>,
+    /// The sections the module's configs and items make.
+    pub own: Arc<gz_mod::SectionSet>,
+    /// The module's id, lower case.
+    pub module: String,
+    /// The editor's own game data (`<library>\gamedata`): what a build stages from it.
+    pub library: PathBuf,
+}
+
+impl crate::names::GameNames for GameNamesOf {
+    fn section(&self, name: &str) -> bool {
+        self.game.section_exist(&name.to_ascii_lowercase())
+    }
+
+    fn in_tree(&self, file: &str) -> bool {
+        self.lookups.tree_files.contains(&config_key(file))
+    }
+
+    fn string(&self, id: &str) -> bool {
+        self.lookups.game_strings.contains(&id.trim().to_ascii_lowercase())
+    }
+
+    fn file(&self, path: &str) -> bool {
+        self.lookups.game_has(path) || self.library.join(path.replace('/', "\\")).is_file()
+    }
+
+    fn module_section(&self, name: &str) -> bool {
+        self.own.has(name)
+    }
+
+    fn other_module(&self, name: &str) -> bool {
+        self.lookups.modules.iter().any(|m| *m != self.module && gz_mod::names::is_own(name, m))
     }
 }
 

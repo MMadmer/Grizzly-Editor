@@ -957,6 +957,21 @@ pub fn validate(doc: &ManifestDoc) -> Vec<Problem> {
                         .about(id),
                 ),
             );
+        } else if !id.is_empty() && !m.id.is_empty() && !crate::names::is_own(id, &m.id) {
+            // a mode is one name for the whole game: another module that brings it too is not offered
+            out.push(
+                line.place(
+                    Problem::warning(
+                        "mod.mode_name",
+                        format!(
+                            "Mode '{id}' is not named after the module: a mode is one name for the whole game, and of two modules that bring it the game offers the first. Name it '{}'.",
+                            crate::names::own_form(id, &m.id)
+                        ),
+                    )
+                    .in_field("provides_mode.id")
+                    .about(id),
+                ),
+            );
         }
     }
     var_problems(&lines, &mut out);
@@ -1137,7 +1152,7 @@ mod tests {
         for text in [
             "[module]\r\nid = od\r\ntarget = default\r\n",
             "[module]\r\nid = od\r\ntarget = existing\r\nmode = dar2_mode\r\n",
-            "[module]\r\nid = od\r\ntarget = new\r\n[provides_mode]\r\nid = night\r\ntitle = Night\r\n",
+            "[module]\r\nid = od\r\ntarget = new\r\n[provides_mode]\r\nid = od_night\r\ntitle = Night\r\n",
             "[module]\r\nid = od\r\ntarget = any\r\nmode = *\r\n",
             "[module]\r\nid = od\r\nmode = night\r\n",
             "[module]\r\nid = od\r\ntarget = default\r\nversion = 1.2.0\r\nwebsite = https://www.moddb.com/mods/x\r\ntags = story, quests\r\n[update]\r\ngithub = Madmer/od\r\n[vars]\r\nkills = 0\r\n",
@@ -1364,11 +1379,26 @@ mod tests {
         }
         // far from every key, or too short to guess at: kept and said nothing about
         assert!(one("engine_min = 1.4\r\nnotes = x\r\nap = 1\r\nids = 3\r\n").is_empty());
-        let p = problems(&with("[provides_mode]\r\nid = night\r\nTitel = x\r\nweird = 1\r\n"));
+        let p = problems(&with("[provides_mode]\r\nid = od_night\r\nTitel = x\r\nweird = 1\r\n"));
         assert_eq!(codes(&p), ["mod.key"]);
         assert_eq!(p[0].fix.as_deref(), Some("title = x"));
         // another section keeps what it does not know
         assert!(problems(&with("[update]\r\nGithub = a/b\r\n[order]\r\nafterr = x\r\n")).is_empty());
+    }
+
+    /// A mode the module brings is named after it, or it is said at its line.
+    #[test]
+    fn a_mode_of_the_module_is_named_after_it() {
+        let p = problems(
+            "[module]\r\nid = od\r\ntarget = new\r\n[provides_mode]\r\nid = night\r\ntitle = Night\r\n",
+        );
+        assert_eq!(codes(&p), ["mod.mode_name"]);
+        assert_eq!(p[0].line, Some(5));
+        assert!(p[0].message.contains("'od_night'"), "{}", p[0].message);
+        let own = problems(
+            "[module]\r\nid = od\r\ntarget = new\r\n[provides_mode]\r\nid = od.night\r\ntitle = Night\r\n",
+        );
+        assert!(own.is_empty(), "{own:?}");
     }
 
     /// The problems of a manifest that states `target` and `mode` and, when `own`, a mode of its own.
@@ -1378,7 +1408,7 @@ mod tests {
             text.push_str(&format!("mode = {mode}\r\n"));
         }
         if own {
-            text.push_str("[provides_mode]\r\nid = night\r\n");
+            text.push_str("[provides_mode]\r\nid = od_night\r\n");
         }
         problems(&text)
     }

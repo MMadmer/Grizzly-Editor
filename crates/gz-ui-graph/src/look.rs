@@ -238,8 +238,10 @@ pub fn kind_combo(
     let shown = Tx::ui_in("kind", kind_title(cat, kind, behaviour));
     let w = ui.available_width();
     let current = kind.clone();
-    let list = PickList::new(("gz-ui-graph.kind", id_salt), &items).current(&current).hint("Search kinds");
-    let picked = Combo::new(("gz-ui-graph.kind_combo", id_salt), shown)
+    // within the ui's id: every condition and action of the Details panel has a kind combo
+    let salt = ui.make_persistent_id(id_salt);
+    let list = PickList::new(("gz-ui-graph.kind", salt), &items).current(&current).hint("Search kinds");
+    let picked = Combo::new(("gz-ui-graph.kind_combo", salt), shown)
         .icon(kind_icon(cat, kind))
         .width(w)
         .show(ui, list);

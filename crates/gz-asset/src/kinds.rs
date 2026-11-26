@@ -112,8 +112,8 @@ pub struct Kinds {
     /// The build checks whose problems `asset.check` gives per file already (by their stage).
     covered: RwLock<Vec<&'static str>>,
     manifest: RwLock<Vec<ManifestCheckFn>>,
-    /// The checks of text files that are no assets, by the extensions they read.
-    text: RwLock<Vec<(&'static [&'static str], TextCheckFn)>>,
+    /// The checks of text files that are no assets: who added each, the extensions it reads.
+    text: RwLock<Vec<(&'static str, &'static [&'static str], TextCheckFn)>>,
 }
 
 impl Kinds {
@@ -172,26 +172,27 @@ impl Kinds {
     }
 
     /// Adds a check of the text files with these extensions (without the dot, any case):
-    /// `asset.check` runs it for such a file that no kind owns. A check added again for an
-    /// extension takes the place of the first.
-    pub fn add_text_check(&self, exts: &'static [&'static str], check: TextCheckFn) {
+    /// `asset.check` runs it for such a file that no kind owns, beside the other checks of the
+    /// extension. `by` names the check: one added again by the same name takes its place.
+    pub fn add_text_check(&self, by: &'static str, exts: &'static [&'static str], check: TextCheckFn) {
         let mut text = self.text.write();
-        text.retain(|(e, _)| !e.iter().any(|x| exts.iter().any(|y| x.eq_ignore_ascii_case(y))));
-        text.push((exts, check));
+        text.retain(|(who, _, _)| *who != by);
+        text.push((by, exts, check));
     }
 
-    /// The text check of a file, by its name: `None` for an asset of a kind, the manifest, or a
-    /// file no text check reads.
+    /// The text checks of a file, by its name, in the order they were added: none for an asset
+    /// of a kind, the manifest, or a file no text check reads.
     #[must_use]
-    pub fn text_check(&self, name: &str) -> Option<TextCheckFn> {
+    pub fn text_checks(&self, name: &str) -> Vec<TextCheckFn> {
         if self.of_file(name).is_some() || name.eq_ignore_ascii_case(crate::check::MANIFEST) {
-            return None;
+            return Vec::new();
         }
-        let ext = name.rsplit_once('.').map(|(_, e)| e)?;
+        let Some(ext) = name.rsplit_once('.').map(|(_, e)| e) else { return Vec::new() };
         self.text
             .read()
             .iter()
-            .find(|(exts, _)| exts.iter().any(|e| e.eq_ignore_ascii_case(ext)))
-            .map(|(_, f)| *f)
+            .filter(|(_, exts, _)| exts.iter().any(|e| e.eq_ignore_ascii_case(ext)))
+            .map(|(_, _, f)| *f)
+            .collect()
     }
 }

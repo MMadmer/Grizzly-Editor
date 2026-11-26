@@ -295,6 +295,7 @@ pub async fn export_spawn(editor: &Arc<Editor>, l: &Layer) -> Reply {
         "paths": r.paths,
         "orders": r.orders,
         "radios": r.radios,
+        "stashes": r.stashes,
         // the bake's "Base objects removed" row and its missing-model warning
         "missing": r.missing,
         "removed": r.removed,

@@ -253,6 +253,7 @@ enum ScopeWhat {
     All,
     Selection,
     Branch,
+    Tree,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -277,8 +278,9 @@ struct ArrangeParams {
     /// The nodes, by id. Left out: the selection.
     #[serde(default)]
     nodes: Option<Vec<String>>,
-    /// For layout: all (default), selection (the nodes alone, where they were) or branch (the one
-    /// node given and what only it leads to, from where it stands).
+    /// For layout: all (default), selection (the nodes alone, where they were), branch (the one
+    /// node given and what only it leads to, from where it stands) or tree (the whole tree each
+    /// node given is wired into, from its start, which keeps its place).
     #[serde(default)]
     scope: Option<ScopeWhat>,
     /// For layout: the graph flows this way from now on (right or down), laid out again.
@@ -311,6 +313,7 @@ async fn graph_arrange(ed: Arc<Editor>, p: ArrangeParams, o: Origin) -> Reply {
         ScopeWhat::All => Scope::All,
         ScopeWhat::Selection => Scope::Selection,
         ScopeWhat::Branch => Scope::Branch,
+        ScopeWhat::Tree => Scope::Tree,
     };
     let flow = p.flow.map(|f| if f == FlowWhat::Down { Flow::Down } else { Flow::Right });
     let arr = Arrange { action, nodes: p.nodes.unwrap_or_default(), scope, flow };

@@ -57,6 +57,7 @@ pub fn install(editor: &Editor) {
         kinds.add(table_kind(k));
     }
     kinds.covers_build_stage(STAGE);
+    crate::names::install(editor);
     ProjectHooks::of(editor).on_open(|ed, _session| {
         let ed = ed.clone();
         ed.exec.clone().spawn(async move {

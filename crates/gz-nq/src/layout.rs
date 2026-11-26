@@ -76,6 +76,8 @@ pub enum Shown<'s> {
     Title(&'s str),
     /// The name a line starts with: a parameter's, a condition's title.
     Key(&'s Line),
+    /// A word of the header's badges ("once", "off").
+    Badge(&'s str),
 }
 
 impl<'a> BoxCx<'a> {
@@ -97,7 +99,18 @@ impl<'a> BoxCx<'a> {
             None => l.key.clone(),
         }
     }
+
+    fn badge(&self, en: &str) -> String {
+        match self.shown {
+            Some(f) => f(Shown::Badge(en)),
+            None => en.to_owned(),
+        }
+    }
 }
+
+/// The room the header keeps for a problem badge (the canvas draws one while the node has a
+/// problem: an icon and a count), so that a box does not change its size as problems come and go.
+pub const PROBLEM_BADGE: f32 = 40.0;
 
 /// One line of a node: a condition reads `<title> <what it checks>`, a parameter
 /// `<name>: <value>`, the last one `+N more` (no key) when there are more than fit.
@@ -308,12 +321,24 @@ pub fn node_box(cx: &BoxCx<'_>, n: &Node) -> NodeBox {
     let cat = cx.catalog;
     let mut b = NodeBox { collapsed: n.collapsed, ..NodeBox::default() };
     let title = cx.title(text::kind_title(cat, &n.kind, cx.behaviour));
+    // the header: the icon, the title, the id, and from the right the problem badge and the
+    // words "off" and "once" - every one of them as the canvas draws it
+    let mut badges = PROBLEM_BADGE + 4.0;
+    // "once" as the canvas tells it: the node's own word, else its kind's default
+    let once = !cat.is_trigger(&n.kind)
+        && if n.once_set { n.once } else { cat.find(&n.kind).is_some_and(|k| k.once_default) };
+    for (on, word) in [(n.disabled, "off"), (once, "once")] {
+        if on {
+            badges += measure::width(Face::Body, SMALL_EM, &cx.badge(word)) + 6.0;
+        }
+    }
     let mut need = INSET
         + ICON
         + 6.0
         + measure::width(Face::Strong, TITLE_EM, &title)
         + 10.0
         + measure::width(Face::Body, SMALL_EM, &n.id)
+        + badges
         + INSET;
     let (pin_list, _) = pins(cat, n);
     let mut y = HEADER;
@@ -350,7 +375,9 @@ pub fn node_box(cx: &BoxCx<'_>, n: &Node) -> NodeBox {
                 text::summary(cat, &a.kind, &a.params, None),
             );
             let words = if s.is_empty() { t } else { format!("{t}: {s}") };
-            let tag = if exit { measure::width(Face::Body, SMALL_EM, "exit") + 6.0 } else { 0.0 };
+            // every row says the slot it runs in, enter or exit, as the canvas draws it
+            let tag =
+                measure::width(Face::Body, SMALL_EM, &cx.badge(if exit { "exit" } else { "enter" })) + 6.0;
             need = need.max(INSET * 2.0 + ROW_ICON + 6.0 + measure::width(Face::Body, BODY_EM, &words) + tag);
         }
         if b.actions > 0 {
@@ -436,6 +463,76 @@ pub fn ensure_positions(catalog: &Catalog, g: &mut Graph) -> usize {
     if g.nodes.iter().any(|n| !n.has_pos) { run(catalog, g, true) } else { 0 }
 }
 
+/// The nodes without a place that a wire joins to a placed one go beside it, where the auto layout
+/// would put them relative to it (a start before the node it leads to), when nothing stands there.
+/// Returns how many it placed.
+fn place_beside(cx: &BoxCx<'_>, g: &mut Graph, placed: &[[f32; 2]]) -> usize {
+    let n = g.nodes.len();
+    let size: Vec<[f32; 2]> = g.nodes.iter().map(|x| node_size(cx, x)).collect();
+    let mut near: Vec<Vec<usize>> = vec![Vec::new(); n];
+    {
+        let index = g.index();
+        for (u, x) in g.nodes.iter().enumerate() {
+            for p in &x.out {
+                for t in &p.targets {
+                    if let Some(&v) = index.get(t.as_str())
+                        && v != u
+                    {
+                        // what a node leads to first: the start of a chain goes before it
+                        near[u].insert(0, v);
+                        near[v].push(u);
+                    }
+                }
+            }
+        }
+    }
+    let mut at: Vec<Option<[f32; 2]>> = g.nodes.iter().map(|x| x.has_pos.then_some(x.pos)).collect();
+    let gap = 8.0;
+    let free = |at: &[Option<[f32; 2]>], m: usize, p: [f32; 2]| {
+        at.iter().enumerate().all(|(j, q)| {
+            let Some(q) = q else { return true };
+            j == m
+                || p[0] + size[m][0] + gap <= q[0]
+                || q[0] + size[j][0] + gap <= p[0]
+                || p[1] + size[m][1] + gap <= q[1]
+                || q[1] + size[j][1] + gap <= p[1]
+        })
+    };
+    // a chain of new nodes grows from the placed nodes it hangs on: each node is tried once, from
+    // the placed neighbours it has when its turn comes, nearest the placed ones first
+    let mut queue: std::collections::VecDeque<usize> =
+        (0..n).filter(|&m| at[m].is_none() && near[m].iter().any(|&q| at[q].is_some())).collect();
+    let mut queued: Vec<bool> = vec![false; n];
+    for &m in &queue {
+        queued[m] = true;
+    }
+    let mut count = 0;
+    while let Some(m) = queue.pop_front() {
+        let spot = near[m].iter().find_map(|&q| {
+            let base = at[q]?;
+            let p = [
+                sane(snap(base[0] + placed[m][0] - placed[q][0])),
+                sane(snap(base[1] + placed[m][1] - placed[q][1])),
+            ];
+            free(&at, m, p).then_some(p)
+        });
+        let Some(p) = spot else { continue };
+        at[m] = Some(p);
+        if let Some(x) = g.nodes.get_mut(m) {
+            x.pos = p;
+            x.has_pos = true;
+        }
+        count += 1;
+        for &v in &near[m] {
+            if at[v].is_none() && !queued[v] {
+                queued[v] = true;
+                queue.push_back(v);
+            }
+        }
+    }
+    count
+}
+
 /// The whole graph laid out again (`only_missing`: only the nodes without a place, put beside the
 /// others). Returns how many nodes moved.
 pub fn run(catalog: &Catalog, g: &mut Graph, only_missing: bool) -> usize {
@@ -444,6 +541,8 @@ pub fn run(catalog: &Catalog, g: &mut Graph, only_missing: bool) -> usize {
     let mut moved = 0;
     if only_missing {
         let cx = BoxCx::of(catalog, g);
+        let moved_beside = place_beside(&cx, g, &placed);
+        moved += moved_beside;
         let mut max_y = f32::MIN;
         let mut min_missing = f32::MAX;
         let mut any = false;
@@ -516,6 +615,36 @@ mod tests {
             ..Kind::default()
         };
         Catalog::from_kinds(vec![start, topic, step])
+    }
+
+    /// A node without a place that leads to a placed one goes before it, where the layout would
+    /// have it (the file of a quest whose start was never moved); one that hangs on nothing goes
+    /// below the rest.
+    #[test]
+    fn a_node_without_a_place_goes_beside_what_it_is_wired_to() {
+        let cat = catalog();
+        let mut g = Graph::default();
+        g.canvas.flow = Some(Flow::Down);
+        let mut start = Node::new("start", "trigger.start");
+        start.connect("next", "topic");
+        let mut topic = Node::new("topic", "dialog.topic");
+        topic.pos = [-48.0, 144.0];
+        topic.has_pos = true;
+        let mut far = Node::new("far", "dialog.topic");
+        far.pos = [-48.0, 900.0];
+        far.has_pos = true;
+        for n in [start, topic, far, Node::new("loose", "trigger.start")] {
+            g.nodes.push_back(n);
+        }
+        ensure_positions(&cat, &mut g);
+        let cx = BoxCx::of(&cat, &g);
+        let (s, t) = (&g.nodes[0], &g.nodes[1]);
+        assert!(s.has_pos);
+        // above the topic, its wire running down into it
+        assert!(s.pos[1] + node_size(&cx, s)[1] <= t.pos[1], "{:?} {:?}", s.pos, t.pos);
+        assert!((s.pos[1] - t.pos[1]).abs() < 400.0, "{:?} {:?}", s.pos, t.pos);
+        // the loose start hangs on nothing: below everything
+        assert!(g.nodes[3].pos[1] > 900.0, "{:?}", g.nodes[3].pos);
     }
 
     #[test]

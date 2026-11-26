@@ -64,7 +64,7 @@ enum KeyRow {
 }
 
 /// The Shortcuts card's rows.
-const KEYS: [(KeyRow, &str); 43] = [
+const KEYS: [(KeyRow, &str); 44] = [
     (KeyRow::Head, "View"),
     (KeyRow::Keys(&["graph.frame_all"], ""), "Frame the whole graph"),
     (KeyRow::Keys(&["graph.frame_selection"], ""), "Frame the selection"),
@@ -77,7 +77,7 @@ const KEYS: [(KeyRow, &str); 43] = [
     (KeyRow::Keys(&["graph.add_node"], "Right-click"), "Add a node at the cursor"),
     (KeyRow::Gesture("Click / Ctrl+Click"), "Select / add to the selection"),
     (KeyRow::Gesture("Drag on empty space"), "Select with a rectangle"),
-    (KeyRow::Keys(&["graph.select_all"], ""), "Select every node"),
+    (KeyRow::Keys(&["graph.select_all"], ""), "Select every node and reroute"),
     (KeyRow::Keys(&["graph.select_connected"], ""), "Select what the selection is wired to"),
     (KeyRow::Keys(&["graph.rename"], ""), "Rename the node"),
     (KeyRow::Keys(&["edit.delete"], ""), "Delete the selection"),
@@ -92,12 +92,16 @@ const KEYS: [(KeyRow, &str); 43] = [
     (KeyRow::Head, "Arrange"),
     (KeyRow::Keys(&["graph.align_left", "graph.align_right"], ""), "Align left / right"),
     (KeyRow::Keys(&["graph.align_top", "graph.align_bottom"], ""), "Align top / bottom"),
+    (KeyRow::Keys(&["graph.auto_layout_tree"], ""), "Lay out the selected node's whole tree from its root"),
     (KeyRow::Keys(&["graph.straighten"], ""), "Straighten the wires out of the selection"),
     (KeyRow::Gesture("Drag a node"), "Snaps to the grid and to its neighbours' edges"),
     (KeyRow::Head, "Wires"),
     (KeyRow::Gesture("Drag from a pin"), "Draw a wire; dropped on empty space, pick a node"),
     (KeyRow::Gesture("Drop a node on a wire"), "Put it on the wire"),
-    (KeyRow::Gesture("Double-click a wire"), "Add a reroute; drag it, double-click it away"),
+    (
+        KeyRow::Gesture("Double-click a wire"),
+        "Add a reroute; select and drag it like a node, double-click it away",
+    ),
     (KeyRow::Gesture("Alt+drag a wire's end"), "Wire it elsewhere"),
     (KeyRow::Gesture("Ctrl+right drag"), "Cut every wire the line crosses"),
     (KeyRow::Keys(&["graph.connect_nearest"], ""), "Wire the selected node to the nearest free input"),
@@ -2337,6 +2341,7 @@ impl Document for GraphTab {
             ui.separator();
             row(ui, cx, "graph.auto_layout");
             row(ui, cx, "graph.auto_layout_selection");
+            row(ui, cx, "graph.auto_layout_tree");
             row(ui, cx, "graph.auto_layout_branch");
             gz_app::chrome::local_submenu(ui, "Align", Icon::AutoLayout, true, |ui| {
                 for id in [
@@ -2472,8 +2477,15 @@ impl Document for GraphTab {
                 self.queued.push(Op::Doc(DocOp::Canvas(CanvasOp::Duplicate { wires: false })))
             }
             EditAction::Delete => {
-                if !self.mirror.selection.is_empty() {
-                    self.queued.push(Op::Doc(DocOp::Canvas(CanvasOp::Delete)));
+                // selected reroutes go with the nodes, one undo step
+                let batch =
+                    self.scene.clone().and_then(|sc| self.canvas.delete_ops(&sc, &self.mirror.selection));
+                match batch {
+                    Some(ops) => self.queued.push(Op::Doc(DocOp::ApplyOps(ops))),
+                    None if !self.mirror.selection.is_empty() => {
+                        self.queued.push(Op::Doc(DocOp::Canvas(CanvasOp::Delete)));
+                    }
+                    None => {}
                 }
             }
             EditAction::Find => self.open_find(&ctx),

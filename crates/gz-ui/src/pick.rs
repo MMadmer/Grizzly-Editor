@@ -1028,12 +1028,15 @@ impl<'a> Combo<'a> {
 }
 
 /// One of a few named choices as a combo: the plain case. Returns whether the choice changed.
+/// Its popup lives under `id_salt` within `ui`'s id: two panels that both draw a combo of one salt
+/// (a row of the property grid) open their own lists.
 pub fn combo<'a, L: Clone + Into<Tx<'a>>>(
     ui: &mut Ui,
     id_salt: impl Hash + std::fmt::Debug + Copy,
     current: &mut usize,
     options: &[L],
 ) -> bool {
+    let id_salt = ui.make_persistent_id(id_salt);
     let options = crate::button::txs(options);
     let items: Vec<PickItem> =
         options.iter().enumerate().map(|(i, o)| PickItem::new(i.to_string(), o.borrow())).collect();

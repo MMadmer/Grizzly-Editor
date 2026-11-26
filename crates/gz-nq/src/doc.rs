@@ -1407,9 +1407,20 @@ fn frame_op(cat: &Catalog, g: &mut Graph, op: &Value, sel: &[SmolStr]) -> Result
                 })
                 .map(|(k, _)| k)
                 .collect();
+            let ids: Vec<SmolStr> =
+                inside.iter().filter_map(|&k| g.nodes.get(k).map(|n| n.id.clone())).collect();
             for k in inside {
                 if let Some(n) = g.nodes.get_mut(k) {
                     n.pos = [layout::sane(n.pos[0] + by[0]), layout::sane(n.pos[1] + by[1])];
+                }
+            }
+            // a wire with both ends inside goes along whole: its reroutes too
+            let held = |id: &str| ids.iter().any(|x| x == id);
+            for (key, points) in &mut g.canvas.routes {
+                if crate::canvas::split_route_key(key).is_some_and(|(f, _, t)| held(f) && held(t)) {
+                    for q in points.iter_mut() {
+                        *q = [layout::sane(q[0] + by[0]), layout::sane(q[1] + by[1])];
+                    }
                 }
             }
             if let Some(f) = g.canvas.frames.get_mut(i) {
@@ -1701,6 +1712,25 @@ fn arrange_positions(
                 };
                 let branch = arrange::branch(cat, g, *root);
                 Ok(arrange::layout_part(cat, g, &branch, Some(*root)))
+            }
+            Scope::Tree => {
+                if set.is_empty() {
+                    return Err("select a node of the tree to lay out".into());
+                }
+                // each tree on its own, from its start: two selected nodes of one tree lay it out once
+                let mut done = vec![false; g.nodes.len()];
+                let mut out = Vec::new();
+                for &i in &set {
+                    if done.get(i).copied().unwrap_or(true) {
+                        continue;
+                    }
+                    let (tree, root) = arrange::tree(cat, g, i);
+                    for &t in &tree {
+                        done[t] = true;
+                    }
+                    out.extend(arrange::layout_part(cat, g, &tree, Some(root)));
+                }
+                Ok(out)
             }
         },
         ArrangeAction::Align(how) => {

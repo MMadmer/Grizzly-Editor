@@ -3,7 +3,7 @@
 -- The reference for the test plan (§16 game item 1): covers trigger.start, flow.step, objective.fetch,
 -- task.give/complete, item.give, money.give, news.tip, flow.end and a mid-quest save/load.
 return {
-  nq = 1,
+  nq = 2,
   id = "linear_fetch",
   title = "Хлеб для новичков",
   activation = "auto",

@@ -5,6 +5,7 @@ pub mod radio;
 mod shape;
 mod simple;
 mod spawn;
+pub mod stash;
 pub mod terrain;
 mod way;
 
@@ -22,6 +23,7 @@ pub use spawn::{
     ENVMOD_CHOOSE_NAME, EnvMod, ORDER_HOSTILE, ORDER_RUN, PLAYERSTART_CHOOSE_NAME, PointKind,
     RPOINT_CHOOSE_NAME, RPoint, SpawnData, SpawnEntity, XmsOrder, env_flags, sync_shape, visual_ref,
 };
+pub use stash::Stash;
 pub use terrain::TerrainData;
 pub use way::{
     PortalData, SectorData, WAYPOINT_RADIUS, WAYPOINT_SIZE, WayData, WayPoint, fcolor_from, fcolor_get,
@@ -31,6 +33,22 @@ use crate::class::ObjClass;
 use crate::math::{Aabb, Vec3, point_box, xform_box};
 use crate::model::{ObjData, ObjId, Object, SceneState};
 pub use crate::sdk::objects::Loaded;
+
+/// The name an object takes in the spawn layer (`[obj:<name>]`), which the game names it by: an op
+/// name is a section name and a file-name part, so every byte that is not `a-z A-Z 0-9 _ - .`
+/// becomes `_` (a Cyrillic letter is two of them); 127 bytes at most; an empty name is `unnamed`.
+#[must_use]
+pub fn op_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().min(127));
+    for b in name.bytes().take(127) {
+        let ok = b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.');
+        out.push(if ok { char::from(b) } else { '_' });
+    }
+    if out.is_empty() {
+        out.push_str("unnamed");
+    }
+    out
+}
 
 /// A group's own data.
 #[derive(Clone, Debug, PartialEq, Default)]

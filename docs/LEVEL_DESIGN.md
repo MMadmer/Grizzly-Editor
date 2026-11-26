@@ -227,6 +227,17 @@ return {
 - **A model the game draws nothing for** (`invisible` on its card: a stash's case, a collider) is there and
   unseen. A stash is such a case put inside something that is drawn - a crate, a locker; anything else that
   wears one is `S224`.
+- **A stash** is a static object that says so: `stash = true` in `objects.lua`, or `stash = { random = false,
+  loot = false }` (each key `true` when left out). The object stays what it is - the box one sees, compiled into
+  the level or the module's piece -, and the build puts an `inventory_box` over it in the spawn layer, under the
+  object's own name, wearing the model's unseen case `<ref>_case` (`dynamics\equipment_cache\equipment_box_02`
+  has `..._02_case`; a model without one opens by the box's own case, 0.94 x 0.43 x 0.48 m: `S218`). `random =
+  false`: the game never fills it with a random stash's loot; `loot = false`: no NPC who searches stashes comes
+  to it - the build writes such a key into the box's custom data as `[xms_stash]`. A quest reaches the stash by
+  the object's name: `{ name = "my_stash" }` (`item.spawn where = { into = { name = "my_stash" } }`,
+  `objective.fetch spawn = { into = { name = "my_stash" } }`), which the game looks up as the module's object
+  first. So the name is the stash's handle: it takes `a-z A-Z 0-9 _ - .` only, and no other object of the
+  layer may be written under it (`S226`, an error the build refuses); a stash is not scaled (`S219`).
 - **A glow** is a picture that faces the viewer: `texture`, `radius` in metres, or `fixed_size = true` and a
   `radius` that is a share of half the screen's height. It is drawn like a lens flare; `shader =
   "effects\\sun"` hides it by depth as well. No other shader draws one (`S225`).
@@ -251,9 +262,14 @@ return {
   them from a module); an object whose model the game draws nothing for is `S224` at its line - the model's
   card says `invisible`, and a section whose own model is such (a stash is an unseen case inside something
   drawn) is not reported; a glow that names a shader no glow is drawn with is `S225` (the game draws a glow
-  like a lens flare, or like the sun with `effects\sun`); a fog profile that is a file and no profile - no
-  `[volume]` that counts its emitters, an emitter without a key the game reads - is `S220` with what it
-  lacks; a key that is nearly a key of the kind (`type` for `kind`) is a warning that names the key meant.
+  like a lens flare, or like the sun with `effects\sun`); a stash whose name the spawn layer cannot write as it
+  is, or writes another object under, is `S226` (an error: a quest reaches the stash by its name); a spawn
+  point whose story id is not named after the module (the module's id a word of it) is `S227` (a story id is
+  one name in the whole game: the game stops when a second object carrying it spawns, another module's too);
+  the name of a level of the module's own not named after the module is `S229` (a level's name is one
+  name for the whole game; its smart terrains and way paths are composed under the module's name); a fog
+  profile that is a file and no profile - no `[volume]` that counts its emitters, an emitter without a key the
+  game reads - is `S220` with what it lacks; a key that is nearly a key of the kind (`type` for `kind`) is a warning that names the key meant.
 - `scene.audit` - where things stand, every finding a warning at the object's line of its file:
 
   | Code | Word | What |
@@ -275,6 +291,8 @@ return {
   | `S215` | `in_geometry` | a wall or a steep slope of the level (or of a terrain) passes through its middle |
   | `S216` | `ghost` | a static object none of whose faces stop a body |
   | `S217` | `on_ghost` | it stands on faces that are drawn and stop nothing: a body falls through |
+  | `S218` | `stash_no_case` | a stash whose model has no unseen case (`<ref>_case`): it opens by the inventory box's own |
+  | `S219` | `stash_scaled` | a stash that is scaled: its case is not |
 
   The audit reads what stops a body - a level's collision, the faces of a model that collide - and a spawn
   point is the model its entity wears: a crate, a lamp, a stalker stands, floats and overlaps like any object.
@@ -387,8 +405,9 @@ Write - the scene is <name>.scene and a folder of Lua files; the editor follows 
 
 Settle:  scene.align action=drop|surface objects=... [offset=<m>], then scene.save (only changed lines).
 Check:   asset.check (S220 a name nobody has, S221-S223 what the game does not take, S224 a model nobody sees,
-         S225 a glow's shader)
-         scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S217 on_ghost)
+         S225 a glow's shader, S226 a stash's name, S227 a story id and S229 a level of the module's
+         own not named after the module)
+         scene.audit [objects=...|area=...] [checks=...]   (S201 floating ... S219 stash_scaled)
 Build:   level.status   level.build   level.inspect part=pieces|cuts|ai_edits   mod.build (answers media)   mod.info
          level.inspect part=visuals piece=main [shader=<text>]   what the module's piece of the level holds
 Play:    level.play

@@ -55,6 +55,7 @@ pub const UNLINKED: &str = "I426";
 pub const NEVER_DROPS: &str = "I430";
 pub const LIKE_IGNORED: &str = "I431";
 pub const NOT_YOURS: &str = "I433";
+pub const NOT_NAMED: &str = "I434";
 
 /// What only the linked game and the project know. Blocking to ask (a model's motions are read
 /// on first need): check on the IO pool.
@@ -232,6 +233,36 @@ fn check_values(
     }
 }
 
+/// `I434`: a section the item makes that is not named after the module. A section is one name
+/// for the whole game: another module that makes it too is left out, or its item is (the game keeps
+/// the first). An item's section left out is `<module>_<id>`, which is.
+fn named_after_module(out: &mut Vec<Issue>, item: &Item, module: &str) {
+    if module.is_empty() {
+        return;
+    }
+    let say = |name: &str| {
+        format!(
+            "[{name}] is a new section and not named after the module: a section is one name for the whole game, and of two modules whose items make [{name}] the game keeps the first and leaves the other's item out - name it '{}', or carry the module id as a word of it",
+            gz_mod::names::own_form(name, module)
+        )
+    };
+    if item.edit.is_none()
+        && let Some(section) = item.section.as_deref().filter(|s| !s.is_empty())
+        && !gz_mod::names::is_own(section, module)
+    {
+        out.push(Issue::warning(NOT_NAMED, at(&["section"]), say(section)));
+    }
+    for (row, s) in item.sections.iter().enumerate() {
+        if !s.name.is_empty() && !gz_mod::names::is_own(&s.name, module) {
+            out.push(Issue::warning(
+                NOT_NAMED,
+                vec![Seg::key("sections"), Seg::Index(row), Seg::key("name")],
+                say(&s.name),
+            ));
+        }
+    }
+}
+
 fn texts(out: &mut Vec<Issue>, item: &Item) {
     for (key, v) in
         [("name", &item.name), ("short_name", &item.short_name), ("description", &item.description)]
@@ -280,6 +311,7 @@ pub fn validate(item: &Item, applied: &Applied, comp: &Composition, cx: &Cx<'_>)
     let mut out = Vec::new();
     out.extend(applied.issues.iter().cloned());
     texts(&mut out, item);
+    named_after_module(&mut out, item, cx.module);
     // the keys and values go to the game through its code page too
     let mut sets: Vec<(Vec<Seg>, &Changes)> = vec![(Vec::new(), &item.changes)];
     if let Some(h) = &item.hud {

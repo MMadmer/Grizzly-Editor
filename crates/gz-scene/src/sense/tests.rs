@@ -780,11 +780,71 @@ fn the_audit_names_a_radio_bound_to_a_playlist_the_module_lacks() {
     let p: super::audit::AuditParams =
         serde_json::from_value(json!({ "checks": ["radio_playlist"] })).expect("read");
     let sc = Scene { state: &w.state, lib: &w.lib, pick: &w.pick };
-    let a = super::audit::audit_with(&sc, &p, None, Some(&radio)).unwrap_or_else(|e| panic!("{}", e.message));
+    let a = super::audit::audit_with(&sc, &p, None, Some(&radio), None)
+        .unwrap_or_else(|e| panic!("{}", e.message));
     let names: Vec<&str> =
         a.findings.iter().filter_map(|f| w.state.get(f.object).map(|o| o.name.as_str())).collect();
     assert_eq!(names, ["lost"], "{:?}", a.findings);
     assert_eq!(a.findings[0].code, "S214");
     assert!(a.findings[0].text.starts_with("lost plays the playlist 'gone', which mod.ltx does not declare"));
     assert!(found(&w, json!({ "checks": ["S214"] })).is_empty());
+}
+
+/// S218 and S219: a stash whose model has no unseen case, and a stash that is scaled; a stash
+/// with its case and a scaled object that is no stash are left alone, and without the game's
+/// models S218 does not run.
+#[test]
+fn the_audit_names_a_stash_without_its_case_and_a_scaled_one() {
+    use crate::objects::Stash;
+    /// The game's models: every case but the lost box's.
+    struct Models;
+    impl crate::names::Names for Models {
+        fn has(&self, kind: &str, name: &str) -> Option<bool> {
+            (kind == "model").then(|| name != "test\\lost_case.ogf")
+        }
+
+        fn nearest(&self, _: &str, _: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+    let w = world_with(|s| {
+        for (name, reference, scale, stash) in [
+            ("cache", "test\\box", 1.0, true),
+            ("lost", "test\\lost", 1.0, true),
+            ("big", "test\\box", 1.5, true),
+            ("crate", "test\\lost", 2.0, false),
+        ] {
+            let d =
+                SceneObjectData { stash: stash.then(Stash::default), ..SceneObjectData::library(reference) };
+            let mut o = Object::new(ObjClass::SceneObject, name, ObjData::SceneObject(d));
+            o.xform.position = Vec3::new(30.0, 0.0, 30.0);
+            o.xform.scale = Vec3::splat(scale);
+            o.marks.authored = true;
+            s.insert(o);
+        }
+    });
+    let p: super::audit::AuditParams =
+        serde_json::from_value(json!({ "checks": ["stash_no_case", "stash_scaled"] })).expect("read");
+    let sc = Scene { state: &w.state, lib: &w.lib, pick: &w.pick };
+    let a = super::audit::audit_with(&sc, &p, None, None, Some(&Models))
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    let lines: Vec<String> = a
+        .findings
+        .iter()
+        .map(|f| format!("{} {}", f.code, w.state.get(f.object).map_or("?", |o| o.name.as_str())))
+        .collect();
+    assert_eq!(lines, ["S218 lost", "S219 big"], "{:?}", a.findings);
+    assert_eq!(
+        a.findings[0].text,
+        "lost is a stash, and its model has no unseen case 'test\\lost_case' in the game or the project: the stash opens by inventory_box's own case box (0.94 x 0.43 x 0.48 m), which the build uses instead"
+    );
+    assert!(
+        a.findings[1].text.starts_with("big is a stash and is scaled (1.50 x 1.50 x 1.50)"),
+        "{}",
+        a.findings[1].text
+    );
+    // without the game's models nobody says a case is missing
+    let a = super::audit::audit_with(&sc, &p, None, None, None).unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(a.findings.len(), 1);
+    assert_eq!(a.skipped, ["S218: the game library's models are not at hand"]);
 }

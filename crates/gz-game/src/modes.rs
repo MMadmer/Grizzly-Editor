@@ -191,7 +191,8 @@ pub fn checkboxes(ui: &[u8], script: &[u8], modifiers: &[String]) -> Vec<Checkbo
         let key = if !script.is_empty() && contains(script, with.as_bytes()) { with } else { base };
         let id = normalize_id(&key);
         let available = script.is_empty() || checkbox_live(script, node);
-        let mode_key = key.len() > 5 && key.get(key.len() - 5..).is_some_and(|t| t.eq_ignore_ascii_case("_mode"));
+        let mode_key =
+            key.len() > 5 && key.get(key.len() - 5..).is_some_and(|t| t.eq_ignore_ascii_case("_mode"));
         let campaign = mode_key && !modifiers.iter().any(|m| m.eq_ignore_ascii_case(&node_text));
 
         // the caption lives on the sibling label node, as a string-table id
@@ -443,7 +444,9 @@ end\n";
         assert!(boxes[0].campaign);
         assert!(boxes[0].available);
         assert_eq!(boxes[0].key, "new_game_metro_mode");
-        assert!(!checkboxes(b"<check_metro_mode x=\"5\"/>", b"", &["check_metro_mode".to_owned()])[0].campaign);
+        assert!(
+            !checkboxes(b"<check_metro_mode x=\"5\"/>", b"", &["check_metro_mode".to_owned()])[0].campaign
+        );
     }
 
     #[test]

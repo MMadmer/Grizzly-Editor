@@ -92,6 +92,14 @@ fn check_scene(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
         let lib = gz_project::library_root(&ed);
         let levels = crate::base::BaseLevels::of(&ed).get();
         let names = crate::names::NameSources::names(&ed).await;
+        let module = match ed.project_opt() {
+            Some(s) => gz_mod::ManifestService::of_session(&ed, &s)
+                .await
+                .ok()
+                .and_then(|m| m.snapshot().manifest().map(|x| x.id.clone())),
+            None => None,
+        }
+        .unwrap_or_default();
         ed.exec
             .io(move || {
                 let texts = match crate::service::read_texts(&abs) {
@@ -126,6 +134,10 @@ fn check_scene(ed: Arc<Editor>, file: Arc<AssetFile>) -> BoxFuture<'static, Vec<
                             undrawn_models(&read, &folder, &**names, st, &mut more);
                         }
                         directional_lights(&read, &folder, &mut more);
+                        stash_names(&read, &folder, &mut more);
+                        let game_levels = levels.as_ref().map(|l| l.names()).unwrap_or_default();
+                        story_ids(&read, &folder, &main, &module, &game_levels, &mut more);
+                        own_level_names(&read, &main, &module, &game_levels, &mut more);
                         glow_shaders(&read, &folder, &mut more);
                         zones_over_a_level(&read, &folder, &mut more);
                         details_over_a_level(&read, &main, &mut more);
@@ -234,6 +246,103 @@ fn picked_names(
             });
         }
     }
+}
+
+/// `S226`: a stash whose name the spawn layer cannot write as it is, or writes another object
+/// under. A quest reaches the stash by its name: the build refuses it.
+fn stash_names(read: &format::Read, folder: &gz_base::RelPath, out: &mut Vec<Problem>) {
+    for (id, why) in crate::objects::stash::clashes(&read.state) {
+        let Some(o) = read.state.get(id) else { continue };
+        let p = Problem::error("S226", why);
+        out.push(match key_place(read, folder, o, "name") {
+            Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+            None => p,
+        });
+    }
+}
+
+/// `S227`: a spawn point of the module whose story id is not named after the module. A story id
+/// is one name in the whole game: of two objects that carry one the game keeps it for the first -
+/// the game's own, then the module earlier in the load order - and takes it from the other, which
+/// a quest or a script then does not find by it.
+fn story_ids(
+    read: &format::Read,
+    folder: &gz_base::RelPath,
+    main: &gz_base::RelPath,
+    module: &str,
+    game_levels: &[gz_base::SmolStr],
+    out: &mut Vec<Problem>,
+) {
+    if module.is_empty() {
+        return;
+    }
+    // a whole scene of a level of the game holds the game's own objects: the module's are what it
+    // marks authored, as the spawn layer takes them
+    let level = level_of(read, main);
+    let of_the_game =
+        !read.state.meta.base.is_set() && game_levels.iter().any(|l| l.eq_ignore_ascii_case(&level));
+    let ours =
+        |o: &&std::sync::Arc<crate::model::Object>| !o.marks.base && (!of_the_game || o.marks.authored);
+    for o in read.state.of_class(crate::class::ObjClass::SpawnPoint).filter(ours) {
+        let Some(sid) = crate::props::story_id_of(o) else { continue };
+        if gz_mod::names::is_own(&sid, module) {
+            continue;
+        }
+        let p = Problem::warning(
+            "S227",
+            format!(
+                "{} carries the story id '{sid}', which is not named after the module: a story id is one name in the whole game, and of two objects that carry it the game keeps it for the first - the game's own, or a module's earlier in the load order - and takes it from the other. Name the module's own '{}', or carry the module id as a word of it",
+                o.name,
+                gz_mod::names::own_form(&sid, module)
+            ),
+        );
+        out.push(match key_place(read, folder, o, "props") {
+            Some((file, s)) => p.in_file(file).at(s.line, s.column, s.end_line, s.end_column),
+            None => p,
+        });
+    }
+}
+
+/// The level a scene is of: the level it lies over, else its name - its file's, since the check
+/// reads the scene from its texts.
+fn level_of(read: &format::Read, main: &gz_base::RelPath) -> String {
+    let stem = main.file_name().rsplit_once('.').map_or(main.file_name(), |(s, _)| s).to_owned();
+    Some(read.state.meta.level_name()).filter(|l| !l.is_empty()).unwrap_or(stem)
+}
+
+/// `S229`: the name of a level of the module's own is one name for the whole game - of two modules
+/// that bring a level of it, the game joins one and leaves the other out. A level of the game is
+/// the game's; the objects of every scene are composed under the module's own name
+/// (`<module>.<name>`), its smart terrains and way paths too.
+fn own_level_names(
+    read: &format::Read,
+    main: &gz_base::RelPath,
+    module: &str,
+    game_levels: &[gz_base::SmolStr],
+    out: &mut Vec<Problem>,
+) {
+    // without the game's levels nothing tells a level of the module's own
+    if module.is_empty() || read.state.meta.base.is_set() || game_levels.is_empty() {
+        return;
+    }
+    let level = level_of(read, main);
+    if level.is_empty()
+        || game_levels.iter().any(|l| l.eq_ignore_ascii_case(&level))
+        || gz_mod::names::is_own(&level, module)
+    {
+        return;
+    }
+    out.push(
+        Problem::warning(
+            "S229",
+            format!(
+                "the level '{level}' is the module's own and not named after the module: a level's name is one name for the whole game, and of two modules that bring a level of it the game joins one and leaves the other out - name the scene '{}', or carry the module id as a word of it",
+                gz_mod::names::own_form(&level, module)
+            ),
+        )
+        .in_file(main.clone())
+        .at_line(1),
+    );
 }
 
 /// `S225`: a glow that names a shader no glow is drawn with. The game draws a glow with the lens
@@ -459,6 +568,135 @@ mod tests {
         assert_eq!(p.code.as_str(), "S224");
         assert!(p.message.contains("unseen") && p.message.contains("box_case.ogf"), "{}", p.message);
         // on the object's own line of its file
+        assert_eq!(p.file.as_ref().map(gz_base::RelPath::as_str), Some("levels/yard/objects.lua"));
+        assert_eq!(p.line, Some(3));
+    }
+
+    /// A story id the module's spawn point carries is named after the module, or it is said at
+    /// its line: another module, or the game, may carry the same and stop the game.
+    #[test]
+    fn a_story_id_not_named_after_the_module_is_said_at_its_line() {
+        let st = gz_entities::MapSettings::new()
+            .section("script", &[("current_server_entity_version", "12")])
+            .section(
+                "stalker",
+                &[
+                    ("class", "AI_STL_S"),
+                    ("ef_creature_type", "1"),
+                    ("going_speed", "1.5"),
+                    ("terrain", "stalker_terrain"),
+                    ("MaxHealthValue", "200"),
+                    ("eye_range", "100"),
+                    ("visual", "actors\\x\\x.ogf"),
+                    ("max_item_mass", "50"),
+                    ("character_profile", "sim_default"),
+                ],
+            );
+        let spawns = [
+            r#"{ name = "wolf", section = "stalker", pos = { 0, 0, 0 }, props = { custom_data = "[story_object]\nstory_id = esc_wolf\n" } },"#,
+            r#"{ name = "fox", section = "stalker", pos = { 1, 0, 0 }, props = { custom_data = "[story_object]\nstory_id = my_mod_fox\n" } },"#,
+            r#"{ name = "owl", section = "stalker", pos = { 2, 0, 0 } },"#,
+        ];
+        let texts = format::Texts {
+            scene: "return {\n  scene = 2,\n}\n".into(),
+            files: vec![(
+                "spawns.lua".into(),
+                format!("return {{\n  spawns = {{\n    {}\n  }},\n}}\n", spawns.join("\n    ")),
+            )],
+            layers: Vec::new(),
+        };
+        let main = gz_base::RelPath::new("levels/yard.scene").unwrap();
+        let folder = gz_base::RelPath::new("levels/yard").unwrap();
+        let read = format::read_based(&texts, &main, &folder, Some(&st), None, None).unwrap();
+        assert!(read.problems.is_empty(), "{:?}", read.problems);
+        let mut out = Vec::new();
+        story_ids(&read, &folder, &main, "my_mod", &[], &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!((out[0].code.as_str(), out[0].line), ("S227", Some(3)));
+        assert!(
+            out[0].message.contains("'esc_wolf'") && out[0].message.contains("'my_mod_esc_wolf'"),
+            "{}",
+            out[0].message
+        );
+        // a scene with no module to name says nothing
+        let mut none = Vec::new();
+        story_ids(&read, &folder, &main, "", &[], &mut none);
+        assert!(none.is_empty());
+        // a whole scene of a level of the game: its objects are the game's but what is authored
+        story_ids(&read, &folder, &main, "my_mod", &["yard".into()], &mut none);
+        assert!(none.is_empty(), "{none:?}");
+    }
+
+    /// The name of a level of the module's own is named after the module; a level of the game is
+    /// the game's.
+    #[test]
+    fn a_level_of_the_modules_own_is_named_after_it() {
+        let texts = format::Texts {
+            scene: "return {\n  scene = 2,\n}\n".into(),
+            files: Vec::new(),
+            layers: Vec::new(),
+        };
+        let main = gz_base::RelPath::new("levels/yard.scene").unwrap();
+        let folder = gz_base::RelPath::new("levels/yard").unwrap();
+        let read = format::read_based(&texts, &main, &folder, None, None, None).unwrap();
+        let game: Vec<gz_base::SmolStr> = vec!["l01_escape".into()];
+        let mut out = Vec::new();
+        own_level_names(&read, &main, "my_mod", &game, &mut out);
+        let codes: Vec<(&str, Option<u32>)> = out.iter().map(|p| (p.code.as_str(), p.line)).collect();
+        assert_eq!(codes, [("S229", Some(1))], "{out:?}");
+        assert!(
+            out[0].message.contains("'yard'") && out[0].message.contains("'my_mod_yard'"),
+            "{}",
+            out[0].message
+        );
+        // a level of the game, a level of the module's name, or no game to tell one by, says nothing
+        let mut none = Vec::new();
+        own_level_names(&read, &main, "my_mod", &["yard".into()], &mut none);
+        own_level_names(&read, &main, "yard", &game, &mut none);
+        own_level_names(&read, &main, "my_mod", &[], &mut none);
+        assert!(none.is_empty(), "{none:?}");
+    }
+
+    /// A stash whose name the spawn layer writes another object under is an error at its line;
+    /// one of a name of its own is no problem.
+    #[test]
+    fn a_stash_whose_name_another_object_takes_in_the_layer_is_an_error_at_its_line() {
+        let objects = [
+            r#"{ name = "esc_cache", pos = { 1, 0, 0 }, ref = "dynamics/box", stash = true },"#,
+            r#"{ name = "free_cache", pos = { 2, 0, 0 }, ref = "dynamics/box", stash = { loot = false } },"#,
+        ];
+        let spawns = r#"{ name = "esc cache", section = "inventory_box" },"#;
+        let texts = format::Texts {
+            scene: "return {\n  scene = 2,\n}\n".into(),
+            files: vec![
+                (
+                    "objects.lua".into(),
+                    format!("return {{\n  objects = {{\n    {}\n  }},\n}}\n", objects.join("\n    ")),
+                ),
+                ("spawns.lua".into(), format!("return {{\n  spawns = {{\n    {spawns}\n  }},\n}}\n")),
+            ],
+            layers: Vec::new(),
+        };
+        let main = gz_base::RelPath::new("levels/yard.scene").unwrap();
+        let folder = gz_base::RelPath::new("levels/yard").unwrap();
+        let mut read = format::read_based(&texts, &main, &folder, None, None, None).unwrap();
+        // what the module places is its own
+        let ids: Vec<_> = read.state.objects.keys().copied().collect();
+        for id in ids {
+            let mut o = (**read.state.get(id).unwrap()).clone();
+            o.marks.authored = true;
+            read.state.replace(o);
+        }
+        let mut out = Vec::new();
+        stash_names(&read, &folder, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        let p = &out[0];
+        assert_eq!((p.code.as_str(), p.severity), ("S226", gz_base::Severity::Error));
+        assert!(
+            p.message.contains("esc cache is written into the spawn layer under the same name"),
+            "{}",
+            p.message
+        );
         assert_eq!(p.file.as_ref().map(gz_base::RelPath::as_str), Some("levels/yard/objects.lua"));
         assert_eq!(p.line, Some(3));
     }

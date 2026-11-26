@@ -169,3 +169,4 @@ What a key of an item's section means is the game's: its `configs\item_catalog.l
 | `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |
 | `I432` | error | A key that is another file's to say: `sold` (a trader's), `loot` (a loot table's), `craft` (a recipe's), `lists` (a patch's). |
 | `I433` | error | A row of `sections` that makes or changes the section of another item asset of the module. |
+| `I434` | warning | A section the item makes (`section`, a row of `sections`) that is not named after the module: the module's id is no word of it. |

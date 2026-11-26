@@ -277,6 +277,7 @@ fn view_json(t: &GraphTab, ctx: &egui::Context) -> Value {
     );
     o.insert("slot".into(), json!(m.slot));
     o.insert("selected".into(), json!(m.selection));
+    o.insert("selected_reroutes".into(), json!(t.canvas.selected_knots()));
     o.insert("keys".into(), json!(t.show_keys));
     o.insert("drawer".into(), json!(drawer.name()));
     o.insert("graph_panel".into(), json!(t.graph_panel_state()));
@@ -429,8 +430,13 @@ fn apply(t: &mut GraphTab, ctx: &egui::Context, p: &ViewParams) -> Result<u32, C
     }
     // before the slot: selecting clears it, and "select a node, open its action" ends on the action
     if let Some(w) = want {
+        // Select All takes the reroutes too; any other selection asked for is of nodes alone
+        let all = matches!(&p.select, Some(Value::String(s)) if s == "all");
+        let scene = t.scene().cloned();
         t.mirror.selection = w;
         t.mirror.slot.clear();
+        t.canvas.select_all_knots(scene.as_deref(), all);
+        t.canvas.selection_seen(&t.mirror.selection);
     }
     if let Some(gw) = p.grow {
         let dir = match gw {

@@ -14,7 +14,7 @@ use gz_nq::catalog::{USE_EXTRA, USE_MAIN, USE_TRIGGER};
 use gz_nq::doc::DocOp;
 use gz_nq::{Catalog, text};
 use gz_ui::grid::{self, PropFlags};
-use gz_ui::{Clip, Font, Icon, NavRowSpec, Tone, Tx, nav_row, palette, tr};
+use gz_ui::{Clip, Font, Icon, NavRowSpec, TipExt, Tone, Tx, nav_row, palette, tr};
 use smol_str::SmolStr;
 
 use crate::canvas::{Op, ViewMirror};
@@ -150,8 +150,13 @@ pub struct Inspector {
     header_dirty: bool,
     id_buf: String,
     id_buf_of: SmolStr,
+    /// The UI pass the ID field last had the focus in: a rename left by a click elsewhere is
+    /// committed only right after it was being typed.
+    id_focus_pass: u64,
     var_sel: usize,
     var_name_buf: String,
+    /// The variable whose name `var_name_buf` holds.
+    var_name_of: String,
     globals: Vec<(String, Value)>,
     globals_rev: Option<gz_base::Rev>,
     globals_dirty: bool,
@@ -159,6 +164,9 @@ pub struct Inspector {
     global_name_buf: String,
     reveal_key: String,
     reveal_frames: u8,
+    /// When the action shown last changed: a pane that changes its height soon after shows it
+    /// again, one that changes later (a drawer, the window) leaves the author's scroll alone.
+    reveal_at: f64,
     reveal_open: bool,
     /// The node pane's height last frame.
     reveal_pane_h: f32,
@@ -304,7 +312,7 @@ impl Inspector {
 
     // ---- staging ------------------------------------------------------------------------------
 
-    fn sync_node(&mut self, cx: &mut PanelCx<'_>) {
+    fn sync_node(&mut self, cx: &mut PanelCx<'_>, pass: u64) {
         let sel = match cx.view.selection.as_slice() {
             [one] => one.clone(),
             _ => SmolStr::default(),
@@ -315,6 +323,27 @@ impl Inspector {
             if self.node_dirty {
                 self.commit_node(cx);
             }
+            // an id typed and left by a click elsewhere (the canvas is drawn first, so the
+            // selection moved before the field could lose its focus) is a rename all the same
+            let typed = self.id_buf.trim().to_owned();
+            if sel != self.node_id
+                && !self.node_id.is_empty()
+                && self.id_buf_of == self.node_id
+                && pass <= self.id_focus_pass + 1
+                && !typed.is_empty()
+                && typed != self.node_id.as_str()
+                && cx.graph.find_node(&self.node_id).is_some()
+            {
+                cx.ops
+                    .push(Op::Doc(DocOp::RenameNode { id: self.node_id.to_string(), new_id: typed.clone() }));
+                // a selection that still holds the node holds it under its new id
+                for s in &mut cx.view.selection {
+                    if *s == self.node_id {
+                        *s = SmolStr::new(&typed);
+                    }
+                }
+            }
+            self.id_buf_of = SmolStr::default();
             self.node_id = sel.clone();
             self.node_edit = cx.edit;
             self.node_dirty = false;
@@ -921,7 +950,20 @@ impl Inspector {
                     }
                 }
             });
-            if let Some(i) = pick {
+            if let Some(i) = pick
+                && i != self.var_sel
+            {
+                // a name typed and left for another variable is a rename all the same
+                let want = self.var_name_buf.trim().to_owned();
+                let of = std::mem::take(&mut self.var_name_of);
+                if !want.is_empty() && want != of && self.header.vars.iter().any(|v| v.name == of) {
+                    if self.rename_var(cx, &of, &want) {
+                        ch = true;
+                    } else {
+                        self.notes.push(format!("The variable '{want}' already exists"));
+                    }
+                }
+                self.var_name_buf.clear();
                 self.var_sel = i;
             }
             if let Some(i) = drop {
@@ -941,6 +983,7 @@ impl Inspector {
                 );
                 if self.var_name_buf.is_empty() || !ui.ctx().egui_wants_keyboard_input() {
                     self.var_name_buf.clone_from(&var.name);
+                    self.var_name_of.clone_from(&var.name);
                 }
                 let mut buf = self.var_name_buf.clone();
                 let mut commit = false;
@@ -1283,7 +1326,7 @@ impl Inspector {
     /// The Details panel into `rect`.
     #[allow(clippy::too_many_lines)]
     pub fn draw_details(&mut self, ui: &mut Ui, rect: Rect, cx: &mut PanelCx<'_>) {
-        self.sync_node(cx);
+        self.sync_node(cx, ui.ctx().cumulative_pass_nr());
         self.sync_header(cx);
         let ctx = ui.ctx().clone();
         let spacing = 4.0;
@@ -1306,6 +1349,7 @@ impl Inspector {
             self.reveal_frames = if self.node_id.is_empty() || cx.view.slot.is_empty() { 0 } else { 3 };
             self.reveal_open = self.reveal_frames > 0;
             self.reveal_key = reveal;
+            self.reveal_at = ui.input(|i| i.time);
         }
 
         if self.node_id.is_empty() || cx.graph.find_node(&self.node_id).is_none() {
@@ -1378,7 +1422,7 @@ impl Inspector {
     fn node_pane_draw(&mut self, ui: &mut Ui, r: Rect, cx: &mut PanelCx<'_>) {
         // a pane that changed its height (the split moved) shows the selected action again
         if (r.height() - self.reveal_pane_h).abs() > 0.5 {
-            if !cx.view.slot.is_empty() {
+            if !cx.view.slot.is_empty() && ui.input(|i| i.time) - self.reveal_at < 1.0 {
                 self.reveal_frames = self.reveal_frames.max(3);
             }
             self.reveal_pane_h = r.height();
@@ -1395,7 +1439,11 @@ impl Inspector {
             sa = sa.vertical_scroll_offset(0.0);
             self.scroll = None;
         }
-        let out = sa.show(&mut pane, |ui| self.draw_node_section(ui, cx));
+        // each node's fields under an id of its own: a field focused on one node is not the same
+        // field of the next one, and nothing typed for one reaches the other
+        let scope = self.node_id.clone();
+        let out = sa
+            .show(&mut pane, |ui| ui.push_id(("node", scope.as_str()), |ui| self.draw_node_section(ui, cx)));
         if req.as_deref() == Some("bottom") {
             self.bottom_next = Some("node");
             self.scroll = None;
@@ -1417,7 +1465,10 @@ impl Inspector {
             sa = sa.vertical_scroll_offset(0.0);
             self.scroll = None;
         }
-        let out = sa.show(&mut pane, |ui| self.draw_action_section(ui, cx));
+        let scope = (self.node_id.clone(), cx.view.slot.clone());
+        let out = sa.show(&mut pane, |ui| {
+            ui.push_id(("action", scope.0.as_str(), scope.1.as_str()), |ui| self.draw_action_section(ui, cx))
+        });
         if req.as_deref() == Some("action:bottom") {
             self.bottom_next = Some("action");
             self.scroll = None;
@@ -1444,9 +1495,10 @@ impl Inspector {
         );
         // what is wrong with the node, first: each line names a parameter and says what to do
         for pr in cx.data.problems.iter().filter(|pr| pr.node == self.node_id.as_str()) {
-            // the validator's English
-            let line = look::problem_line(ui.ctx(), pr);
-            gz_ui::text::status(ui, if pr.is_error() { Tone::Error } else { Tone::Warning }, Tx::raw(line));
+            // the validator's English as a sentence; its code and place are the tooltip's
+            let tone = if pr.is_error() { Tone::Error } else { Tone::Warning };
+            gz_ui::text::status(ui, tone, Tx::ui(pr.sentence()))
+                .tip(Tx::raw(look::problem_line(ui.ctx(), pr)));
         }
         let mut ch = false;
         let (open, _) = fold(ui, &self.key("node"), "Node", None, true, None);
@@ -1469,6 +1521,9 @@ impl Inspector {
                         let r = grid::text_field(ui, &mut buf);
                         if focus {
                             r.request_focus();
+                        }
+                        if r.has_focus() {
+                            self.id_focus_pass = ui.ctx().cumulative_pass_nr();
                         }
                         commit = r.lost_focus();
                     },
@@ -1761,10 +1816,35 @@ impl Inspector {
             self.node_dirty = true;
             return;
         }
+        // when it runs: as the node is entered, or as it is left - switched here, the action goes
+        // to the end of the other list
+        let mut at = usize::from(exit);
+        let switched = params::grid(ui, ROLE_ACTION, "runs", |g| {
+            g.row(
+                "Runs",
+                "On enter: as the node is reached, before it waits. On exit: as the node is left, after what it waited for",
+                PropFlags::NONE,
+                0,
+                |ui| gz_ui::segmented(ui, &mut at, &["On Enter", "On Exit"], None),
+            )
+            .unwrap_or(false)
+        });
+        if switched && (at == 1) != exit {
+            let moved = list.remove(index);
+            let other = if exit { &mut self.node.on_enter } else { &mut self.node.on_exit };
+            other.push(moved);
+            cx.view.slot = format!("{}:{}", if exit { "enter" } else { "exit" }, other.len() - 1);
+            self.node_dirty = true;
+            return;
+        }
         let mut ch = false;
         let desc = look::kind_desc(cat, &a.kind, behaviour);
         let mut kind = a.kind.to_string();
-        let focus = std::mem::take(&mut self.focus_action);
+        // the action asked for is brought into view; the keys stay the canvas's (a focused field
+        // would take every shortcut, and Space would open the list)
+        if std::mem::take(&mut self.focus_action) {
+            self.reveal_frames = self.reveal_frames.max(3);
+        }
         let changed = params::grid(ui, ROLE_ACTION, "kind", |g| {
             g.row(
                 "Kind",
@@ -1775,12 +1855,7 @@ impl Inspector {
                 },
                 PropFlags::NONE,
                 0,
-                |ui| {
-                    if focus {
-                        ui.memory_mut(|m| m.request_focus(ui.next_auto_id()));
-                    }
-                    look::kind_combo(ui, "action_kind", cat, USE_EXTRA, behaviour, &mut kind)
-                },
+                |ui| look::kind_combo(ui, "action_kind", cat, USE_EXTRA, behaviour, &mut kind),
             )
             .unwrap_or(false)
         });

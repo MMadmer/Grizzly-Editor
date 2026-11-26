@@ -646,6 +646,52 @@ pub enum Scope {
     Selection,
     /// The selected node and what only it leads to, from where it stands.
     Branch,
+    /// The whole tree each selected node is wired into, from its start, which keeps its place.
+    Tree,
+}
+
+/// The tree a node is wired into, and the start it grows from: every node a wire joins to it
+/// either way, and of them the first trigger, else the first node nothing leads into, else the
+/// node itself (a cycle nothing enters).
+#[must_use]
+pub fn tree(catalog: &Catalog, g: &Graph, node: usize) -> (Vec<usize>, usize) {
+    let n = g.nodes.len();
+    let index = g.index();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut fed = vec![false; n];
+    for (u, nd) in g.nodes.iter().enumerate() {
+        for p in &nd.out {
+            for t in &p.targets {
+                if let Some(&v) = index.get(t.as_str())
+                    && v != u
+                {
+                    adj[u].push(v);
+                    adj[v].push(u);
+                    fed[v] = true;
+                }
+            }
+        }
+    }
+    let mut seen = vec![false; n];
+    let mut out = Vec::new();
+    if node < n {
+        seen[node] = true;
+        out.push(node);
+    }
+    let mut i = 0;
+    while let Some(&u) = out.get(i) {
+        for &v in &adj[u] {
+            if !seen[v] {
+                seen[v] = true;
+                out.push(v);
+            }
+        }
+        i += 1;
+    }
+    out.sort_unstable();
+    let trigger = |i: &&usize| g.nodes.get(**i).is_some_and(|nd| catalog.is_trigger(&nd.kind));
+    let root = out.iter().find(trigger).or_else(|| out.iter().find(|&&i| !fed[i])).copied().unwrap_or(node);
+    (out, root)
 }
 
 /// The nodes a node's branch holds: itself and every node it dominates along the forward wires.

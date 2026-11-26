@@ -246,6 +246,7 @@ fn shown_in(lang: &gz_ui::i18n::Catalog, s: layout::Shown<'_>) -> String {
         |en: &str, ctx: &str| lang.lookup(en, Some(ctx)).map_or_else(|| en.to_owned(), |t| t.to_string());
     match s {
         layout::Shown::Title(t) => say(t, "kind"),
+        layout::Shown::Badge(w) => say(w, "badge"),
         layout::Shown::Key(l) if l.cond.is_empty() => say(&l.key, "param"),
         layout::Shown::Key(l) => match l.key.strip_prefix("Not ").filter(|_| l.negate) {
             // the title as the catalog has it, after the English "Not ", which is as wide

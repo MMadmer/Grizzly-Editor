@@ -29,7 +29,8 @@ in the game repo. The architecture contract — `docs/NQ_ARCHITECTURE.md`.
   `flow.branch`), `["not"] = true` (condition inversion), `["repeat"] = true`
   (a `trigger.when` parameter).
 - A node's `pos` is **optional** — editor canvas coordinates, the game ignores
-  them. Nodes without `pos` are laid out automatically on open. `comment` is an
+  them. Nodes without `pos` are laid out automatically on open, beside the placed node a wire
+  joins them to. `comment` is an
   editor-only field too.
 - The editor writes **only what changed** (`docs/ASSETS.md`). A save puts each
   changed value into the text where it stands and leaves every other byte as it
@@ -38,7 +39,8 @@ in the game repo. The architecture contract — `docs/NQ_ARCHITECTURE.md`.
   not written at all. A `pos` the editor worked out for a node that had none is
   not written until the author moves that node; a new node goes after the node
   it is linked from, and a new key after its neighbours, in the indent around it.
-- `nq = 1` is the format version (`beh = 1` for a behaviour graph, §10). A file
+- `nq = 2` is the format version (`beh = 2` for a behaviour graph, §10; version 1 reads too, lifted by
+  its step: a version 1 listener of a plain signal name becomes `*.<name>` - see `event.signal`). A file
   of a newer version is refused with a sentence naming both versions
   (`newer_version`: update the editor). An older version is lifted step by step
   as the file is read; the text stays as it was until the file is saved, and
@@ -217,7 +219,7 @@ refused (`E022`).
 | `duration` | `{ seconds = N }` (real time), `{ game_minutes = N }`, `{ game_hours = N }`, `{ game_seconds = N }` (game time), or a plain number (real seconds) | |
 | `npc_ref` | `{ story = "esc_2_12_stalker_wolf" }` \| `{ ref = "guard" }` \| `{ character = "valera" }` \| `{ profile = "…" }` \| `{ community = "stalker", level = "l01_escape" }` | resolve: `ref` → `story` → `character` → the first online NPC by `profile`/`community`. `character` is a character of this project by the `id` of its `.npcasset` (`"<module>.<id>"` for another module's), found online or offline, the living one before a body; it is how any quest points at the module's own people without a story id |
 | `target_ref` | any `npc_ref`, or `{ ref = "boars" }` (squad/object), or `{ smart = "…" }`, or a place: `{ restrictor = "…" }`, `{ level = "…", pos = { x, y, z } }` | a restrictor is taken by name (`map.spot`, the task markers); a point is anchored with a `space_restrictor` of the task (`task.set_target`, `task.set_objective_target`) |
-| `object_ref`, `squad_ref` | `{ story = "…" }` \| `{ ref = "…" }`; an `object_ref` also `{ character = "…" }` | ONE specific world object; narrower than `npc_ref` — `profile`/`community` name a kind of creature, not a thing, while a character is one person |
+| `object_ref`, `squad_ref` | `{ story = "…" }` \| `{ ref = "…" }`; an `object_ref` also `{ character = "…" }` and `{ name = "…" }` | ONE specific world object; narrower than `npc_ref` — `profile`/`community` name a kind of creature, not a thing, while a character is one person; `name` is an object placed in the level or the module's scene by its name (a zone the quest is done with, for `object.remove`) |
 | `kill_target` | `{ story = … }` \| `{ ref = … }` \| `{ character = … }` \| `{ spawn = { section, smart\|place, restrictor, spread, ref, hold } }` | only on `objective.kill`; `spawn` creates the squad on entry, `ref` saves it, `hold = true` pins it in place |
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` \| `{ ref = "anchor" }` \| `{ actor = true, distance = 2 }` | `radius` defaults to 5; `ref` is where an object this quest created stands; `actor` is that many metres in front of the player, resolved when the action runs — a spawn point, not a destination (refused on `objective.reach`, `actor_in_place`, `actor.teleport`) |
 | `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once. A kind that CREATES or CONSUMES the items declares a **row schema** in the catalog (`rows` + `row.<name>`): its rows are sections only, typed by that schema — `item.give`, `item.take` (a row may say `count = "all"`), `item.spawn` (each row carries its own state) |
@@ -343,7 +345,7 @@ there.
 | `dialog.actor_phrase` | Dialog: player phrase | **`text: text`** | `next` |  | `false` | Player reply option. Node conditions gate visibility. |
 | `objective.kill` | Kill target | **`target: kill_target`**, `by_actor: bool = false`, `spot_task: task_id`, `spot_objective: objective_id`, `spot_done: bool = true` | `done` | ✔ | `false` | Waits for the target to die: an NPC by story id, a saved ref, or a squad from spawn (created on entry, saved under ref). spot_task points the bound task marker (spot_objective: its objective) at the target. spot_done completes the bound task or objective when the node closes. |
 | `objective.kill_count` | Kill N targets | `count: int = 1`, `by_actor: bool = true`, `community: community`, `squad: object_ref`, `section: string` | `done` | ✔ | `false` | Counts kills from node entry until count is reached, survives saves. by_actor counts only player kills. Optional single filter: community, squad, or section. |
-| `objective.fetch` | Fetch items | `section: item_section`, `count: int = 1`, `items: item_list`, `from: object_ref`, `spawn: loot_spawn`, `spot_task: task_id`, `spot_objective: objective_id`, `spot_done: bool = true` | `done` | ✔ | `false` | Waits until the player holds the items. items rows: a section with a count, or one concrete object (ref or story id), mixed freely. section+count is the one-row shorthand. from credits only items taken from that container. spawn creates the loot on entry and credits only those instances. spot_task (spot_objective: its objective) points the bound marker at the nearest pending source. spot_done completes the bound task or objective on close. count is in items (ammo: boxes). |
+| `objective.fetch` | Fetch items | `section: item_section`, `count: int = 1`, `items: item_list`, `from: object_ref`, `spawn: loot_spawn`, `keep_from_npcs: bool = true`, `spot_task: task_id`, `spot_objective: objective_id`, `spot_done: bool = true` | `done` | ✔ | `false` | Waits until the player holds the items. items rows: a section with a count, or one concrete object (ref or story id), mixed freely. section+count is the one-row shorthand. from credits only items taken from that container. spawn creates the loot on entry and credits only those instances - keep_from_npcs (on by default) keeps every NPC from picking them up while the quest runs. spot_task (spot_objective: its objective) points the bound marker at the nearest pending source. spot_done completes the bound task or objective on close. count is in items (ammo: boxes). |
 | `objective.reach` | Reach location | **`place: place`**, `spot_task: task_id`, `spot_objective: objective_id`, `spot_done: bool = true` | `done` | ✔ | `false` | Waits until the player is inside the place: a point with radius, a restrictor, a smart, or a ref created by this quest. spot_task (spot_objective: its objective) points the bound marker. spot_done completes it on close. |
 | `wait.timer` | Wait | **`duration: duration`** | `done` | ✔ | `false` | Waits for game time (game_hours, game_minutes) or real seconds. |
 | `wait.when` | Wait for conditions | `timeout: duration` | `done`, `timeout` | ✔ | `false` | Waits until the node conditions hold. timeout is an optional limit. |
@@ -365,7 +367,7 @@ else is plumbing around it. When a stage without waiting is needed —
 |---|---|---|---|
 | `item.give` | Give items | `section: item_section`, `count: int = 1`, `items: item_list` | Gives the player items: one section with a count, or a list of rows. In dialog: handed over by the NPC with a notification. count is in items (ammo: boxes). |
 | `item.take` | Take items | `section: item_section`, `count: count_or_all = 1`, `items: item_list` | Takes items from the player: one section with a count, or a list of rows. count = all takes every one. count is in items (ammo: boxes). |
-| `item.spawn` | Spawn items | `section: item_section`, `count: int = 1`, `items: item_list`, **`where: loot_spawn`**, `condition: float = 1`, `ammo: int`, `ammo_kind: item_section`, `upgrades: string`, `ref: ref_name` | Creates items where you say - the same destination forms as fetch. Every row carries its own state, full by default. |
+| `item.spawn` | Spawn items | `section: item_section`, `count: int = 1`, `items: item_list`, **`where: loot_spawn`**, `keep_from_npcs: bool = true`, `condition: float = 1`, `ammo: int`, `ammo_kind: item_section`, `upgrades: string`, `ref: ref_name` | Creates items where you say - the same destination forms as fetch. Every row carries its own state, full by default. keep_from_npcs (on by default) keeps every NPC from picking them up - off the ground, out of a stash or a body - while the quest runs. |
 | `money.give` | Give money | **`amount: int`** | Gives the player money. |
 | `money.take` | Take money | **`amount: int`** | Takes money from the player. |
 | `info.give` | Give info portion | **`info: info`** | Gives the player an info portion (bridge to vanilla logic). |
@@ -374,7 +376,7 @@ else is plumbing around it. When a stage without waiting is needed —
 | `var.add` | Add to variable | **`name: var_name`**, **`delta: float`** | Adds a number to a numeric quest variable. |
 | `global.set` | Set global variable | **`name: global_name`**, **`value: value`** | Assigns a value to a global variable of the module - one value every quest and behaviour graph of the module reads and writes. |
 | `global.add` | Add to global variable | **`name: global_name`**, **`delta: float`** | Adds a number to a numeric global variable. |
-| `signal.send` | Send signal | **`name: signal_name`** | Emits a signal for event.signal triggers and waits, including other quests. |
+| `signal.send` | Send signal | **`name: signal_name`** | Emits a signal for event.signal triggers and waits, including other quests. The signal is the module's: another module hears it as `<module>.<name>` or `*.<name>`. |
 | `quest.activate` | Activate quest | **`quest: quest_id`** | Activates another quest declared with activation = manual. |
 | `task.give` | Give task | **`task: task_id`** | Creates a PDA task from the quest tasks declaration. |
 | `task.complete` | Complete task | **`task: task_id`** | Marks a PDA task completed. |
@@ -388,11 +390,11 @@ else is plumbing around it. When a stage without waiting is needed —
 | `task.set_objective_text` | Objective text | **`task: task_id`**, **`objective: objective_id`**, `new_title: text`, `new_descr: text` | Changes one objective title and description. |
 | `task.set_objective_visible` | Objective visibility | **`task: task_id`**, **`objective: objective_id`**, `visible: bool` | Shows or hides one objective in the PDA. A hidden objective still runs and can be completed. |
 | `spawn.squad` | Spawn squad | **`section: squad_section`**, `smart: smart`, `place: place`, `restrictor: restrictor`, `spread: float = 1`, `ref: ref_name`, `hold: bool = true` | Creates a squad of the section. smart is optional when place is set (the nearest one is used). place puts them there, inside a restrictor each member gets its own navmesh point and spread pulls the area toward the center. restrictor pens them in, hold pins the squad to its smart, ref saves the squad. |
-| `spawn.object` | Spawn object | **`section: spawn_section`**, **`place: place`**, `yaw: float = 0`, `dead: bool = false`, `ref: ref_name` | Creates an object of any spawn section at a place. yaw turns it (degrees), dead lays a creature down as a corpse. ref saves it. |
+| `spawn.object` | Spawn object | **`section: spawn_section`**, **`place: place`**, `yaw: float = 0`, `dead: bool = false`, `radius: float`, `ref: ref_name` | Creates an object of any spawn section at a place. yaw turns it (degrees), dead lays a creature down as a corpse. radius makes a restrictor section (space_restrictor) a sphere of that many metres around the place - a zone the player can be inside. ref saves it, object.remove takes it away. |
 | `spawn.npc` | Spawn NPCs | **`npcs: npc_list`**, **`place: place`**, `spread: float = 1.5` | Creates one NPC per row at a place: a character of this module or a spawn section, a `ref` per NPC. Several rows are put on a ring of `spread` metres around the place, each on the navmesh, so nobody comes into the world standing inside somebody else. `unique` - see `npc_list`. Two rows of one character in one node are two on purpose: the kind is cleared once per node, and the rows do not remove each other. |
 | `squad.move` | Move squad | **`target: target_ref`**, `smart: smart`, `follow_actor: bool = false` | Sends the squad to a smart or after the player (follow_actor). |
 | `squad.remove` | Remove squad | **`target: target_ref`** | Removes the squad from the world. |
-| `object.remove` | Remove object | **`target: object_ref`** | Removes an object created by this quest (spawn.object) or one by story id. The ref is cleared afterwards. |
+| `object.remove` | Remove object | **`target: object_ref`** | Removes an object created by this quest (spawn.object), one by story id, or one placed in the level or the module's scene by its name (target = { name = ... }) - a restrictor that served as a spawn point or a trigger, say. The ref is cleared afterwards. |
 | `npc.remove` | Remove NPC | **`npc: npc_ref`** | Removes the NPC from the world. |
 | `npc.kill` | Kill NPC | **`npc: npc_ref`** | Kills the NPC. |
 | `trade.restock` | Restock trader | **`who: npc_ref`** | The trader's stock comes new the next time the player opens the trade: the NPC's resupply clock starts over. For a shop that refreshes on an event - a night that begins, a caravan that came - instead of only by its restock hours. |
@@ -465,7 +467,7 @@ True exactly at the moment of the event. Allowed **only** in `trigger.when`,
 | `event.level_entered` | Event: level entered | **`level: level`** | The player arrived on the level. |
 | `event.talk_started` | Event: talk started | `npc: npc_ref` | The player started a dialog with the NPC (empty npc: any). |
 | `event.talk_ended` | Event: talk ended | `npc: npc_ref` | The player closed a dialog with the NPC. |
-| `event.signal` | Event: signal | **`name: signal_name`** | A signal.send signal was received. |
+| `event.signal` | Event: signal | **`name: signal_name`** | A signal.send signal was received. A plain name is a signal of the graph's own module (two modules that both send `done` never start each other's quests); `<module>.<name>` is that module's, `*.<name>` every module's. |
 | `event.trade_done` | Event: trade | `npc: npc_ref` | The player completed a trade (empty npc: any). |
 
 ### 6.5a The mode's world and standing orders
@@ -508,7 +510,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 
 | Code | What is wrong | What to do |
 |---|---|---|
-| `E001` | no `nq` or the version is unsupported | put `nq = 1` as the first line of the table |
+| `E001` | no `nq`, the version is unsupported, or it is newer than the linked game reads (its catalog's `[nq.catalog] format`; a catalog without the key is a game of format 1) | put `nq = 2` as the first line of the table; for a game that reads less, update the game - it refuses such a graph by name |
 | `E002` | the quest `id` is not `[a-z0-9_]` or taken by another quest | rename the `id`; it need not match the file name (a mismatch is only `W061`) |
 | `E003` | the file is not one declarative table | remove everything that is not data: calls, `local`, concatenation, a second `return`. The syntax error position is in the message |
 | `E004` | a node `id` is empty, not `[a-z0-9_]` or duplicated | give the nodes unique lowercase ids |
@@ -526,6 +528,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `E024` | `{ role = … }` in a quest's destination or target - a quest casts nobody | name the NPC by `{ ref = }` (something the quest spawned) or `{ story = }`; roles are a behaviour graph's cast (§10.1) |
 | `E031` | `actor.teleport` to a place on another level | Dead Air has no cross-level teleports — transitions go through a level changer |
 | `E050` | a syntax error in custom Lua | fix the `code`; Check Syntax in the Edit Lua dialog (the Details panel) verifies it separately |
+| `W002` | the linked game reads graphs up to an older format than this editor writes (`[nq.catalog] format`) | the file still reads in that game, but a save writes the editor's version, which the game refuses: update the game before the module is built |
 | `W011` | continuations of a non-leaf phrase: among player replies **not all** are unconditional, or among NPC lines not a single one is (unconditional = no `cond` and no `once`) | the runtime will add a hidden leaf ("Пока." / "…"). For NPC lines it is unreachable, so one unconditional line is enough. For player replies it is a visible row that closes the talk past the topic's `done` — make every reply unconditional, or move the logic off `done` into the replies themselves |
 | `W012` | a `dialog.topic` with no continuation phrases | connect `next` to a phrase, otherwise the topic closes right after opening |
 | `W013` | a topic with `once = false` and no conditions | add a `cond` or `once = true`, otherwise the topic hangs on the NPC forever |
@@ -540,6 +543,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `W061` | the quest `id` is not the one its file name gives (lower case, anything outside `[a-z0-9_]` as `_`: `NewQuest.nqasset` gives `newquest`) | a hint, not an error; rename the file or the `id` if you want order |
 | `W062` | a spawn row sets a field its section cannot carry (a magazine on a medkit, a cartridge on a knife) | drop the field, or check the section — it is only a warning, because the editor reads the LINKED game's configs and a module's own sections are not in them |
 | `W063` | a spawn row's value is over the section's own ceiling (`ammo_mag_size`, `box_size`) | the runtime clamps it, so this is a warning; an installed upgrade can legitimately raise a magazine |
+| `W064` | an info portion the linked game does not know and that is not named after the module (the module's id a whole word of it: `<module>_...`) | an info portion is one name for the whole game: another module that gives the same one gives yours - name the module's own `<module>_<name>`; one of the game's (a bridge to its logic) is fine as it is |
 | `W070` | the quest has no `flow.end` | it will finish implicitly when tokens and triggers run out; add a `flow.end` if you want an explicit status |
 
 ---
@@ -557,10 +561,10 @@ MCP commands show no dialogs: what would lose unsaved work refuses with `unsaved
 | Command | Arguments | What it does and answers |
 |---|---|---|
 | `graph.edit` | `doc`, `ops` (a list of operations, §8.1), `save?` | all or none, one undo step; answers `applied`, the selection, `status`, `errors`, `warnings`, the `outline`, `dirty`, `undo`/`redo` |
-| `graph.arrange` | `doc`, `action` (`layout`, `align`, `distribute`, `straighten`), `how?` (align: `left`/`centre`/`right`/`top`/`middle`/`bottom`; distribute: `horizontal`/`vertical`), `nodes?` (else the selection), `scope?` (layout: `all`, `selection`, `branch`), `flow?` (`right`/`down`: the graph flows this way from now on), `save?` | the auto layout lays a graph out in its flow and wraps wide fan-outs into blocks several rows deep; `selection` lays out the nodes alone where they were, `branch` the one node and what only it leads to. Answers `moved`, `flow` and every node's box |
+| `graph.arrange` | `doc`, `action` (`layout`, `align`, `distribute`, `straighten`), `how?` (align: `left`/`centre`/`right`/`top`/`middle`/`bottom`; distribute: `horizontal`/`vertical`), `nodes?` (else the selection), `scope?` (layout: `all`, `selection`, `branch`, `tree`), `flow?` (`right`/`down`: the graph flows this way from now on), `save?` | the auto layout lays a graph out in its flow and wraps wide fan-outs into blocks several rows deep; `selection` lays out the nodes alone where they were, `branch` the one node and what only it leads to, `tree` the whole tree each node is wired into, from its start (a trigger, else a node nothing leads into), which keeps its place. Answers `moved`, `flow` and every node's box |
 | `graph.get` | `doc`, `boxes?`, `wires?`, `view?`, `at?` (`[x, y]`) | the graph as its tab holds it: `outline`, `problems` (with their `sentence`), `flow`, `wire_style` (what is in force), `frames`, `routes`, `bookmarks`; `boxes` - every node's `x`, `y`, `w`, `h` (the node box, sized by its content, 180-360 pt wide), `collapsed`, `disabled`; `wires` - every wire's polyline in the style it is drawn in, and whether it goes back; `view` - zoom, centre, selection, the history, the minimap; `at` - the node, else the wire within 10 pt, under a world point (the canvas's hit test) |
 | `graph.find` | `doc?` (left out: every graph of the project), `query?`, `go?` (`first`/`next`/`previous`/`clear`), `limit?` | nodes by ids, kinds, parameters, conditions, actions, wires and comments; the words all match, quotes keep a phrase, `-word` leaves one out. In a graph the tab follows `go` |
-| `graph.view` | `doc?` (left out: the graph tab that is up), `frame?` (`all`, `selection`, a node id), `zoom_level?` (0 = 5% ... 16 = 1:1 ... 20 = 200%), `zoom?`, `center?`, `select?` (ids, `all`, `none`), `grow?` (`connected`/`upstream`/`downstream`), `slot?`, `history?`, `bookmark?` (a name or number, `next`, `previous`), `drawer?` (`none`/`problems`/`find`), `graph_panel?`/`details?`/`keys?`/`minimap?`/`roles_more?` (`show`/`hide`/`toggle`), `graph_width?`/`details_width?`, `action_split?`, `scroll?`, `menu?` (`node`/`wire`/`canvas`/`frame`/`picker`/`replace`/`none`), `from_pin?` (`node.pin`) / `into?` (a node) with `menu=picker`, `focus?` (`rename`), `wire?` (`remove_hovered`), `dialog?` (`find_in_project`), `answer_only?` | brings the tab up and sets its view; answers what the frames that show the change drew, in one call: `zoom`, `zoom_level`, `ui_scale`, `title_px`, `detail` (`full`/`header`/`block`: what the zoom lets a node show), `center`, `flow`, `wire_style`, `selected`, `slot`, `drawer`, `graph_panel` and `details` (`open`/`rail`/`overlay`/`hidden`), `minimap`, `menu`, `picker` (what it is for and every kind on it), `bookmarks`, `history`, `beyond`, `panes`, `pending` |
+| `graph.view` | `doc?` (left out: the graph tab that is up), `frame?` (`all`, `selection`, a node id), `zoom_level?` (0 = 5% ... 16 = 1:1 ... 20 = 200%), `zoom?`, `center?`, `select?` (ids, `all` - every node and reroute -, `none`), `grow?` (`connected`/`upstream`/`downstream`), `slot?`, `history?`, `bookmark?` (a name or number, `next`, `previous`), `drawer?` (`none`/`problems`/`find`), `graph_panel?`/`details?`/`keys?`/`minimap?`/`roles_more?` (`show`/`hide`/`toggle`), `graph_width?`/`details_width?`, `action_split?`, `scroll?`, `menu?` (`node`/`wire`/`canvas`/`frame`/`picker`/`replace`/`none`), `from_pin?` (`node.pin`) / `into?` (a node) with `menu=picker`, `focus?` (`rename`), `wire?` (`remove_hovered`), `dialog?` (`find_in_project`), `answer_only?` | brings the tab up and sets its view; answers what the frames that show the change drew, in one call: `zoom`, `zoom_level`, `ui_scale`, `title_px`, `detail` (`full`/`header`/`block`: what the zoom lets a node show), `center`, `flow`, `wire_style`, `selected`, `selected_reroutes` (how many), `slot`, `drawer`, `graph_panel` and `details` (`open`/`rail`/`overlay`/`hidden`), `minimap`, `menu`, `picker` (what it is for and every kind on it), `bookmarks`, `history`, `beyond`, `panes`, `pending` |
 | `doc.save` / `doc.undo` / `doc.redo` / `doc.reload` | `doc?` (`discard` for a reload over unsaved edits) | the shell's document commands, for a graph's tab as for any other |
 | `ui.tab` | `action=open kind=quest path=...` (or `kind=beh`), `action=close doc=... discard=true` | opens a graph's tab, closes it |
 | `asset.reference` | `kind` (`quest`, `behaviour`) | this document and the linked game's kinds |
@@ -624,7 +628,7 @@ Indices are **1-based**; an operation that names no node acts on the selection t
 -- a phrase loop through a player reply, once on the topic, a dialog exit into objective.kill{spawn} and
 -- the reward in the on_exit of the final phrase.
 return {
-  nq = 1,
+  nq = 2,
   id = "dialog_branching",
   title = "Долг вежливости",
   activation = "auto",
@@ -801,7 +805,7 @@ the task status and the full graph outline.
 A quest tracks the player. A **behaviour graph** drives NPCs: a squad walks to a
 courtyard, digs in and opens fire on whoever its caller points it at; a courier
 walks his route and turns on the player at the end of it. It is **its own
-asset**, not a quest with a flag - a `.behasset` with the header `beh = 1` - on
+asset**, not a quest with a flag - a `.behasset` with the header `beh = 2` - on
 the same graph engine, so everything you know about nodes, pins, conditions and
 variables applies unchanged. It never starts itself: a caller runs it.
 
@@ -983,3 +987,5 @@ back - a smart terrain handing out jobs - is given its step again.
 | `E024` | `who`, or `{ role = }` in a destination or a target, names a role the graph does not declare |
 | `E030` | `behaviour.run` names a graph that is not in the project |
 | `E113` | a behaviour graph that runs itself, directly or through the graphs it calls |
+
+| `W065` | `signal.send` names a signal with `.` or `*` | a signal is sent by its plain name and carries its module: another module hears it as `<module>.<name>`; a dotted name is heard only by a listener of that very name |

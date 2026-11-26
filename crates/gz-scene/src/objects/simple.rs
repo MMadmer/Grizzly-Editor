@@ -29,12 +29,14 @@ pub struct SceneObjectData {
     pub reference: SmolStr,
     pub flags: u32,
     pub surfaces: Vec<SurfaceOverride>,
+    /// The object is a stash: the bake puts an `inventory_box` over it (`super::stash`).
+    pub stash: Option<super::Stash>,
 }
 
 impl SceneObjectData {
     #[must_use]
     pub fn library(reference: &str) -> Self {
-        Self { reference: SmolStr::new(reference), flags: 0, surfaces: Vec::new() }
+        Self { reference: SmolStr::new(reference), ..Self::default() }
     }
 
     #[must_use]

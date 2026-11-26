@@ -6,7 +6,7 @@
 --   * trigger.when{event.signal} catches the signal from the neighboring branch;
 --   * wait.any: the medkit was used OR a 5 s timeout -> a var branch (the else pin is written as ["else"]).
 return {
-  nq = 1,
+  nq = 2,
   id = "parallel_triggers",
   title = "Три дороги",
   activation = "auto",

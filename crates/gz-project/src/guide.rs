@@ -139,7 +139,7 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     line("");
     line("Every asset is Lua data: `return { ... }` of tables, strings, numbers and booleans, no code.");
     line(
-        "The first key names the kind and its version (`nq = 1`, `npc = 1`, `pda = 1`, `mesh = 1`); keys the editor",
+        "The first key names the kind and its version (`nq = 2`, `npc = 1`, `pda = 1`, `mesh = 1`); keys the editor",
     );
     line("does not know are kept, comments survive every save, things are named by `id`, never by position.");
     line("An inventory item - a new one or a change of a game item - is an `.itemasset` (`item = 1`):");
@@ -159,6 +159,9 @@ pub fn text(root: &Path, file_name: &str, id: &str) -> String {
     );
     line(
         "states its games: `[module] target = default`, `mode = <id>, <id>` (`plain`: the ordinary game) or `mode = *`.",
+    );
+    line(
+        "A name the whole game shares (a new section, string, dialog, file...) has the module's id as a word: `od_rifle`.",
     );
     line("");
     line(
@@ -241,7 +244,7 @@ mod tests {
         }
         let text = text(root, "Night.grizzly", "7c1e6c1e-5c0f-4f6e-9f43-2d5b1c9a0e11");
         let lines = text.lines().count();
-        assert!((20..=50).contains(&lines), "{lines} lines:\n{text}");
+        assert!((20..=52).contains(&lines), "{lines} lines:\n{text}");
         assert!(text.contains(".tradeasset") && text.contains("reference trader"), "{text}");
         assert!(text.starts_with("# Night Watch\n"), "{text}");
         assert!(text.contains("module `night`"), "{text}");

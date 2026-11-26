@@ -73,7 +73,7 @@ impl AssetKind {
         }
     }
 
-    /// The key that names the kind and its format version in the file (`nq = 1`).
+    /// The key that names the kind and its format version in the file (`nq = 2`).
     #[must_use]
     pub fn header(self) -> &'static str {
         match self {
@@ -96,7 +96,9 @@ impl AssetKind {
     #[must_use]
     pub fn version(self) -> u32 {
         match self {
-            AssetKind::Quest | AssetKind::Behaviour | AssetKind::Pda | AssetKind::Item => 1,
+            // 2: a signal's plain name is the graph's own module's (gz-nq's kind.rs, the step)
+            AssetKind::Quest | AssetKind::Behaviour => 2,
+            AssetKind::Pda | AssetKind::Item => 1,
             AssetKind::Character | AssetKind::CharacterTemplate => 1,
             AssetKind::Trade | AssetKind::Loot | AssetKind::Recipes => 1,
             AssetKind::Model | AssetKind::Texture | AssetKind::Sound => {

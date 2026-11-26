@@ -391,6 +391,11 @@ A change of plan is a change of its document first.
   game's own `shaders.xr`, never by a list of names) and says so in the step's `notes`. The library's shader
   rows say what each is for (`draws`, `alpha`, `as_level`), and `level.inspect part=visuals piece=<name>`
   reads what a piece really holds.
+- **A static object with `stash` bakes an `inventory_box` over itself** (`gz_scene::objects::stash`, the bake's
+  `stash_op`): the object stays geometry, the box goes into the spawn layer under the object's own name -
+  which a quest reaches it by (`{ name = ... }`), so a name the layer cannot write as it is or writes another
+  object under is `S226` and refused - wearing the model's unseen `<ref>_case` (else the box's own case,
+  `S218`), its custom data only `[xms_stash]` for a false `random` / `loot` (the game's contract). No story id.
 - QA: `tools/qa/test_game_library.py --project <project>` over the linked game on a COPY, in a window (the
   library's answers, a scene over a level with its guards and files, the pictures, what the build ships); the
   first time on a machine it reads the game.
@@ -1624,6 +1629,20 @@ A change of plan is a change of its document first.
   keeps the values in the NQ blob (`state.globals`) and gives a declared name its default once.
   Unrelated quests live in files of their own and talk through these, never through one huge
   graph.
+- **What a module names is its own, and a module of before keeps working.** A signal from
+  format 2 (`nq = 2`): a plain name is the graph's own module's, `<module>.<name>` one module's,
+  `*.<name>` every module's (a version 1 graph is lifted to `*.<name>` on both sides, so it hears
+  what it heard). A module's waypoint path is `<module>.<name>` with the plain name as an alias
+  while nobody holds it, and a graph of the module reaches its own first; an object named in a
+  quest (`{ name = }`) is the module's `<module>.<name>` first. What is one name for the whole
+  game is warned about, never renamed (`docs/ASSETS.md` rule 10, `gz_mod::names`: the module's id
+  a whole word of the name): sections (`I434`, `N001`), string ids (`N002`), dialog / character
+  ids (`N003`), new files (`N004`), story ids (`S227`), the module's own levels (`S229`), info portions (`W064`), modes (`mod.mode_name`), console commands (`W409`); the
+  game keeps one of two and its conflict ledger says who lost; the objects of a module's scenes
+  (smart terrains and way paths among them) are composed as `<module>.<name>` and need no word. A module built before keeps
+  working; its author clears the warnings in the project. The linked game's catalog says the newest format it reads
+  (`[nq.catalog] format`, none is 1, held to the loader's `NQ_VERSION` by the game's parity
+  check): a graph newer than that is `E001`, because the game would refuse it.
 - **Removing something that is busy goes through prepare_removal first**
   (game repo, xms_nq_world.script): a behaviour graph holding the NPC drops it, a talk
   with the player is ended and the active scheme is switched off BEFORE the

@@ -786,6 +786,13 @@ async fn preflight(cx: &mut StepCx<'_>, plan: &[Step]) -> Result<(), JobError> {
             refuse(&mut found, Step::Piece, text, Some(name));
         }
     }
+    // a stash is reached by its name: the spawn layer refuses one it cannot write under it
+    if has(Step::SpawnLayer) {
+        for (id, why) in gz_scene::objects::stash::clashes(&cx.work) {
+            let name = cx.work.get(id).map(|o| o.name.to_string());
+            refuse(&mut found, Step::SpawnLayer, why, name);
+        }
+    }
     if has(Step::GameGraph) && graph_points(&cx.work, sync_settings(&cx.inp.settings)).is_empty() {
         refuse(
             &mut found,

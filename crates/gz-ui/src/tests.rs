@@ -328,6 +328,50 @@ fn a_busy_combo_takes_no_press_and_a_ready_one_opens_its_list() {
     assert!(egui::Popup::is_id_open(&ctx, popup), "a ready combo did not open");
 }
 
+/// Two combos of one salt in two places (a row of the property grid in the Graph panel and one in
+/// the Details panel) each open their own list: a press on one leaves the other closed.
+#[test]
+fn two_combos_of_one_salt_in_two_places_open_their_own_lists() {
+    let ctx = context();
+    let options = ["Alpha", "Beta"];
+    // one frame: where each field stood
+    let run = |t: f64, events: Vec<egui::Event>| {
+        let mut fields = [Rect::NOTHING; 2];
+        frame(&ctx, t, events, |ui| {
+            for (i, f) in fields.iter_mut().enumerate() {
+                ui.push_id(("panel", i), |ui| {
+                    let before = ui.cursor().min;
+                    let mut at = 0;
+                    let _ = crate::grid::combo(ui, "v", &mut at, &options);
+                    *f = Rect::from_min_size(before, Vec2::new(ui.available_width(), crate::metrics::FRAME));
+                });
+                ui.add_space(200.0);
+            }
+        });
+        fields
+    };
+    let fields = run(0.0, Vec::new());
+    for (i, e) in click_at(fields[1].center()).into_iter().enumerate() {
+        let _ = run(0.05 + i as f64 * 0.05, e);
+    }
+    // the open lists draw their rows: one "Beta" row is up, not two
+    let mut rows = 0;
+    frame(&ctx, 1.0, Vec::new(), |ui| {
+        for i in 0..2 {
+            ui.push_id(("panel", i), |ui| {
+                let mut at = 0;
+                let _ = crate::grid::combo(ui, "v", &mut at, &options);
+            });
+            ui.add_space(200.0);
+        }
+    });
+    ctx.memory(|m| {
+        rows =
+            m.layer_ids().filter(|l| l.order == egui::Order::Foreground && m.areas().is_visible(l)).count();
+    });
+    assert_eq!(rows, 1, "a press on one combo opened {rows} lists");
+}
+
 /// What an audited frame reports as `loading`: the control `test_ui_shell` and the tour's wait
 /// stand on. One entry per busy mark drawn, none for a frame without one, and none at all when
 /// nobody asked for the audit.

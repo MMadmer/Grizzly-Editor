@@ -155,7 +155,8 @@ first one.\n\n\
 | `I429` | warning | A new item's HUD section without a base, whose bases name no HUD section either. |\n\
 | `I431` | warning | A use scene's `like` on an item that has a scene already: the game keeps the scene it has. |\n\
 | `I432` | error | A key that is another file's to say: `sold` (a trader's), `loot` (a loot table's), `craft` (a recipe's), `lists` (a patch's). |\n\
-| `I433` | error | A row of `sections` that makes or changes the section of another item asset of the module. |\n";
+| `I433` | error | A row of `sections` that makes or changes the section of another item asset of the module. |\n\
+| `I434` | warning | A section the item makes (`section`, a row of `sections`) that is not named after the module: the module's id is no word of it. |\n";
 
 const TABLE_CODES: &str = "\
 ## Problems\n\n\

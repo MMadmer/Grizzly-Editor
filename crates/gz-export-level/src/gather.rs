@@ -87,6 +87,7 @@ pub fn spawn_inputs(
     // a model asset is no raw model file: a static one is the level's geometry, a dynamic one
     // is published by the module build under its own name
     let mut assets: HashMap<String, Option<String>> = HashMap::new();
+    let mut spawn_names: Vec<String> = Vec::new();
     for o in scene.of_class(ObjClass::SceneObject) {
         if let ObjData::SceneObject(d) = &o.data
             && o.marks.authored
@@ -101,11 +102,14 @@ pub fn spawn_inputs(
             } else {
                 props.push(d.reference.to_string());
             }
+            // a stash's box wears the model's unseen case
+            if d.stash.is_some() {
+                spawn_names.push(gz_scene::objects::stash::case_model(&d.reference));
+            }
         }
     }
     props.sort();
     props.dedup();
-    let mut spawn_names: Vec<String> = Vec::new();
     for o in scene.of_class(ObjClass::SpawnPoint) {
         if let ObjData::Spawn(pt) = &o.data
             && o.marks.authored

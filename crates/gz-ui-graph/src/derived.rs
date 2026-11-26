@@ -86,6 +86,8 @@ pub struct DocData {
     pub playlists: Arc<[gz_mod::RadioPlaylist]>,
     pub graphs: Arc<Vec<ProjectGraph>>,
     pub way_paths: Arc<Vec<PickerEntry>>,
+    /// The open scene's stashes, which a quest names like a zone.
+    pub stashes: Arc<Vec<PickerEntry>>,
     /// The open scene's level, for a fresh position.
     pub level: String,
     /// What the file on disk says the document does not show: it does not read, it is gone,
@@ -234,6 +236,7 @@ async fn fetch(ed: &Arc<Editor>, doc: &Arc<DocHandle>) -> Option<DocData> {
         playlists,
         graphs: Arc::new(graphs),
         way_paths: Arc::new(svc.way_paths()),
+        stashes: Arc::new(svc.stashes()),
         level: env.level.clone().unwrap_or_default(),
         missing: disk.missing,
         disk,

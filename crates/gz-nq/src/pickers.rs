@@ -240,6 +240,16 @@ impl Pickers {
         Self { available: game.is_some(), lists }
     }
 
+    /// A linked game's lists of these ids alone, for a test of the checks.
+    #[cfg(test)]
+    pub(crate) fn of_ids(ids: &[(PickerType, &str)]) -> Self {
+        let mut lists = Lists::new();
+        for (t, id) in ids {
+            lists.add(*t, id, "", "");
+        }
+        Self { available: true, lists }
+    }
+
     /// Whether a linked game backs the lists; without one `W060` is not raised.
     #[must_use]
     pub fn available(&self) -> bool {

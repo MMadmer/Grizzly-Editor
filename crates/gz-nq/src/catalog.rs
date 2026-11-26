@@ -220,6 +220,9 @@ impl Kind {
 pub struct Header {
     pub version: i32,
     pub api: i32,
+    /// The newest format version of a graph the game reads (`format`); 0 when the catalog does
+    /// not say, which a game of format 1 did not.
+    pub format: i32,
 }
 
 fn to_bool(v: &str) -> bool {
@@ -280,6 +283,8 @@ pub fn parse_text(text: &str, source: &str, kinds: &mut Vec<Kind>, header: &mut 
                 header.version = i32::try_from(c_atoi(val)).unwrap_or(0);
             } else if key == "api" {
                 header.api = i32::try_from(c_atoi(val)).unwrap_or(0);
+            } else if key == "format" {
+                header.format = i32::try_from(c_atoi(val)).unwrap_or(0);
             }
             continue;
         }
@@ -391,6 +396,13 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// The newest format version of a graph the game of this catalog reads: what its header
+    /// says, 1 when it says nothing; `None` when no catalog was read.
+    #[must_use]
+    pub fn reads_format(&self) -> Option<i32> {
+        (!self.kinds.is_empty()).then(|| self.header.format.max(1))
+    }
+
     /// No kinds: every lookup misses and a trigger is told by its name (`trigger.*`).
     #[must_use]
     pub fn empty() -> Self {
@@ -487,6 +499,7 @@ impl Catalog {
             "source": self.source,
             "version": self.header.version,
             "api": self.header.api,
+            "format": self.reads_format(),
             "files": self.files,
             "count": self.kinds.len(),
             "kinds": kinds,
@@ -602,9 +615,14 @@ mod tests {
         let mut kinds = Vec::new();
         let mut h = Header::default();
         parse_text(ONE, "bundled:configs\\nq\\catalog.ltx", &mut kinds, &mut h);
-        assert_eq!(h, Header { version: 21, api: 1 });
+        assert_eq!(h, Header { version: 21, api: 1, format: 0 });
         assert_eq!(kinds.len(), 3);
-        let c = Catalog::from_kinds(kinds);
+        let mut c = Catalog::from_kinds(kinds);
+        // a game whose catalog says no format reads format 1
+        assert_eq!(c.reads_format(), Some(1));
+        c.header.format = 2;
+        assert_eq!(c.reads_format(), Some(2));
+        assert_eq!(Catalog::empty().reads_format(), None);
         let start = c.find("trigger.start").map(|k| (k.title.clone(), k.once_default, k.pins.clone()));
         assert_eq!(start, Some(("Quest start".to_owned(), true, vec!["next".to_owned()])));
         assert!(c.is_trigger("trigger.start"));

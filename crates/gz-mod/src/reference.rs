@@ -235,7 +235,9 @@ pub const SECTIONS: &[SectionDoc] = &[
                 "required",
                 "The mode's id. The game turns new_game_<id>_mode back into it, and mode = <id> and the \
                  quests' mode checks compare against it. plain and * are words of the mode line: the game \
-                 ignores a mode of either name.",
+                 ignores a mode of either name. A mode is one name for the whole game - of two modules that \
+                 bring it the game offers the first -, so the module's id is a word of it (od_night): one \
+                 that is not is warned about.",
             ).judged(Check::OwnModeId),
             key(
                 "title",
@@ -378,8 +380,10 @@ pub const SECTIONS: &[SectionDoc] = &[
             "<command name>",
             "<script>.<function>",
             "-",
-            "The name takes a-z, 0-9 and _, 64 characters at most, and must not be a word the game has. The \
-             function lives in the project's gamedata\\scripts\\<script>.script.",
+            "The name takes a-z, 0-9 and _, 64 characters at most, and must not be a word the game has. A \
+             command is one name for the whole game - the module that loads first keeps it -, so the \
+             module's id is a word of it (od_status; W409 when it is not). The function lives in the \
+             project's gamedata\\scripts\\<script>.script.",
         )],
     },
     SectionDoc {

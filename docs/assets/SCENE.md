@@ -133,6 +133,7 @@ Static and dynamic objects of the library.
 | `visual` | boolean | false | The reference names a game model (`meshes\...ogf`) instead of a library object. |
 | `surfaces` | a list of `{ name, texture, shader, compile, material }` | none | Surfaces of the reference with this object's own texture, shaders and material. |
 | `object_flags` | integer | 0 | Bits of the object's own flags no key names, kept as they were. |
+| `stash` | `true`, or `{ random = false, loot = false }`: each key `true` when left out | none | The object is a stash: the build puts an `inventory_box` over it - the model's unseen case `<ref>_case` at the same place, or the box's own case where the model has none - under the object's name, and a quest reaches it by the name (an object reference `name = "<name>"`). `random = false`: the game never puts a random stash's loot in it; `loot = false`: no NPC searches it or takes what is in it. A false key is written into the box's custom data as `[xms_stash]`. |
 
 ## Lights - `lights` of `lights.lua`
 

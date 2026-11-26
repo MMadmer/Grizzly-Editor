@@ -16,8 +16,9 @@ use super::{Scene, ground, ids_named};
 use crate::class::ObjClass;
 use crate::math::{Aabb, Vec3};
 use crate::model::{ObjData, ObjId, Object};
-use crate::objects::PointKind;
+use crate::names::Names;
 use crate::objects::radio::RadioCx;
+use crate::objects::{PointKind, stash};
 use crate::pick::{RayFilter, RayKinds, ray_scene};
 
 /// The objects one audit reads at most: past it the caller names objects or an area.
@@ -32,7 +33,7 @@ pub const OFF_MAP: f32 = 1.0;
 const GROUND_SIDE: f32 = 20.0;
 
 /// The checks: code, word, what it finds.
-pub const CHECKS: [(&str, &str, &str); 17] = [
+pub const CHECKS: [(&str, &str, &str); 19] = [
     ("S201", "floating", "an object more than 0.25 m above whatever is under it, touching nothing"),
     ("S202", "buried", "an object more than half under the ground"),
     ("S203", "overlap", "two objects standing in each other"),
@@ -54,6 +55,8 @@ pub const CHECKS: [(&str, &str, &str); 17] = [
     ),
     ("S216", "ghost", "a static object none of whose faces stop a body"),
     ("S217", "on_ghost", "an object standing on faces that are drawn and stop nothing"),
+    ("S218", "stash_no_case", "a stash whose model has no unseen case: it opens by the inventory box's own"),
+    ("S219", "stash_scaled", "a stash that is scaled: its case is not"),
 ];
 
 /// `scene.audit`'s parameters.
@@ -71,7 +74,7 @@ pub struct AuditParams {
     /// Only these checks, by code (`S201`) or word (`floating`, `buried`, `overlap`, `duplicate`,
     /// `unsupported`, `off_ai_map`, `underground`, `way_off_ai_map`, `light_underground`,
     /// `not_authored`, `terrain_border`, `terrain_unmade`, `terrain_bare`, `radio_playlist`,
-    /// `in_geometry`, `ghost`, `on_ghost`). Left out: all of them.
+    /// `in_geometry`, `ghost`, `on_ghost`, `stash_no_case`, `stash_scaled`). Left out: all of them.
     #[serde(default)]
     pub checks: Option<Vec<String>>,
     /// At most this many problems in the answer (200); `total` counts them all.
@@ -484,15 +487,58 @@ fn walks(o: &Object) -> bool {
 /// Runs the checks. `base` is the names of the objects the game's own level has, lower case,
 /// when they are known: without them `S210` does not run. Blocking: call it on the CPU pool.
 pub fn audit(sc: &Scene<'_>, p: &AuditParams, base: Option<&FxHashSet<String>>) -> Result<Audit, CmdError> {
-    audit_with(sc, p, base, None)
+    audit_with(sc, p, base, None, None)
 }
 
-/// [`audit`] with the module's radio playlists: without them `S214` does not run.
+/// S218 and S219: a stash whose model has no unseen case of its own, or that is scaled. The
+/// stash is the box the bake puts over the object, and it opens by that case.
+fn stash_findings(
+    o: &Object,
+    names: Option<&dyn Names>,
+    want: &FxHashSet<&'static str>,
+    f: &mut Vec<Finding>,
+) {
+    let ObjData::SceneObject(d) = &o.data else { return };
+    if d.stash.is_none() {
+        return;
+    }
+    let case = stash::case_model(&d.reference);
+    if want.contains("S218")
+        && let Some(names) = names
+        && names.has("model", &format!("{case}.ogf")) == Some(false)
+    {
+        let [x, y, z] = stash::OWN_CASE;
+        f.push(Finding {
+            code: "S218",
+            object: o.id,
+            text: format!(
+                "{} is a stash, and its model has no unseen case '{case}' in the game or the project: the stash opens by {}'s own case box ({x} x {y} x {z} m), which the build uses instead",
+                o.name,
+                stash::SECTION
+            ),
+        });
+    }
+    let s = o.xform.scale;
+    if want.contains("S219") && [s.x, s.y, s.z].iter().any(|v| (v - 1.0).abs() > 1e-4) {
+        f.push(Finding {
+            code: "S219",
+            object: o.id,
+            text: format!(
+                "{} is a stash and is scaled ({:.2} x {:.2} x {:.2}): its case cannot be, so the stash opens by the case at the model's own size; set its scale to 1",
+                o.name, s.x, s.y, s.z
+            ),
+        });
+    }
+}
+
+/// [`audit`] with the module's radio playlists (without them `S214` does not run) and the
+/// names of the game's models (without them `S218` does not run).
 pub fn audit_with(
     sc: &Scene<'_>,
     p: &AuditParams,
     base: Option<&FxHashSet<String>>,
     radio: Option<&RadioCx>,
+    names: Option<&dyn Names>,
 ) -> Result<Audit, CmdError> {
     let want = wanted(p)?;
     let ids = subjects(sc, p)?;
@@ -516,6 +562,9 @@ pub fn audit_with(
     }
     if base.is_none() && want.contains("S210") && p.checks.is_some() {
         out.skipped.push("S210: the game's own level was not found among the base scenes".to_owned());
+    }
+    if names.is_none() && want.contains("S218") && p.checks.is_some() {
+        out.skipped.push("S218: the game library's models are not at hand".to_owned());
     }
 
     let mut seen: FxHashSet<(u32, u32)> = FxHashSet::default();
@@ -557,6 +606,7 @@ pub fn audit_with(
                 });
             }
         }
+        stash_findings(o, names, &want, f);
         match &o.data {
             ObjData::Spawn(d) => {
                 if want.contains("S214")

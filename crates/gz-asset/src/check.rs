@@ -120,7 +120,7 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
         let name = under.file_name();
         if kinds.of_file(name).is_some()
             || name.eq_ignore_ascii_case(MANIFEST)
-            || kinds.text_check(name).is_some()
+            || !kinds.text_checks(name).is_empty()
         {
             return Ok(vec![under]);
         }
@@ -154,7 +154,7 @@ pub async fn targets(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Vec
     };
     let files: Vec<RelPath> = files.into_iter().filter(|p| !in_editor_scratch(&under, p)).collect();
     let (texts, assets): (Vec<RelPath>, Vec<RelPath>) =
-        files.into_iter().partition(|p| kinds.text_check(p.file_name()).is_some());
+        files.into_iter().partition(|p| !kinds.text_checks(p.file_name()).is_empty());
     let mut out: Vec<RelPath> = assets
         .into_iter()
         .filter(|p| {
@@ -371,12 +371,16 @@ pub async fn run(editor: &Arc<Editor>, path: Option<&RelPath>) -> Result<Report,
         .map(|f| {
             let (editor, path) = (editor.clone(), (*f).clone());
             // a text file that is no asset has a check of its own
-            let text = kinds.text_check(path.file_name());
+            let text = kinds.text_checks(path.file_name());
             async move {
-                match text {
-                    Some(check) => check(editor, path).await,
-                    None => check_file(&editor, &path).await,
+                if text.is_empty() {
+                    return check_file(&editor, &path).await;
                 }
+                let mut out = Vec::new();
+                for check in text {
+                    out.extend(check(editor.clone(), path.clone()).await);
+                }
+                out
             }
         })
         .collect();

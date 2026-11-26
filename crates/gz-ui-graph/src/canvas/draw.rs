@@ -77,6 +77,11 @@ fn pin_color(p: &Palette, role: PinRole, by_pin: bool) -> Color32 {
     if role == PinRole::Default || !by_pin { p.pin_exec } else { role_color(p, role, true) }
 }
 
+/// The tone of an action's slot: on enter the accent, on exit the warning tone.
+fn slot_tone(p: &Palette, exit: bool) -> Color32 {
+    if exit { p.warning } else { p.accent_bright }
+}
+
 /// A screen polyline.
 fn screen_points(c: &Canvas, view: &ViewMirror, pts: &[[f32; 2]]) -> Vec<Pos2> {
     pts.iter().map(|q| c.to_screen(view, *q)).collect()
@@ -111,6 +116,9 @@ impl Canvas {
         // a commit in flight is drawn until the scene that holds it arrives
         if self.settle.as_ref().is_some_and(|s| cx.scene.is_some_and(|sc| sc.edit != s.from_edit)) {
             self.settle = None;
+        }
+        if self.frame_settle.is_some_and(|(e, _, _)| cx.scene.is_some_and(|sc| sc.edit != e)) {
+            self.frame_settle = None;
         }
 
         // deferred framing needs the rect and the scene
@@ -151,6 +159,17 @@ impl Canvas {
         };
         let mouse = ctx.input(|i| i.pointer.hover_pos()).unwrap_or(Pos2::new(-1.0e6, -1.0e6));
         self.last_mouse = mouse;
+        // a node selection replaced from outside the canvas (Find, the Problems drawer, a command,
+        // an undo) drops the selected reroutes; the rest are found in the scene they are drawn on,
+        // while a drag keeps the places it started with
+        if cx.view.selection != self.seen_selection {
+            self.clear_knots();
+        }
+        let selection_before = cx.view.selection.clone();
+        self.knots_kept = false;
+        if self.drag.is_none() {
+            self.resolve_knots(sc);
+        }
         let grab = Self::pin_grab(cx.view, ppp);
         self.update_hot(sc, cx, mouse, grab, menu_up, ppp);
         self.tip.clear();
@@ -212,6 +231,12 @@ impl Canvas {
         self.handle_input(&ctx, sc, cx, mouse, grab, &resp, menu_up, ppp);
         self.draw_frame_title_edit(ui, sc, cx);
         self.draw_menus(ui, sc, cx);
+        // a node selection this frame replaced (a click, a menu, an action row) drops the reroutes,
+        // unless the gesture chose them with it
+        if cx.view.selection != selection_before && !self.knots_kept {
+            self.clear_knots();
+        }
+        self.seen_selection.clone_from(&cx.view.selection);
         if self.hovered && !self.tip.is_empty() && !menu_up {
             resp.on_hover_text_at_pointer(self.tip.clone());
         }
@@ -259,17 +284,24 @@ impl Canvas {
             || self.pan.is_some_and(|(_, m)| m)
             || self.act_drag.as_ref().is_some_and(|a| a.dragging)
             || self.frame_drag.is_some()
-            || self.knot_drag.as_ref().is_some_and(|k| k.moved)
         {
             return;
         }
-        // pins are drawn (and taken) once a node is more than a block
+        // pins are drawn (and taken) once a node is more than a block; over the node's own box a pin
+        // takes only about what it draws, or a small node zoomed out would be all pins
         let mut best = f32::MAX;
+        let pin_r = (2.0 / ppp).max(PIN_R * Self::scale(view));
         for i in self.candidates(sc, view, mouse, grab) {
             let Some(n) = sc.nodes.get(i) else { continue };
             if Self::detail(view, ppp, n.size[0]) == Detail::Block {
                 continue;
             }
+            let r = self.rect_of(sc, view, i);
+            let grab = if r.contains(mouse) {
+                grab.min((pin_r + 3.0).max(0.25 * r.width().min(r.height())))
+            } else {
+                grab
+            };
             if let Some((k, d2)) = self.hit_pin(sc, view, i, mouse, grab)
                 && d2 < best
             {
@@ -540,17 +572,16 @@ impl Canvas {
             }
             // the reroutes of the wire
             if !l.via.is_empty() {
-                for (k, v) in l.via.iter().enumerate() {
-                    let at = match self.knot_drag.as_ref().filter(|d| d.link == i && d.index == k && d.moved)
-                    {
-                        Some(d) => d.at,
-                        None => *v,
-                    };
-                    let c = self.to_screen(view, at);
+                for k in 0..l.via.len() {
+                    let c = self.to_screen(view, self.knot_at(sc, i, k));
                     let hot_knot = self.hot_knot == Some((i, k));
-                    let r = (4.5 * s).max(3.0) * if hot_knot { 1.3 } else { 1.0 };
+                    let picked = self.knot_selected(i, k);
+                    let r = (4.5 * s).max(3.0) * if hot_knot || picked { 1.3 } else { 1.0 };
                     painter.circle_filled(c, r, if hot_knot { p.wire_hot } else { col });
-                    painter.circle_stroke(c, r, Stroke::new(1.0, p.canvas));
+                    // a selected reroute wears the selection's outline, as a node does
+                    let ring =
+                        if picked { Stroke::new(2.0, p.accent_bright) } else { Stroke::new(1.0, p.canvas) };
+                    painter.circle_stroke(c, r + if picked { 1.5 } else { 0.0 }, ring);
                 }
             }
             if let Some(flags) = &flowing
@@ -872,12 +903,12 @@ impl Canvas {
             );
             right -= tw + 6.0 * s;
         }
-        // the id gets what the title leaves, and never more than 40% of the row
+        // the id gets what the title leaves: the title says what the node does and goes first
         let room = (right - x).max(0.0);
         let title = kind_shown(painter.ctx(), &n.title);
         let title_w = gz_ui::text::width(painter.ctx(), &strong, gz_ui::Tx::raw(title.as_str()));
         let id_w = gz_ui::text::width(painter.ctx(), &small, gz_ui::Tx::raw(n.id.as_str()))
-            .min((room - title_w - 8.0 * s).max(room * 0.4));
+            .min((room - title_w - 8.0 * s).max(0.0));
         let line_px = small.size / 0.75;
         let show_id = id_w > line_px * 1.5;
         if show_id {
@@ -1058,16 +1089,32 @@ impl Canvas {
             );
             x += icon + 6.0 * s;
             let mut right = a.x + w - inset;
-            if act.exit {
-                // the slot an action runs in
-                let word = gz_ui::Tx::ctx("badge", "exit");
+            // the slot an action runs in, at a glance: a bar and a word in its tone, and a rule
+            // where the actions on exit begin
+            let tone = slot_tone(p, act.exit);
+            painter.rect_filled(
+                Rect::from_min_max(
+                    pos2(row.min.x, row.min.y + 2.0 * s),
+                    pos2(row.min.x + (2.0 * s).max(2.0), row.max.y - 2.0 * s),
+                ),
+                CornerRadius::ZERO,
+                Palette::alpha(tone, text_a),
+            );
+            if act.exit && r > 0 && n.actions.get(r - 1).is_some_and(|prev| !prev.exit) {
+                painter.line_segment(
+                    [pos2(a.x + inset, row.min.y), pos2(a.x + w - inset, row.min.y)],
+                    Stroke::new(1.0, Palette::alpha(p.border_subtle, text_a)),
+                );
+            }
+            {
+                let word = gz_ui::Tx::ctx("badge", if act.exit { "exit" } else { "enter" });
                 let tw = gz_ui::text::width(painter.ctx(), &body, &word);
                 gz_ui::text::paint(
                     painter,
                     &body,
                     pos2(right - tw, cy),
                     Align2::LEFT_CENTER,
-                    Palette::alpha(p.text_muted, text_a),
+                    Palette::alpha(tone, text_a),
                     &word,
                     None,
                     gz_ui::Clip::End,
@@ -1276,13 +1323,46 @@ impl Canvas {
         let Some(act) = list.get(d.index) else { return };
         let detail = if Self::full(cx.view, ppp) { Detail::Full } else { Detail::Header };
         let target = self.drop_target(sc, cx.view, cx.graph, mouse, detail);
+        let s = Self::scale(cx.view);
+        // the place under the node a held action runs on exit from - there whether the node has
+        // actions on exit or not
+        let near = target.map(|(n, _, _, _)| n).or_else(|| self.hit_node(sc, cx.view, mouse));
+        if let Some(node) = near
+            && sc.nodes.get(node).is_some_and(|n| !n.trigger && !n.collapsed)
+        {
+            let r = self.rect_of(sc, cx.view, node);
+            let strip =
+                Rect::from_min_max(pos2(r.min.x, r.max.y + 2.0 * s), pos2(r.max.x, r.max.y + ACTION_ROW * s));
+            let on =
+                target.is_some_and(|(n, exit, _, line)| n == node && exit && (line - r.max.y).abs() < 0.5);
+            let tone = slot_tone(p, true);
+            painter.rect_filled(strip, radius(3.0 * s), Palette::alpha(tone, if on { 0.30 } else { 0.12 }));
+            painter.rect_stroke(
+                strip,
+                radius(3.0 * s),
+                Stroke::new(1.0, Palette::alpha(tone, if on { 0.9 } else { 0.4 })),
+                StrokeKind::Inside,
+            );
+            let label = gz_ui::tr!("Drop here to run it on exit");
+            gz_ui::text::paint(
+                painter,
+                &Self::font(Font::Body, BODY_LINE, cx.view, ppp),
+                strip.center(),
+                Align2::CENTER_CENTER,
+                Palette::alpha(p.text, if on { 1.0 } else { 0.7 }),
+                label,
+                None,
+                gz_ui::Clip::End,
+            );
+        }
         if let Some((node, _, _, line)) = target {
             let r = self.rect_of(sc, cx.view, node);
-            let s = Self::scale(cx.view);
-            painter.line_segment(
-                [pos2(r.min.x + 4.0 * s, line), pos2(r.max.x - 4.0 * s, line)],
-                Stroke::new(2.0, p.accent_bright),
-            );
+            if line < r.max.y - 0.5 {
+                painter.line_segment(
+                    [pos2(r.min.x + 4.0 * s, line), pos2(r.max.x - 4.0 * s, line)],
+                    Stroke::new(2.0, p.accent_bright),
+                );
+            }
         }
         // red over anything that is not a place for it: releasing there cancels the move
         let title =

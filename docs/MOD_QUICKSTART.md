@@ -31,6 +31,18 @@ writes `mod.ltx` as you edit (MCP: `mod.info`, `mod.set`).
 If you declare a **new mode**, that declaration is all it takes: Dead Air: Refined
 lists the mode among the module modes of the new-game screen by its title.
 
+**Name what the whole game shares after your module.** A section, a string id, a dialog
+or character id, a story id, an info portion, a level of your own, a mode,
+a console command and a new file under `gamedata` are one name for every module a player
+has: when two modules pick the same one, the game keeps one and the other loses it
+(`xms_conflicts` in the console says who). Put your module's id in such a name as a whole
+word - `od_rifle`, `wpn_od_ak74`, `st_od_items.xml`, a folder `od` - and nobody else's
+module can collide with it. The editor warns where it is not (`asset.check`, the build):
+`I434`, `N001`-`N004`, `S227`, `S229`, `W064`, `W409`, `mod.mode_name`. A name the game
+has already is a change of the game's and stays as it is; what only your module reads (its
+quests' tasks, signals, variables, the objects of its scenes - smart terrains and way paths
+too) is kept apart by the editor and the game without a word.
+
 ## Bringing in a classic mod
 
 A mod made to be copied over `gamedata` can become a module. The mod changes for that, the game does not.
@@ -885,7 +897,8 @@ that is not `<script>.<function>` (`E403`) or that your scripts do not define
 function` is not reachable), a `[command.<name>]` without its line (`E405`) and a
 command of the game (`E406`) stop the build; a name of one of the game's own families
 (`g_`, `r2_`, `xms_` ...: `W406`), one another module of the linked game declares
-(`W407`) and help text outside cp1251 (`W408`) are warnings.
+(`W407`), a name the module's id is no word of (`W409`: a console command is one name for the whole game,
+and the module that loads first keeps it) and help text outside cp1251 (`W408`) are warnings.
 
 ## 7. When the build refuses
 

@@ -579,7 +579,7 @@ impl<'a> V<'a> {
                 slot,
                 format!(
                     "expected {ty} = {{ story = ... }} or {{ ref = ... }}{}",
-                    if object { " or { character = ... }" } else { "" }
+                    if object { " or { character = ... } or { name = ... }" } else { "" }
                 ),
             );
             return;
@@ -597,16 +597,31 @@ impl<'a> V<'a> {
             alts += 1;
             self.check_character_name(v.get("character"), node, slot);
         }
+        // an object of the level, or of the module's own scene, by the name it was placed under
+        if object && v.has("name") {
+            alts += 1;
+            if v.get_string("name", "").is_empty() {
+                self.err(
+                    "E006",
+                    node,
+                    slot,
+                    format!("{ty}: name is the name of an object placed in the level"),
+                );
+            }
+        }
         if alts != 1 {
             self.err(
                 "E006",
                 node,
                 slot,
-                format!("{ty} needs exactly one of story / ref{}", if object { " / character" } else { "" }),
+                format!(
+                    "{ty} needs exactly one of story / ref{}",
+                    if object { " / character / name" } else { "" }
+                ),
             );
         }
         for (k, x) in v.fields() {
-            if k != "story" && k != "ref" && !(object && k == "character") {
+            if k != "story" && k != "ref" && !(object && (k == "character" || k == "name")) {
                 self.err("E006", node, slot, format!("{ty} has no field '{k}'"));
             } else if !x.is_string() {
                 self.err("E006", node, slot, format!("'{k}' must be a string"));
@@ -1492,8 +1507,43 @@ impl<'a> V<'a> {
                     self.err("E030", node, slot, format!("quest '{s}' is not a quest of this project"));
                 }
             }
+            "info" => self.check_info(s, node, slot),
+            // a sent name says no module: the module is the sender's, and `.` splits it off
+            "signal_name" if k.id == "signal.send" && s.contains(['.', '*']) => self.warn(
+                "W065",
+                node,
+                slot,
+                format!("signal '{s}' is sent under a name with '.' or '*': only a listener of that very name hears it, and another module cannot name it as <module>.<name> - send a plain name"),
+            ),
+            "signal_name" if s.starts_with('.') || s.ends_with(['.', '*']) => {
+                self.err("E006", node, slot, format!("'{s}' names no signal: a listener names <name>, <module>.<name> or *.<name>"));
+            }
             _ => self.check_indexed(PickerType::from_name(t), s, node, slot),
         }
+    }
+
+    /// `W064`: an info portion the linked game does not know and that is not named after the
+    /// module. An info portion is one name for the whole game: what one module gives, every other
+    /// module that names it hears.
+    fn check_info(&mut self, s: &str, node: Option<&str>, slot: &str) {
+        let Some(p) = self.pickers else { return };
+        if s.is_empty() || p.entries(PickerType::Info).is_empty() || p.known(PickerType::Info, s) {
+            return;
+        }
+        let m = self.ctx.module;
+        if m.is_empty() {
+            self.check_indexed(Some(PickerType::Info), s, node, slot);
+            return;
+        }
+        if gz_mod::names::is_own(s, m) {
+            return;
+        }
+        self.warn(
+            "W064",
+            node,
+            slot,
+            format!("info portion '{s}' is not the linked game's and not named after the module: an info portion is one name for the whole game, and another module that gives '{s}' gives this one. Name the module's own '{}'", gz_mod::names::own_form(s, m)),
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2167,17 +2217,33 @@ impl<'a> V<'a> {
         let q = self.q;
         let ctx = self.ctx;
         let vkey = if q.is_behaviour() { "beh" } else { "nq" };
-        if q.nq != 1 {
+        // every version up to this editor's reads: an older one is lifted on read (kind.rs)
+        let current = i32::try_from(gz_project::AssetKind::Quest.version()).unwrap_or(1);
+        if !(1..=current).contains(&q.nq) {
             if q.nq == 0 {
-                self.err("E001", None, "", format!("{vkey} (format version) is missing - write {vkey} = 1"));
+                self.err(
+                    "E001",
+                    None,
+                    "",
+                    format!("{vkey} (format version) is missing - write {vkey} = {current}"),
+                );
             } else {
                 self.err(
                     "E001",
                     None,
                     "",
-                    format!("{vkey} = {} is not supported (this editor writes {vkey} = 1)", q.nq),
+                    format!("{vkey} = {} is not supported (this editor writes {vkey} = {current})", q.nq),
                 );
             }
+        } else if let Some(reads) = self.cat.reads_format()
+            && q.nq > reads
+        {
+            self.err("E001", None, "", newer_than_the_game(vkey, q.nq, reads));
+        } else if let Some(reads) = self.cat.reads_format()
+            && reads < current
+        {
+            // the file is one the game reads; a save writes this editor's version, which it does not
+            self.warn("W002", None, "", saved_newer_than_the_game(vkey, current, reads));
         }
         // the extension is the kind of document and the header key has to agree
         if let Some(fp) = ctx.file_path.filter(|f| !f.is_empty()) {
@@ -2434,6 +2500,23 @@ pub fn declared_refs(q: &Graph, catalog: &Catalog) -> Vec<(String, &'static str)
     out
 }
 
+/// `W002`: a graph the linked game reads, which a save of this editor writes in a format it does
+/// not: the author is told before the save, not by the build after it.
+#[must_use]
+pub fn saved_newer_than_the_game(vkey: &str, current: i32, reads: i32) -> String {
+    format!(
+        "the linked game reads {vkey} up to {reads}, and a save writes {vkey} = {current}, which it refuses - update the game before the module is built"
+    )
+}
+
+/// `E001`: a graph of a format newer than the linked game reads. The game refuses it by name.
+#[must_use]
+pub fn newer_than_the_game(vkey: &str, version: i32, reads: i32) -> String {
+    format!(
+        "{vkey} = {version} is newer than the linked game reads ({vkey} up to {reads}): the game refuses this graph - update the game"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2550,6 +2633,105 @@ mod tests {
             "{texts:?}"
         );
         assert!(!texts.iter().any(|t| t.contains("radio.reset") || t.contains("next_track")), "{texts:?}");
+    }
+
+    /// A signal is sent by its plain name; a listener names one, a module's or every module's.
+    #[test]
+    fn a_signal_is_sent_by_a_plain_name() {
+        let cat = bundled();
+        let text = r#"return { nq = 2, id = "q", nodes = {
+            { id = "s", kind = "trigger.start", out = { next = "a" } },
+            { id = "a", kind = "flow.step", on_enter = {
+                { kind = "signal.send", params = { name = "done" } },
+                { kind = "signal.send", params = { name = "phase.two" } },
+            }, out = { next = "e" } },
+            { id = "l1", kind = "trigger.when", cond = { { kind = "event.signal", params = { name = "*.done" } } }, out = { next = "e" } },
+            { id = "l2", kind = "trigger.when", cond = { { kind = "event.signal", params = { name = "mod_b." } } }, out = { next = "e" } },
+            { id = "e", kind = "flow.end" },
+        } }"#;
+        let g = match parse(&cat, text, "q") {
+            Ok(g) => g,
+            Err(e) => panic!("{}", e.message),
+        };
+        let texts: Vec<String> = run(&g, &cat, &Context::default()).iter().map(NqProblem::text).collect();
+        let sig: Vec<&String> = texts.iter().filter(|t| t.contains("signal")).collect();
+        assert_eq!(sig.len(), 2, "{texts:?}");
+        assert!(
+            sig.iter().any(|t| t.starts_with("W065 a[enter:1/") && t.contains("'phase.two'")),
+            "{texts:?}"
+        );
+        assert!(
+            sig.iter().any(|t| t.starts_with("E006 l2") && t.contains("'mod_b.' names no signal")),
+            "{texts:?}"
+        );
+    }
+
+    /// A graph newer than the linked game reads is refused by name: the game would drop it.
+    #[test]
+    fn a_graph_newer_than_the_linked_game_reads_is_an_error() {
+        let mut cat = bundled();
+        assert_eq!(cat.reads_format(), Some(2), "the bundled catalog states the format it reads");
+        let text = r#"return { nq = 2, id = "q", nodes = { { id = "s", kind = "trigger.start" } } }"#;
+        let g = match parse(&cat, text, "q") {
+            Ok(g) => g,
+            Err(e) => panic!("{}", e.message),
+        };
+        let e001 = |cat: &Catalog| -> Vec<String> {
+            run(&g, cat, &Context::default())
+                .iter()
+                .map(NqProblem::text)
+                .filter(|t| t.starts_with("E001"))
+                .collect()
+        };
+        assert!(e001(&cat).is_empty());
+        // a game of before the key reads format 1
+        cat.header.format = 0;
+        let said = e001(&cat);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("nq = 2 is newer than the linked game reads (nq up to 1)"), "{said:?}");
+        // a graph that game reads is told that a save makes it one the game refuses
+        let old = match parse(&cat, &text.replace("nq = 2", "nq = 1"), "q") {
+            Ok(g) => g,
+            Err(e) => panic!("{}", e.message),
+        };
+        let told: Vec<String> = run(&old, &cat, &Context::default())
+            .iter()
+            .map(NqProblem::text)
+            .filter(|t| t.starts_with("E001") || t.starts_with("W002"))
+            .collect();
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert!(told[0].starts_with("W002") && told[0].contains("a save writes nq = 2"), "{told:?}");
+    }
+
+    #[test]
+    fn an_info_portion_of_the_module_is_named_after_it() {
+        let cat = bundled();
+        let text = r#"return { nq = 2, id = "q", nodes = {
+            { id = "s", kind = "trigger.start", out = { next = "a" } },
+            { id = "a", kind = "flow.step", on_enter = {
+                { kind = "info.give", params = { info = "done_talk" } },
+                { kind = "info.give", params = { info = "my_mod_done_talk" } },
+                { kind = "info.disable", params = { info = "esc_trader_talked" } },
+            }, out = { next = "e" } },
+            { id = "e", kind = "flow.end" },
+        } }"#;
+        let g = match parse(&cat, text, "q") {
+            Ok(g) => g,
+            Err(e) => panic!("{}", e.message),
+        };
+        let pickers = crate::pickers::Pickers::of_ids(&[(PickerType::Info, "esc_trader_talked")]);
+        let ctx = Context { pickers: Some(&pickers), module: "my_mod", ..Context::default() };
+        let texts: Vec<String> = run(&g, &cat, &ctx).iter().map(NqProblem::text).collect();
+        let info: Vec<&String> = texts.iter().filter(|t| t.contains("info portion")).collect();
+        assert_eq!(info.len(), 1, "{texts:?}");
+        assert!(
+            info[0].starts_with("W064 a[enter:0/") && info[0].contains("'my_mod_done_talk'"),
+            "{texts:?}"
+        );
+        // without the module's id an unknown one is only unknown
+        let ctx = Context { pickers: Some(&pickers), ..Context::default() };
+        let texts: Vec<String> = run(&g, &cat, &ctx).iter().map(NqProblem::text).collect();
+        assert_eq!(texts.iter().filter(|t| t.starts_with("W060")).count(), 2, "{texts:?}");
     }
 
     #[test]
